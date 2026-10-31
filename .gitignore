@@ -54,6 +54,8 @@ SAVEDATA/
 __pycache__/
 *.pyc
 *.py
+pyvenv.cfg
+.venv/
 
 # Other Files
 Roadmap.*
@@ -66,3 +68,4 @@ reasoning_trace.json
 run*.*
 /Roadmap.html
 discord.md
+*.psd

@@ -1,0 +1,6 @@
+base=0x09B81000
+name=suppreacc
+size=18032
+code_size=4032
+hash=0x91D1F6D6529636EA
+source=LIBSUPPREACC.PRX

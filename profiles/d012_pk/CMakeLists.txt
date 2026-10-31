@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Dissidia012 VERSION 0.1.0 LANGUAGES CXX)
+project(Dissidia012 VERSION 0.1.0 LANGUAGES CXX RC)
 
 set(PORTABLEKIT_ROOT "" CACHE PATH
     "Path to PortableKit source directory (e.g. path/to/Tenkawa/portablekit)")
@@ -28,7 +28,21 @@ if(D012_OVL_MENU)
         "${D012_PROFILE_DIR}/generated/overlay_menu")
 endif()
 
+# The battle and extra overlays, built the same way
+foreach(D012_OVL battle extra)
+    file(GLOB D012_OVL_SOURCES CONFIGURE_DEPENDS "${D012_PROFILE_DIR}/generated/overlay_${D012_OVL}/*.cpp")
+    if(D012_OVL_SOURCES)
+        if(MSVC)
+            set_source_files_properties(${D012_OVL_SOURCES} PROPERTIES COMPILE_OPTIONS "/Od;/Ob0;/bigobj")
+        endif()
+        target_sources(d012_native_generated PRIVATE ${D012_OVL_SOURCES})
+        target_include_directories(d012_native_generated PRIVATE "${D012_PROFILE_DIR}/generated/overlay_${D012_OVL}")
+    endif()
+endforeach()
+
 if(WIN32)
+    # Icon of the .exe itself (Explorer, taskbar); the window icon is set at runtime
+    target_sources(d012_native PRIVATE "${D012_PROFILE_DIR}/host/d012.rc")
     target_link_libraries(d012_native PRIVATE winmm gdi32 user32)
 endif()
 

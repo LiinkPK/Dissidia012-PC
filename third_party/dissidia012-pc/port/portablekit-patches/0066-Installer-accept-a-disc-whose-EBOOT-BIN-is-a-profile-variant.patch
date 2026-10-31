@@ -1,0 +1,31 @@
+From 22d08e55d37b1d7e9b9c037d3336d0a316652993 Mon Sep 17 00:00:00 2001
+From: LiinkPK <LiinkPK@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 13:53:02 +0100
+Subject: [PATCH] Installer: accept a disc whose EBOOT.BIN is a profile
+ variant, whatever its disc id
+
+---
+ host/install/installer.cpp | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/host/install/installer.cpp b/host/install/installer.cpp
+index 41bdf27..4e41723 100644
+--- a/host/install/installer.cpp
++++ b/host/install/installer.cpp
+@@ -125,7 +125,12 @@ Inspection inspect(const std::filesystem::path &path) {
+     if (disc_id == sfo.end())
+         throw InstallError("\"" + name + "\" has no disc id in PSP_GAME/PARAM.SFO, so it is not an image " + std::string(portablekit::game().project_name) + " "
+                            "supports.");
+-    if (disc_id->second != portablekit::game().disc_id) {
++    // A disc of another release whose EBOOT.BIN the profile lists as a variant is as good as the profile's own:
++    // the same executable under a different wrapper (a regional disc) must not be turned away by its disc id.
++    bool variant_disc = false;
++    if (const auto boot = iso->find(portablekit::game().executable_path_on_disc); boot && !boot->directory)
++        variant_disc = portablekit::find_variant_by_encrypted(psprecomp::sha256_bytes(read_file(*iso, *boot))) != nullptr;
++    if (disc_id->second != portablekit::game().disc_id && !variant_disc) {
+         const auto title = sfo.find("TITLE");
+         std::string what = "\"" + name + "\" is ";
+         what += title != sfo.end() && !title->second.empty() ? title->second + " (" + disc_id->second + ")"
+-- 
+2.54.0.windows.1
+

@@ -1,0 +1,6 @@
+base=0x089DD4C0
+name=battle
+size=1596080
+code_size=4032
+hash=0xA3D8F60BD768B4A8
+source=OVL_BATTLE_APP.ELF

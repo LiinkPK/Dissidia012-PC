@@ -20,54 +20,47 @@ profiles/
   d012/
     generated/            AOT-compiled units of the main executable and of the menu overlay
     host/                 Game profile for PortableKit (title, icon, the few game-specific HLE hooks)
-  d012_pk/                CMake entry point that builds d012_native with PortableKit
+  d012_pk/work/           Generated code and overlay libraries for PortableKit's d012 branch (made from your disc)
+  d012_vk/                CMake entry point that builds d012_native on PortableKit's d012 branch
+third_party/dissidia012-pc/  The open-source port by VCKing101 (MIT), kept as a reference and for its host code
 ```
 
 ---
 
 ## Requirements
 
-- CMake 3.20+ and a C++20 compiler (MSVC on Windows)
-- A checkout of PortableKit; pass its folder as `-DPORTABLEKIT_ROOT=<path>`
+- CMake 3.20+ and a C++20 compiler (MSVC on Windows), the Vulkan SDK and SDL3 3.2
+- The `d012` branch of PortableKit with this project's changes (branch `tenkawa-merge`); pass its folder as `-DPORTABLEKIT_ROOT=<path>`
 - Your own `ULES01505` ISO
 
 ---
 
 ## Build and run
 
-```bash
-cmake -S profiles/d012_pk -B out/d012_pk -DPORTABLEKIT_ROOT=<path to portablekit>
-cmake --build out/d012_pk --config Release --target d012_native -- /p:UseMultiToolTask=true /p:CL_MPCount=4
-out/d012_pk/bin/Release/d012_native.exe
+```powershell
+cmake -S profiles/d012_vk -B out/d012_vk -DPORTABLEKIT_ROOT=<PortableKit folder> -DSDL3_DIR=<SDL3 folder>/cmake
+cmake --build out/d012_vk --config Release
 ```
 
-On first run PortableKit asks for the ISO and installs what it needs. Configure with `-DPSPRECOMP_GENERATED_OPT_LEVEL=0` (the generated units compile without optimisation); parallel compiles keep a full build to minutes, and afterwards only changed files rebuild.
+Copy the DLLs from `out/d012_vk/bin` and `SDL3.dll` next to `out/d012_vk/bin/Release/d012_native.exe`, the overlay DLLs from `out/d012_vk/bin/overlays/Release` into `bin/Release/overlays`, put `game/` (EBOOT.ELF and disc.iso) next to the executable and your PPSSPP-style texture pack in `data/textures/ULES01505`. A PPSSPP save goes in `data/ms0/PSP/SAVEDATA`. 60 fps is the frame interpolation option in the in-game Video menu.
 
 ---
 
 ## How it works
 
-The executable is recompiled **unmodified**: the code in `profiles/d012/generated/` comes straight from the decrypted `EBOOT.BIN` and carries no hand patches or forged game state. Regenerate it with:
-
-```bash
-psp_recomp <ULES01505 EBOOT.elf> --auto profiles/d012/generated 0x08804040 16384
-```
-
-Each unit covers `0x4000` bytes of guest code as one C++ function that dispatches on the guest program counter (113 units). The span matters: with `0x20000` each unit is one 8 MB function and takes 30-40 minutes to compile. Every PSP import is bound to PortableKit's HLE; `profiles/d012/host/d012_portablekit_profile.cpp` holds only what this game needs on top (entry redirect, fake module ids for the font PRXs, language/RTC answers, a guard for the loader's thread arguments).
-
-Inside a unit, jumps and returns update `local_pc`, so the dispatch switches on `local_pc`. An earlier version of the generator switched on a stale `ctx.pc`, which sent every internal return to the wrong address. The build uses PortableKit's own `tools/codegen_main.cpp` and `src/program_analysis.cpp`, so generator fixes belong there.
+The executable is recompiled **unmodified**: the code in `profiles/d012_pk/work/generated/` comes straight from the decrypted `EBOOT.BIN` and carries no hand patches or forged game state. The three code overlays (menu, battle, extra) and the font and anti-cheat modules are recompiled into libraries in `profiles/d012_pk/work/overlays/`, loaded when the game loads them. Every PSP import is bound to PortableKit's HLE. `profiles/d012/host/d012_profile.cpp` holds the game's identity, saves, overlay window, window title and icon, and the autosave-notice skip; the port's host code in `third_party/dissidia012-pc/port/host` supplies the rest, without its local versus.
 
 ---
 
 ## Texture replacement
 
-The renderer can replace textures by PPSSPP `hash=quick` ID using a PPSSPP-style pack (`textures.ini` plus PNGs). The pack is appended to the executable at build time, so the game ships as one file; set `<prefix>_TEXTURE_PACK=<folder>` to load a folder instead while developing a pack. The replacement image keeps its own resolution, so HD art works without touching the game's data.
+The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNGs, `hash = quick`) found in `data/textures/ULES01505` next to the executable. The replacement image keeps its own resolution, so HD art works without touching the game's data.
 
 ---
 
 ## Status
 
-The native build shows the Square Enix splash, plays sound and reaches the title screen and the menus, with the HD texture pack. Known issues: native text is soft at 1080p, loading and menu changes are slow, the opening cinematic freezes the game, and a save made by PPSSPP fails its hash check (`D012_SAVE_IGNORE_HASH=1` loads it anyway, for diagnosis). See `updates.md` for the session-by-session log.
+Session 19: the native build reaches the game's battles and story mode with the battle shadows, the colour bleed fix, the battle music and the speed working, and with the HD story banners and portraits. Still to confirm: the twirl into battle, animated textures, and cutscenes after New Game. See `updates.md` for the session-by-session log.
 
 ---
 
@@ -76,3 +69,7 @@ The native build shows the Square Enix splash, plays sound and reaches the title
 No commercial game executable or asset is included. PPSSPP source is used for **reference only**; no GPL code is copied into this repository.
 
 The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
+
+## Special thanks
+
+- **VCKing101**, author of [Dissidia 012 Duodecim Final Fantasy: native PC port and decompilation](https://github.com/VCKing101/Dissidia012-pc) (MIT licence, kept in `third_party/dissidia012-pc/LICENSE`). Its documentation named the cause of the battle shadows, and its renderer, audio and frame-pacing work for PortableKit is what the current build runs on. This project does not use its base, but it got past its Session 19 problems thanks to it. Its local versus and split screen are the port's own work and are not part of this build.

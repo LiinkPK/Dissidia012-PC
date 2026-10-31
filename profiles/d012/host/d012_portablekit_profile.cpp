@@ -7,12 +7,18 @@
 #include "profile.hpp"
 
 #include "psprecomp/elf32.hpp"
+#include "psprecomp/interpreter.hpp"
 #include "psprecomp/runtime.hpp"
 #include "kernel/kernel.hpp"
 #include "hle/hle_common.hpp"
 #include "d012_icon.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <map>
+#include <thread>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -22,6 +28,8 @@
 namespace psprecomp {
 void register_generated_functions(Runtime &runtime);
 namespace ovl_menu { void register_ovl_menu_functions(Runtime &runtime); }
+void register_ovl_battle_functions(Runtime &runtime);
+void register_ovl_extra_functions(Runtime &runtime);
 } // namespace psprecomp
 
 namespace portablekit {
@@ -77,11 +85,95 @@ void register_d012_extra_hle(HleRegistrar &hle) {
     });
 }
 
+// The game loads OVL_MENU_APP, OVL_BATTLE_APP and OVL_EXTRA_APP into one window, with an 84-byte
+// header at kOverlayFile and the code at kOverlayWindow. Each has its own recompiled code; the one
+// matching what the game just loaded is registered and the others are dropped. An image nobody
+// recompiled leaves the window to the interpreter. The images are told apart by a hash of the
+// first 0x200 bytes of the file.
+constexpr std::uint32_t kOverlayFile = 0x089DD46Cu;
+constexpr std::uint32_t kOverlayWindow = 0x089DD4C0u;
+constexpr std::uint32_t kOverlayWindowEnd = 0x089DD46Cu + 0x1A0000u;
+
+enum class Overlay { Menu, Battle, Extra, Unknown };
+
+Overlay identify_overlay(const psprecomp::GuestMemory &memory) {
+    if (!memory.contains(kOverlayFile, 0x200u) || memory.load32(kOverlayFile + 0x3Cu) != kOverlayWindow)
+        return Overlay::Unknown;
+    std::uint64_t key = 0xCBF29CE484222325ull;
+    for (std::uint32_t i = 0; i < 0x200u; ++i) key = (key ^ memory.load8(kOverlayFile + i)) * 0x100000001B3ull;
+    switch (key) {
+    case 0x8c6796d335f705f0ull: return Overlay::Menu;
+    case 0xc51be88b2f6be5f8ull: return Overlay::Battle;
+    case 0xf542f3b3b2e126b5ull: return Overlay::Extra;
+    default:
+        std::printf("[D012] unknown overlay image, key %016llX\n", static_cast<unsigned long long>(key));
+        return Overlay::Unknown;
+    }
+}
+
+void on_code_flushed(psprecomp::Runtime &rt) {
+    static Overlay registered = Overlay::Menu;  // the menu's code is registered at start-up
+    const auto &memory = rt.memory();
+    // The window is not an overlay until the game has put a header there.
+    if (!memory.contains(kOverlayFile, 0x200u) || memory.load32(kOverlayFile + 0x3Cu) != kOverlayWindow) return;
+    const Overlay loaded = identify_overlay(memory);
+    if (loaded == registered) return;
+    rt.unregister_functions(kOverlayFile, kOverlayWindowEnd);
+    switch (loaded) {
+    case Overlay::Menu: psprecomp::ovl_menu::register_ovl_menu_functions(rt); break;
+    case Overlay::Battle: psprecomp::register_ovl_battle_functions(rt); break;
+    case Overlay::Extra: psprecomp::register_ovl_extra_functions(rt); break;
+    case Overlay::Unknown: break;
+    }
+    registered = loaded;
+    std::printf("[D012] overlay %s loaded%s\n",
+                loaded == Overlay::Menu ? "menu" : loaded == Overlay::Battle ? "battle" : loaded == Overlay::Extra ? "extra" : "?",
+                loaded == Overlay::Unknown ? " (interpreted)" : " (recompiled)");
+    std::fflush(stdout);
+}
+
+// The code generator has no lowering for VCRS.T (VFPU1, operation 5) or the VFPU4 butterflies and
+// sorting steps (vbfy1/2, vsrt1-4), so the generated code stops at each one. The interpreter does run it: it executes this one instruction and the program
+// counter moves on, so generated code carries on from the next.
+bool run_unlowered_vfpu(psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx, std::uint32_t pc, std::uint32_t instruction) {
+    const bool vcrs = (instruction >> 26u) == 0x19u && ((instruction >> 23u) & 7u) == 5u;
+    const std::uint32_t shuffle = (instruction >> 16u) & 31u;
+    const bool vfpu4_shuffle = (instruction >> 26u) == 0x34u && ((instruction >> 21u) & 31u) == 2u &&
+                               (shuffle <= 3u || shuffle == 8u || shuffle == 9u);
+    if (!vcrs && !vfpu4_shuffle) return false;
+    ctx.pc = pc;
+    return psprecomp::interpret_allegrex(rt, ctx, 1u) != psprecomp::InterpreterExit::Stopped;
+}
+
+// D012_PC_SAMPLER=1: say where the guest is spending its time. Reads the program counter 100 times
+// a second and prints the five most common values every 3 seconds, which shows a spin or a stall.
+void start_pc_sampler(psprecomp::Runtime &rt) {
+    if (std::getenv("D012_PC_SAMPLER") == nullptr) return;
+    std::thread([&rt] {
+        std::map<std::uint32_t, unsigned> seen;
+        for (unsigned tick = 1;; ++tick) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            ++seen[rt.cpu().pc];
+            if (tick % 300u != 0u) continue;
+            std::vector<std::pair<unsigned, std::uint32_t>> top;
+            for (const auto &[pc, count] : seen) top.emplace_back(count, pc);
+            std::sort(top.rbegin(), top.rend());
+            std::fprintf(stderr, "[pc-sampler]");
+            for (std::size_t i = 0; i < top.size() && i < 5u; ++i)
+                std::fprintf(stderr, " %08X x%u", top[i].second, top[i].first);
+            std::fprintf(stderr, "\n");
+            seen.clear();
+        }
+    }).detach();
+}
+
 void patch_d012_image(psprecomp::Runtime &rt, const psprecomp::Elf32Image &elf) {
     // Relative paths like "data/foo.bin" resolve under disc0:/PSP_GAME/USRDIR.
     set_io_working_directory("disc0:/PSP_GAME/USRDIR");
 
     psprecomp::register_generated_functions(rt);
+    psprecomp::set_runtime_unsupported_hook(run_unlowered_vfpu);
+    start_pc_sampler(rt);
     psprecomp::ovl_menu::register_ovl_menu_functions(rt);
 
     // The generated code covers the import stub addresses with plain `jr ra` bodies, which
@@ -157,10 +249,12 @@ const GameProfile &game() {
 
         .register_extra_hle  = register_d012_extra_hle,
         .patch_loaded_image  = patch_d012_image,
+        .on_code_flushed     = on_code_flushed,
 
         .window_title        = "Dissidia 012 Final Fantasy HD Remastered",
         .window_icon_png     = d012_icon::kPng,
         .window_icon_png_size = d012_icon::kPngSize,
+        .alias_display_buffers = true,
     };
     return profile;
 }

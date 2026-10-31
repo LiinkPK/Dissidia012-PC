@@ -1,0 +1,6 @@
+base=0x089DD4C0
+name=menu
+size=1555864
+code_size=4032
+hash=0x29F9A274007A5CA2
+source=OVL_MENU_APP.ELF

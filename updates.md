@@ -1,6 +1,6 @@
-# PSPRecomp — Dissidia 012 (ULES01505.BIN) — Current State
+﻿# PSPRecomp — Dissidia 012 (ULES01505.BIN) — Current State
 
-**Last updated:** 29/10/2026 (Session 17)
+**Last updated:** 30/10/2026 (Session 18)
 
 **Goal:** Genuinely boot Dissidia 012's original startup path and visibly render the authentic Square Enix logo through guest asset I/O — guest VRAM — GE — the native window. A blank window, hard-coded logo, placeholder, or host overlay does not count.
 
@@ -451,3 +451,92 @@ Known issues
 - Loading and menu changes are slow (HD decode); re-measure with the new decoder.
 - The opening cinematic freezes the game.
 - Saves: see above.
+
+---
+
+## Session 18 (30/10/2026)
+
+**Result: after Load Game the native build reaches the stage selection, the pre-battle screens and the battle itself. 3D models and their textures render correctly in the museum. In-game (battle, story mode, open world) many textures are broken or missing, the battle BGM stops after about 5 seconds, and the open world runs at 5-10 fps. These are the Session 19 starting points.**
+
+Where the session started: the title screen worked; Load Game stalled on a white screen, the pre-battle screen never loaded, and cutscenes froze the game.
+
+Save loading
+- The native save in `%APPDATA%\Dissidia012\D012\ms0\PSP\SAVEDATA\ULES01505GameData00` had been rewritten by the game during hung runs (257,248 bytes, differing from the PPSSPP original in over 256,000 bytes) and Load Game stalled with it. The original PPSSPP save (`Documents\PPSSPP\PSP\SAVEDATA\ULES01505GameData00`, Oct 29 12:37) was copied back and loads with `D012_SAVE_IGNORE_HASH=1`. The overwritten native save was kept on the Desktop as `save_backup_1023`.
+- Cause of the extreme slowness seen at the time: `D012_TRACE_KERNEL` was still set in the user's PowerShell session (environment variables persist there). `video.internal_scale=5` in `settings.ini` is a second candidate and was not measured.
+
+Async file I/O (Tenkawa `portablekit/host/hle/hle_io.cpp`, `configs/nids.csv`)
+- The pre-battle load calls `sceIoSetAsyncCallback` and `sceIoLseekAsync`; the framework had no async I/O and not even their names. Added `sceIoOpenAsync`, `sceIoCloseAsync`, `sceIoReadAsync`, `sceIoLseekAsync`, `sceIoSetAsyncCallback`, `sceIoPollAsync`, `sceIoWaitAsync`, `sceIoWaitAsyncCB`, `sceIoGetAsyncStat`. Each runs its synchronous twin at once, keeps the result for the wait or poll, and notifies the callback the game set (`FMI_SeekAsyncCallback`, `FMI_ReadAsyncCallback`).
+- `sceDisplayWaitVblankStartCB` never delivered notified callbacks, so the game waited for a callback that never ran. It now calls `deliver_callbacks()` first. After this the game streams about 143 chunks of 16 KB from `PACKAGE.BIN` during pre-battle loading.
+- Not implemented and imported by the game: `sceKernelWaitThreadEndCB` (no handler found in the framework).
+
+Overlays
+- The game swaps `OVL_MENU_APP`, `OVL_BATTLE_APP` and `OVL_EXTRA_APP` into one window (header at `0x089DD46C`, code at `0x089DD4C0`). Only the menu overlay was compiled in, and its functions stayed registered while the battle overlay was loaded, which stalled the game after the battle overlay was read.
+- Added a profile hook `on_code_flushed` (Tenkawa `host/profile.hpp`, called from `sceKernelIcacheInvalidateRange`/`All` in `hle_system.cpp`). The D012 profile identifies the loaded overlay by an FNV-1a hash of the first 0x200 bytes of its file (menu `0x8c6796d335f705f0`, battle `0xc51be88b2f6be5f8`, extra `0xf542f3b3b2e126b5`), drops the other overlays' registered code with `Runtime::unregister_functions` and registers the matching set. An unknown image is interpreted.
+- Battle and extra overlays recompiled: `wrap_overlay.py <dump> 0x089DD46C out.elf`, then `psp_recomp out.elf --auto <dir> 0x089DD46C 32768 --prefix ovl_battle` (49 units, 7 s) and `--prefix ovl_extra` (1 unit). Sources are in `profiles/d012/generated/overlay_battle` and `overlay_extra`; `profiles/d012_pk/CMakeLists.txt` globs them with `/Od`. The dumps come from `d012-recomp/dumps/ovl`.
+- A first version that only dropped the menu code and interpreted the battle overlay already reached the battle screens.
+
+VFPU instructions the generator cannot lower
+- Generated code stops at these sites with `Unsupported Allegrex instruction`: `vcrs.t` (VFPU1 op 5, `0x66818102` at `0x089BA378`) and `vbfy1.q` (VFPU4 group 2 op 2, `0xD0428080` at `0x089A2874`). The interpreter now runs `vcrs.t` (d = s.y*t.z, s.z*t.x, s.x*t.y), `vbfy1`, `vbfy2` and `vsrt1`-`vsrt4` (written from memory of the PSP semantics, not checked against hardware).
+- `Runtime::unsupported` now sets `cpu_.pc = pc` before calling the hook and leaves the pc where the hook puts it. The D012 hook runs the single instruction through `interpret_allegrex(rt, ctx, 1)`. The first version retried at the same pc and spun forever once the battle overlay was recompiled (found with the pc sampler: 300 of 300 samples at `0x089BA378`).
+- The remaining VFPU sites the generator reports in the overlays (`vsbn`, `vdet` and a few unnamed forms) have not been seen to execute.
+
+GE list queue (Tenkawa `host/hle/hle_media.cpp`)
+- Lists ran the moment they were queued or their stall moved, on one shared GE state, even while an earlier list was stalled. Now a FIFO: only the head list runs, a stalled list holds the rest, `sceGeListEnQueueHead` goes behind the running list. The `d012-recomp` runtime does the same. This was a real bug but did not change the flicker below.
+
+3D flicker (every other frame the scene or its textures vanished)
+- Observed: the displayed buffer alternates between `0x04000000` and `0x04044000` each frame. In every frame the 2D layers and the glow add use the displayed buffer, but all 85 3D draws and the effect passes' source use `0x04000000`. So half the frames showed no 3D. The broken frame also showed a blue fill, the scene shrunk into a rotated diamond, and oversized HUD numbers. Block transfers, depth, culling and stale-memory texture reads were ruled out (`D012_NO_DEPTH`, `D012_NO_CULL`, `D012_TRACE_FBSAMPLE_AFTER`: every VRAM-sampling draw read a live render target).
+- The cause is not found. Compared with the `d012-recomp` runtime: same framebuffer pointer, `BASE`, `OFFSETADDR`, `ORIGIN` handling.
+- Workaround: `GameProfile::alias_display_buffers` (Tenkawa `host/profile.hpp`, `vulkan_renderer.cpp`). A frame's draws into either display buffer, and reads from it, go to the buffer its first draw used. On in the D012 profile; `D012_NO_ALIAS=1` turns it off. After it, museum models and textures are stable. One later battle screenshot still shows the blue/diamond frame, so battle may not be fully fixed.
+
+Diagnostics added (all off by default)
+- `D012_PC_SAMPLER=1`: five most common guest pcs every 3 s on stderr (finds spins).
+- `D012_TRACE_3D=1` per-frame summary now also lists through-draw targets; `D012_TRACE_3D_AFTER=S` traces 4 consecutive frames from S seconds after launch.
+- `D012_TRACE_FBSAMPLE_AFTER=S`: 4 frames of VRAM-sampling draws (render target or stale memory) and the order of destination buffers.
+- `D012_TRACE_FBP_RING=1`: last 800 GE list events (framebuffer pointer, call, jump, draw counts per buffer), printed when the game exits.
+- The sampler and traces read `Runtime::cpu()` and renderer state without locks.
+
+Open at the end of the session
+- In-game textures: story mode map shows grey placeholder shapes where textures should be; open world and battle show black or grey boxes around portraits and the HUD (screenshots taken 30/10). Some textures never load. Not yet investigated: candidates are the HD texture-pack matching, textures streamed by the new async I/O, palette/swizzled formats and render-target textures.
+- Battle BGM stops about 5 seconds after the battle starts (new).
+- Open world runs at 5-10 fps. The battle overlay now runs recompiled, but `vcrs.t`/`vbfy1` sites go through the interpreter one instruction at a time.
+- Cutscenes: not retested after the async I/O and callback fixes. `sceKernelWaitThreadEndCB` is unimplemented.
+- HD fonts (crisp text at 1080p): not started. The game draws glyphs into a fixed 20x20 cell; a host-side high-resolution replacement of the font atlas is the likely route.
+- Why the game draws its 3D pass into a different buffer than its 2D layers is unknown; the aliasing only hides it.
+- Favicon updated by the user (`favicon.png`, 30/10).
+
+Working notes for the next session
+- Build is the user's to run: `cmake --build out\d012_pk --config Release --target d012_native -- /m /v:m` (the first build after a header change recompiles the units and can take most of an hour). Run with `Remove-Item Env:D012_* -ErrorAction SilentlyContinue; $env:D012_SAVE_IGNORE_HASH=1; .\out\d012_pk\bin\Release\d012_native.exe`; trace flags change output, so write logs to `%TEMP%\d012_logs`, not the Desktop.
+- Source of truth for the native host is `\Tenkawa\portablekit` (a checkout with local, uncommitted changes from this session) plus `profiles/d012*` here; the build uses Tenkawa's `tools/codegen_main.cpp`, not this repo's.
+
+---
+
+## Session 19 (31/10/2026)
+
+**Result: the game now runs on a new build, `d012_vk`, which puts this project's profile, overlays and game on the `d012` branch of PortableKit. On it the battle shadows, the blue/green/red/orange colour bleed, the battle music, the speed, story mode and the story banners and portraits all work (confirmed by the user in play).**
+
+Where the session started: in-game textures and effects broken on the earlier build (blue frame, colour bleed when the Assist bar filled or damage was dealt, pointed shadows, the twirl transition into battle), battle music stopping after about 5 seconds, 5-10 fps in the open world, cutscenes hanging, story banners and portraits from the HD pack not loading.
+
+What did not work
+- A long series of fixes on the earlier build, aimed at the bleed and the shadows without a known cause, changed nothing the user could see, or only hid the pointed shadows. Setting `D012_ALPHA_WRITE=1` did nothing either.
+
+How it was solved
+- The open-source port of this game, "Dissidia 012 Duodecim Final Fantasy: native PC port and decompilation" by VCKing101 (MIT licence), was cloned into `third_party/dissidia012-pc` (the matching decompilation of the USA release was left out). It uses the same tools and already renders this game.
+- Its documentation names the cause of the shadows: the battle draws them as stencil shadow volumes tested against the scene's depth, and the earlier framework had no stencil and gave each render target its own empty depth image. The same port has patches for the music (host audio), the speed (a present thread) and the swirl and bleed (colour-only textures, doubled blend alpha).
+- Those patches cannot be applied to the earlier framework: its renderer is about 3,700 lines against about 8,400, and 11 of 24 hunks of the stencil patch failed. The earlier framework turned out to be an ancestor of the port's PortableKit branch, so the work went the other way: this project's changes were put on top of that branch (kept as the branch `tenkawa-merge`).
+- The port's branch already had its own versions of most of the earlier framework's local fixes (async file I/O names, `sceDisplayGetFrameBuf`, the font bits per pixel, save-data `LIST`, VFPU lowering, palette texture keys), so those were dropped in favour of the branch's. What was carried over: a profile hook `on_code_flushed`, a hook for an instruction the generated code stopped at, a window title and icon, `set_io_working_directory`, `force_import_stub`, the direct-call target pc, and a hook to skip a message dialog.
+- The texture pack format `hash = quick` (PPSSPP's quick hash) was added to the branch's texture pack reader, so the existing PPSSPP pack is read directly from `data/textures/ULES01505`. The earlier build's embedded pack is not used.
+
+The new build (`profiles/d012_vk`)
+- The generated code of `profiles/d012` was written for the earlier framework's `Runtime&` and does not compile against the new one (`CorpusRuntime&`). The build uses the corpus in `profiles/d012_pk/work` (generated for the new framework) and its overlay libraries.
+- CMake needs `-DSDL3_DIR=<SDL3 folder>/cmake`; without it the renderer and audio are not built (the log says `Renderer: not built`). The DLLs in `bin` and the overlay DLLs in `bin/overlays/Release` have to sit next to the executable (`bin/Release`, `bin/Release/overlays`).
+- The port's local versus and split screen are left out of this build (stubs in `profiles/d012_vk/d012_no_versus.cpp`); that feature stays the port's own work. The "this game has an autosave function" notice at start-up is skipped (profile hook `skip_message_dialog`).
+- A PPSSPP save has to be copied into the new build's `data/ms0/PSP/SAVEDATA`; the first run showed "no save data" until it was.
+- 60 fps is the frame interpolation option in the in-game Video menu; it is off by default.
+
+Not confirmed yet
+- The twirl into battle, animated textures, cutscenes after New Game, and a check that every texture of the PPSSPP pack matches the game.
+- `alias_display_buffers` is a profile field but is not implemented in the new renderer.
+
+Housekeeping
+- Credits to VCKing101 added to the README. The old builds (`out/d012_pk`, `out/d012`, `out/framework`, `out/build`), the `.rea` folder and the Visual Studio cache were deleted. The game folder was moved into the new build.
+- Independence from the PortableKit branch and `third_party/dissidia012-pc` is deferred until the user decides the port is complete.

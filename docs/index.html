@@ -144,7 +144,7 @@
         <span>THE SHORTCUT FOR DISSIDIA SPECIFICALLY</span>
       </div>
       <p class="text-xs md:text-sm text-tokyo-text leading-relaxed">
-        <strong class="text-tokyo-accent">Pro Tip:</strong> the Vulkan renderer in PortableKit already draws the game, so the quickest way to find a rendering bug is to compare the same screen against <span class="code-tag">PPSSPP</span>. Session 17 found two this way: glyphs written with a zero pitch, and a missing GE colour-doubling bit that halved the brightness.
+        <strong class="text-tokyo-accent">Pro Tip:</strong> the Vulkan renderer in PortableKit already draws the game, so the quickest way to find a rendering bug is to compare the same screen against <span class="code-tag">PPSSPP</span>. Session 17 found two this way: glyphs written with a zero pitch, and a missing GE colour-doubling bit that halved the brightness. Session 18 compared against the older <span class="code-tag">d012-recomp</span> runtime instead, which showed the GE list queue was out of order. Session 19 read the open-source port by VCKing101 instead, whose notes named the cause of the pointed shadows (stencil shadow volumes tested against the scene's depth) and whose renderer, audio and frame pacing for PortableKit now run the game.
       </p>
     </section>
 
@@ -210,6 +210,14 @@
           <span class="font-bold text-tokyo-accent min-w-[3rem]">S17</span>
           <span class="text-tokyo-muted"><strong class="text-tokyo-text">First native splash, sound, title screen and menus.</strong> Root causes: PortableKit's generator template dispatched on a stale <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">ctx.pc</code> after internal jumps (now <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">local_pc</code>), and a function reachable only through a data pointer table was never emitted. Units now cover 16 KB of guest code (113 units) instead of 128 KB (15 units of 8 MB, 30-40 min each to compile). Host fixes: font glyph pitch (bits per pixel byte at font-info +0x104), the dimmed picture (GE colour-doubling bit), savedata <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">LIST</code>, window title, HD texture pack embedded in the exe with a faster PNG decoder (untimed). <strong class="text-tokyo-text">Open:</strong> soft native fonts at 1080p, slow loading and menu changes, opening cinematic freeze, PPSSPP save hash.</span>
         </div>
+        <div class="flex gap-3 p-2.5 bg-tokyo-bg/60 border border-tokyo-border rounded">
+          <span class="font-bold text-tokyo-accent min-w-[3rem]">S18</span>
+          <span class="text-tokyo-muted"><strong class="text-tokyo-text">Load Game to battle; 3D renders in the museum.</strong> Fixes: async file I/O (<code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">sceIoReadAsync</code>, <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">sceIoLseekAsync</code>, <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">sceIoSetAsyncCallback</code>, wait and poll) and callback delivery in <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">sceDisplayWaitVblankStartCB</code>, which the pre-battle load waited on forever; the three code overlays (menu, battle, extra) are told apart by a header hash and swapped, with battle and extra recompiled (49 + 1 units); the interpreter now runs the VFPU instructions the generator cannot lower (<code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">vcrs.t</code>, <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">vbfy1/2</code>, <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">vsrt1-4</code>) one instruction at a time; GE display lists run as a real FIFO. The 3D pass drew into a different display buffer than the 2D layers, so every other frame lost the scene; the cause is unknown and a per-frame display-buffer alias hides it. A PPSSPP save that the game had overwritten during hung runs was restored (<code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">D012_SAVE_IGNORE_HASH=1</code>). New opt-in diagnostics: pc sampler, 3D and framebuffer-sample traces, GE event ring. <strong class="text-tokyo-text">Open:</strong> in-game textures (battle, story mode, open world) broken or missing, battle BGM stops after about 5 s, open world at 5-10 fps, cutscenes not retested (<code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">sceKernelWaitThreadEndCB</code> unimplemented), HD fonts not started, battle may still show the diamond frame.</span>
+        </div>
+        <div class="flex gap-3 p-2.5 bg-tokyo-bg/60 border border-tokyo-border rounded">
+          <span class="font-bold text-tokyo-accent min-w-[3rem]">S19</span>
+          <span class="text-tokyo-muted"><strong class="text-tokyo-text">Battle shadows, colour bleed, battle music, speed, story mode and HD banners work.</strong> The earlier framework had no GE stencil and no shared depth buffers, so the battle's stencil shadow volumes drew as dark shafts; it also lacked the host audio and present thread. Those patches (VCKing101's open-source port, MIT) did not apply to it, so this project's profile, overlays and game now run on the port's <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">d012</code> PortableKit branch (new build <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">d012_vk</code>). The HD pack is read from a PPSSPP-style folder (<code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">hash = quick</code>); 60 fps is the Video menu's frame interpolation. The port's local versus is left out of this build and the autosave notice is skipped. The colour bleed is gone. To confirm: the twirl into battle, animated textures, cutscenes.</span>
+        </div>
       </div>
     </section>
 
@@ -265,7 +273,7 @@
     </section>
 
     <footer class="text-center text-xs text-tokyo-muted py-4 border-t border-tokyo-border">
-      PSPRecomp · Dissidia 012 PC Port · Last updated: <span class="font-bold text-tokyo-accent min-w-[3rem]">29/10/2026</span> ·
+      PSPRecomp · Dissidia 012 PC Port · Last updated: <span class="font-bold text-tokyo-accent min-w-[3rem]">31/10/2026</span> ·
       <a href="https://github.com/LiinkPK/PSPRecomp-d012" target="_blank" rel="noopener" class="hover:text-tokyo-accent">github.com/LiinkPK/PSPRecomp-d012</a>
     </footer>
 
@@ -335,9 +343,9 @@
         borderColor: "border-l-tokyo-purple",
         summary: "Synthesize background music and sound effects using host audio backends.",
         tasks: [
-          { id: "p4-t1", name: "sceAudio raw PCM output",                                       note: "Sound plays in the native build (PortableKit audio)", done: true  },
+          { id: "p4-t1", name: "sceAudio raw PCM output",                                       note: "Sound and the battle music play in the native build (PortableKit audio)", done: true  },
           { id: "p4-t2", name: "sceSasCore 32-channel ADPCM/ADSR mixer",                        note: "uOFW clean reference implementation",            done: false },
-          { id: "p4-t3", name: "ATRAC3+ music streaming / stubbing",                            note: "Stub to silence; decode later with libatrac3plus", done: false },
+          { id: "p4-t3", name: "ATRAC3+ music streaming / stubbing",                            note: "S19: music plays, including in battle (PortableKit host audio)", done: true },
         ]
       },
       {
