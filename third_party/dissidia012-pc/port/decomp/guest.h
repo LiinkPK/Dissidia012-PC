@@ -1,7 +1,7 @@
 /* What decompiled code sees of the game: guest memory and guest calls.
  *
  * The functions in port/decomp/ are the game's own functions, rewritten in C
- * from the machine code of ULUS10566 v1.00 and checked against the recompiled
+ * from the machine code of ULUS10566 and checked against the recompiled
  * originals (port/host/d012_decomp_harness.cpp). They do not match the
  * original bytes; they behave the same: the same memory written, the same
  * calls made in the same order with the same arguments, the same results.

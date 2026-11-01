@@ -1,4 +1,4 @@
-# Dissidia 012 (ULUS10566 v1.00): moveset archive semantics
+# Dissidia 012 (ULUS10566): moveset archive semantics
 
 > Static analysis, 14 October 2026. What each part of a fighter's moveset archive (`obj/p_<code>.objx`)
 > means to the code that reads it, for authoring new attacks. Byte layouts are shared with

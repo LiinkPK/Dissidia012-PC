@@ -1,5 +1,5 @@
 // The PortableKit profile for Dissidia 012 Duodecim Final Fantasy, USA
-// release ULUS10566 v1.00.
+// release ULUS10566.
 //
 // Constants only, as PortableKit's profile guide asks. Every value here is a
 // fact about the game's own files (hashes, header words, addresses from the
@@ -68,7 +68,7 @@ const GameProfile &game() {
         .game_title = "Dissidia 012 Duodecim Final Fantasy",
         .executable_path_on_disc = "PSP_GAME/SYSDIR/EBOOT.BIN",
         .param_sfo_path_on_disc = "PSP_GAME/PARAM.SFO",
-        .release_name = "the North American release (ULUS10566 v1.00)",
+        .release_name = "the North American release (ULUS10566)",
         // sha256 of PSP_GAME/SYSDIR/EBOOT.BIN on the disc, and of its
         // decryption (build/ULUS10566/EBOOT.ELF, tools/decrypt_main.sh).
         .encrypted_executable_sha256 = "8fbf3541ab121aff85aae72795760736dfe37706996b2b0f9b81d36fc98f3394",

@@ -1,5 +1,5 @@
 // The PortableKit profile for Dissidia 012 Final Fantasy HD Remastered: the European release (ULES01505), with
-// the North American release (ULUS10566 v1.00) accepted as a variant.
+// the North American release (ULUS10566) accepted as a variant.
 //
 // Derived from the profile of the open-source port "Dissidia 012 Duodecim Final Fantasy: native PC port and
 // decompilation" by VCKing101 (MIT licence, third_party/dissidia012-pc/LICENSE). The game's addresses, overlay
@@ -35,7 +35,7 @@ constexpr std::uint32_t kOverlaySlots[] = {0x089DD4C0u, 0x08B62F70u};
 // can use the port. Its saves are in ULUS10566 folders, which the port does not read; copy them to the
 // ULES01505 names to use them.
 constexpr ProfileVariant kVariants[] = {
-    {"usa", "North American release (ULUS10566 v1.00)",
+    {"usa", "North American release (ULUS10566)",
      // No executable hash of its own: it runs the profile's executable and corpus (the installer falls back to
      // the profile's hash). Naming one here makes the runtime look for a separate "usa" corpus.
      "8fbf3541ab121aff85aae72795760736dfe37706996b2b0f9b81d36fc98f3394", nullptr},

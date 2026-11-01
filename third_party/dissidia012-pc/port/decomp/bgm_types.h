@@ -1,4 +1,4 @@
-/* The battle music (BGM) subsystem of Dissidia 012 (ULUS10566 v1.00):
+/* The battle music (BGM) subsystem of Dissidia 012 (ULUS10566):
  * structures recovered from the code and data, and the addresses the
  * decompiled functions use. Every address is tagged with its module (main,
  * or the battle overlay loaded at 0x089DD4C0). See

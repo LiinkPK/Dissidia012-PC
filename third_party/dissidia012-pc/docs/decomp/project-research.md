@@ -4,7 +4,7 @@ Research and local inspection: 10 October 2026. Target: European ULES-01505, ver
 
 **Historical research:** the current target, milestones and reporting policy are maintained in [scope and roadmap](scope-and-roadmap.md), with live results in [progress.md](progress.md). The proposed setup statements below describe the initial inspection and are not the current implementation status.
 
-Follow-up: a subsequently supplied USA ULUS10566 v1.00 ISO matches the published retail reference and is the recommended starting input. See [the USA comparison](usa-comparison.md). BOOT.BIN is also all zeros in that verified image; this alone is not a modification indicator.
+Follow-up: a subsequently supplied USA ULUS10566 ISO matches the published retail reference and is the recommended starting input. See [the USA comparison](usa-comparison.md). BOOT.BIN is also all zeros in that verified image; this alone is not a modification indicator.
 
 ## Recommendation
 

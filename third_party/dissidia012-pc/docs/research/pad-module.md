@@ -1,4 +1,4 @@
-# Dissidia 012 (ULUS10566 v1.00) - controller-input ("pad") module map
+# Dissidia 012 (ULUS10566) - controller-input ("pad") module map
 
 > Static-analysis report produced by a research subagent on 13 October 2026 and kept as written.
 > Open item 4 is since answered: PPSSPP 1.20.4 delivers L3 = 0x0002, R3 = 0x0004, L2 = 0x0400, R2 = 0x0800 in `Buttons`

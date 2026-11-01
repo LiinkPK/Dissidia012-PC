@@ -1,6 +1,6 @@
 # Data-install structures and transfer path
 
-Evidence from verified USA ULUS10566 v1.00, inspected 11 October 2026. These are recovered memory layouts and code behavior; a complete installed-file format and runtime state machine are not yet established.
+Evidence from verified USA ULUS10566, inspected 11 October 2026. These are recovered memory layouts and code behavior; a complete installed-file format and runtime state machine are not yet established.
 
 ## Source entry metadata
 

@@ -416,7 +416,7 @@ void check_inputs(const Paths &p) {
         throw Error("the decrypted executable is missing (" + text(p.eboot) + "): run --install <your ISO> first");
     if (p.iso.empty()) throw Error("the disc image is not known; pass --iso <your ULUS10566 .iso>");
     if (psprecomp::sha256_file(p.eboot) != portablekit::game().executable_sha256)
-        throw Error(text(p.eboot) + " is not the ULUS10566 v1.00 executable this port is made for");
+        throw Error(text(p.eboot) + " is not the ULUS10566 executable this port is made for");
     if (p.iso.empty() || !fs::is_regular_file(p.iso, ec))
         throw Error("the disc image is not known; pass --iso <your ULUS10566 .iso>");
     for (const fs::path &tool : {p.recompiler, p.compiler})
@@ -473,7 +473,7 @@ int run(const Options &options) {
                     throw Error(std::string("cannot read ") + file.path + " from the disc");
                 const std::string hash = psprecomp::sha256_bytes(bytes);
                 if (hash != file.sha256)
-                    throw Error(std::string(file.path) + " on the disc is not the ULUS10566 v1.00 file (SHA-256 " +
+                    throw Error(std::string(file.path) + " on the disc is not the ULUS10566 file (SHA-256 " +
                                 hash + ")");
                 const fs::path target = p.work / "disc" / fs::path(file.path).filename();
                 write_all(target, std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()));

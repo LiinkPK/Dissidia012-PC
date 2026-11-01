@@ -16,7 +16,7 @@ The [working environment](getting-started.md) is ready: **the decrypted main exe
 
 The maintained [scope and roadmap](scope-and-roadmap.md) sets the whole-project milestones and progress rules. The [current progress report](progress.md) separates source recovery, build fidelity and feature evidence ranks. [Controller coverage](menu-controller-coverage.md) is 70% by handler count and 32.83% by bytes; this is one local scope, not the whole menu or game. Inventories cover **21,282 candidates**, including the [reviewed member callback](member-audit-milestone.md) and [deferred battle setup](deferred-battle-audit.md); unknown regions and untraced entries remain explicit. Extra is **9.28% matching C by reviewed code bytes**. The other module audits and the whole-game headline remain unfinished.
 
-Follow-up: the added USA ULUS10566 v1.00 ISO matches the size and SHA-1 in PPSSPP's Redump database and is the recommended starting reference. See [the USA comparison](usa-comparison.md) and [USA inventory](iso-inventory-usa.json). The EU research below describes the originally supplied image.
+Follow-up: the added USA ULUS10566 ISO matches the size and SHA-1 in PPSSPP's Redump database and is the recommended starting reference. See [the USA comparison](usa-comparison.md) and [USA inventory](iso-inventory-usa.json). The EU research below describes the originally supplied image.
 
 Read [the research and startup plan](project-research.md) for the workflow, tools, sources and game-specific findings. [The inventory](iso-inventory.json) records the supplied image's hashes, file extents and executable metadata.
 

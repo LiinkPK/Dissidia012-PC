@@ -1,5 +1,5 @@
 /* The loading screen's BGM selector (battle overlay 0x08ADE4E0,
- * 0x08AF5AC0, 0x08AF5AE8, 0x08AF8CA4). Decompiled from ULUS10566 v1.00;
+ * 0x08AF5AC0, 0x08AF5AE8, 0x08AF8CA4). Decompiled from ULUS10566;
  * behaviourally equivalent, not matching. MIT licence; see port/README.md. */
 #include "bgm_types.h"
 

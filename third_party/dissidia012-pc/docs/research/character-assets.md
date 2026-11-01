@@ -1,4 +1,4 @@
-# Dissidia 012 (ULUS10566 v1.00): how a playable character's assets are stored and loaded
+# Dissidia 012 (ULUS10566): how a playable character's assets are stored and loaded
 
 > Static-analysis report produced by a research subagent on 13 October 2026 and kept as written. Nothing in it has
 > been confirmed at runtime.

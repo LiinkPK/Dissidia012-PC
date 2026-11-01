@@ -1,4 +1,4 @@
-# Dissidia 012 (ULUS10566 v1.00): battle moveset system, static analysis
+# Dissidia 012 (ULUS10566): battle moveset system, static analysis
 
 > Static-analysis report produced by a research subagent on 13 October 2026 and kept as written. Nothing in it has
 > been confirmed at runtime.

@@ -1,5 +1,5 @@
 /* The world map walker's input direction (battle overlay 0x08B38A0C), with
- * the port's analog stick as an option. Decompiled from ULUS10566 v1.00;
+ * the port's analog stick as an option. Decompiled from ULUS10566;
  * behaviourally equivalent, not matching. MIT licence; see port/README.md.
  *
  * The game builds the direction from four held logical bits (walk up, down,

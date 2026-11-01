@@ -1,6 +1,6 @@
 # Dissidia 012 native port (PortableKit profile)
 
-The native PC port of *Dissidia 012 Duodecim Final Fantasy*, USA release ULUS10566 v1.00, on
+The native PC port of *Dissidia 012 Duodecim Final Fantasy*, USA release ULUS10566, on
 [PortableKit](https://github.com/TeamGDB/PortableKit). MIT licence, like PortableKit.
 
 This directory holds only our own code: the profile and its build file. No game data, no generated code

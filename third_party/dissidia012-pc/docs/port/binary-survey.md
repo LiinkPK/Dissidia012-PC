@@ -1,4 +1,4 @@
-# Dissidia 012 (ULUS10566 v1.00) - binary survey for a native PC port
+# Dissidia 012 (ULUS10566) - binary survey for a native PC port
 
 > Static-analysis report, 18 October 2026. Inputs: the four decrypted ELFs in `build/ULUS10566/` (hashes match
 > `config/inventory/*.json`), the unencrypted disc PRX `LIBSUPPREACC.PRX`, the retail ISO (headers only), and the

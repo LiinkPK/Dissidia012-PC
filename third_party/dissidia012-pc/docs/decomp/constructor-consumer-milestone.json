@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "recorded_utc": "2026-10-11T11:15:03.221630+00:00",
-  "target": "ULUS10566 v1.00",
+  "target": "ULUS10566",
   "before": {
     "functions": 102,
     "code_bytes": 5228

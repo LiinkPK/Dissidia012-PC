@@ -1,6 +1,6 @@
 # Dissidia 012 Duodecim Final Fantasy: native PC port and decompilation
 
-A native PC port of *Dissidia 012 Duodecim Final Fantasy* (PSP, USA release ULUS10566 v1.00), built by static
+A native PC port of *Dissidia 012 Duodecim Final Fantasy* (PSP, USA release ULUS10566), built by static
 recompilation on [PortableKit](https://github.com/TeamGDB/PortableKit), together with a matching decompilation of the
 game's executable and overlays.
 

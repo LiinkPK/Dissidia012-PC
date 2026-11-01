@@ -972,7 +972,7 @@ bool check_retail(const std::filesystem::path &iso, const Progress &progress, st
         return false;
     }
     if (size != kRetailSize) {
-        error = "it is " + std::to_string(size) + " bytes, but a clean dump of Dissidia 012 (USA, ULUS10566 v1.00) is " +
+        error = "it is " + std::to_string(size) + " bytes, but a clean dump of Dissidia 012 (USA, ULUS10566) is " +
                 std::to_string(kRetailSize) + " (Redump); pick the original, not a trimmed or patched copy";
         return false;
     }

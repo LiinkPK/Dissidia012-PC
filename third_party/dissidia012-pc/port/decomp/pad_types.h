@@ -1,4 +1,4 @@
-/* The pad (controller input) module of Dissidia 012 (ULUS10566 v1.00), main
+/* The pad (controller input) module of Dissidia 012 (ULUS10566), main
  * 0x08871B40..0x08873497, and the world map's walk input (battle overlay):
  * the structures and addresses the decompiled pad functions use.
  * docs/research/pad-module.md maps the module; docs/port/analog-movement.md

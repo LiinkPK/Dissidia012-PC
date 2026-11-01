@@ -1,6 +1,6 @@
 # First C matches and compiler investigation
 
-Updated 11 October 2026. Target: verified USA ULUS10566 v1.00 extra overlay.
+Updated 11 October 2026. Target: verified USA ULUS10566 extra overlay.
 
 ## Integrated result
 

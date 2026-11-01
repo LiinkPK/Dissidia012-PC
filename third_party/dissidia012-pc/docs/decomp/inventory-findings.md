@@ -1,6 +1,6 @@
 # First whole-scope function inventory
 
-Inventory revision 1, 11 October 2026. All four references are hash-pinned USA ULUS10566 v1.00 inputs. The maintained metadata is under `config/inventory/`; raw Ghidra output and projects remain under ignored `analysis/`.
+Inventory revision 1, 11 October 2026. All four references are hash-pinned USA ULUS10566 inputs. The maintained metadata is under `config/inventory/`; raw Ghidra output and projects remain under ignored `analysis/`.
 
 **Revision 2 update:** the [extra-overlay layout audit](extra-layout-audit.md) resolves its 1,105 unknown bytes, reviews all 100 boundaries and establishes a 22,796-byte code denominator. The extra module is now 9.28% matching C by reviewed code bytes. Other module classifications below remain provisional; the revision 1 tables are retained as the original snapshot.
 

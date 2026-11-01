@@ -1,5 +1,5 @@
 /* The BGM table: lookups and the start of playback (main 0x0889F234 ..
- * 0x0889F638, 0x0889FD38, 0x088A04A8). Decompiled from ULUS10566 v1.00;
+ * 0x0889F638, 0x0889FD38, 0x088A04A8). Decompiled from ULUS10566;
  * behaviourally equivalent, not matching. MIT licence; see port/README.md. */
 #include "bgm_types.h"
 

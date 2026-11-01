@@ -1,7 +1,7 @@
 #pragma once
 
 // The PSP / PPSSPP export's disc side: a copy of the player's Dissidia 012
-// ISO (ULUS10566 v1.00) with tracks added to the game's own battle music
+// ISO (ULUS10566) with tracks added to the game's own battle music
 // list, for PPSSPP or a PSP with custom firmware. The track list is data:
 // bgm_entry.bin (in general_archive/main/main.bin) gets a row per track and
 // bgm_name.bin (in general_archive/main/EN/main_lang.bin) a name; both

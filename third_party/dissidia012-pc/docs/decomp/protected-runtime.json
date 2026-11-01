@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "recorded_utc": "2026-10-11T06:06:38.786080+00:00",
-  "target": "ULUS10566 v1.00",
+  "target": "ULUS10566",
   "ppsspp": "1.20.4 Windows x64",
   "isolation": {
     "administrator_setup_succeeded": true,

@@ -130,7 +130,7 @@ The game's main executable, `PSP_GAME/SYSDIR/EBOOT.BIN`, is encrypted on the dis
 The port's profile (`port/host/d012_profile.cpp`) carries the public decryption key for the executable's tag, the
 value pspdecrypt and the PSP emulators carry, so `D012Native --install` decrypts it from your own ISO, and setup
 does that for you (step 4). The result is accepted only if its SHA-256 is
-`0bc8e779aad2814a3d1bd77346f69ca5e16665845ed053cd0ad44a9cbfaefe6d` (4,640,948 bytes), the decrypted ULUS10566 v1.00
+`0bc8e779aad2814a3d1bd77346f69ca5e16665845ed053cd0ad44a9cbfaefe6d` (4,640,948 bytes), the decrypted ULUS10566
 executable.
 
 If you already have that file, `-Eboot <path>` uses it instead, and the bootstrap compile and the decryption are

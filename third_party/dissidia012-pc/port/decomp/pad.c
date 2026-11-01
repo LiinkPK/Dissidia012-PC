@@ -1,5 +1,5 @@
 /* The pad module's accessors (main 0x08871CFC..0x08871DA0, 0x08872740..
- * 0x08872964, 0x08873084). Decompiled from ULUS10566 v1.00; behaviourally
+ * 0x08872964, 0x08873084). Decompiled from ULUS10566; behaviourally
  * equivalent, not matching. MIT licence; see port/README.md. */
 #include "pad_types.h"
 

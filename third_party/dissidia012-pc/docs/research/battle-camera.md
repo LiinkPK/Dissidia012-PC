@@ -1,4 +1,4 @@
-# Dissidia 012 (ULUS10566 v1.00) — battle camera manual control: static analysis
+# Dissidia 012 (ULUS10566) — battle camera manual control: static analysis
 
 > Static-analysis report produced by a research subagent on 13 October 2026 and kept as written.
 > The hook sites, single-caller claims, action masks and yaw arithmetic were re-checked against the binary afterwards.

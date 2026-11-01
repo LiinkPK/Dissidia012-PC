@@ -1,6 +1,6 @@
 # Working starter environment
 
-Target: **Dissidia 012 USA, ULUS10566 v1.00**. Set up 10 October; latest verification 11 October 2026.
+Target: **Dissidia 012 USA, ULUS10566**. Set up 10 October; latest verification 11 October 2026.
 
 ## Current result
 

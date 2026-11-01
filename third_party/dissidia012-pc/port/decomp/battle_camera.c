@@ -1,5 +1,5 @@
 /* The battle camera's mode updates (battle overlay 0x08B3F40C, 0x08B40014).
- * Decompiled from ULUS10566 v1.00; behaviourally equivalent, not matching.
+ * Decompiled from ULUS10566; behaviourally equivalent, not matching.
  * Each takes a hook that runs between the stock input and the code that
  * builds the view from the mode's state, which is where the port's right
  * stick turns the camera (port/host/d012_camera.cpp). With no hook they are

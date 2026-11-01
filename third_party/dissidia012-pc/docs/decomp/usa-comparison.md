@@ -1,6 +1,6 @@
 # USA versus supplied EU image
 
-Inspected 10 October 2026. Recommendation: use **USA ULUS10566 v1.00** as the initial matching-decompilation reference. The original [EU research](project-research.md) remains useful for the workflow and overlay layout.
+Inspected 10 October 2026. Recommendation: use **USA ULUS10566** as the initial matching-decompilation reference. The original [EU research](project-research.md) remains useful for the workflow and overlay layout.
 
 ## Why this USA copy is a better starting point
 
