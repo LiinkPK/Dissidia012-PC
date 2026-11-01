@@ -1,3 +1,5 @@
+<p align="center" ><img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
+
 # PSPRecomp — Dissidia 012 PC Port
 
 A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 012 [duodecim] Final Fantasy** to PC as a native executable. The PSP's MIPS code is translated to C++ ahead of time and runs on the PortableKit runtime (cooperative kernel, HLE, Vulkan renderer, audio). No emulator is needed to play. The European release (`ULES01505`) is the main target; the North American release v1.00 (`ULUS10566`) is accepted as a variant, because both discs carry the same game executable (not tested yet). The Japanese release is not supported.
