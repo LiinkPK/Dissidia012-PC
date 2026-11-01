@@ -38,7 +38,7 @@ third_party/dissidia012-pc/  The open-source port by VCKing101 (MIT), kept as a 
 
 - CMake 3.20+ and a C++20 compiler (MSVC on Windows), the Vulkan SDK and SDL3 3.2
 - The `d012` branch of PortableKit with this project's changes (branch `tenkawa-merge`); pass its folder as `-DPORTABLEKIT_ROOT=<path>`
-- Your own ISO: `ULES01505` (European) or `ULUS10566` v1.00 (North American)
+- Your own ISO: `ULES01505` (European) or `ULUS10566` (North American)
 
 ---
 
