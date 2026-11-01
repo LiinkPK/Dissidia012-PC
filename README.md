@@ -63,7 +63,11 @@ The executable is recompiled **unmodified**: the code in `profiles/d012_pk/work/
 
 ## Texture replacement
 
-The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNGs, `hash = quick`) found in `data/textures/ULES01505` next to the executable (for the North American disc, rename the folder to `ULUS10566`). The replacement image keeps its own resolution, so HD art works without touching the game's data.
+The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNGs, `hash = quick`) found in `data/textures/ULES01505` next to the executable. The replacement image keeps its own resolution, so HD art works without touching the game's data.
+
+> [!NOTE]
+> Even if you're running the US version, there is no need to change the texture folder's name from `ULES01505` to `ULUS10566`.
+> Simply find the folder in the **Menu** -> **Import texture pack...** -> And then confirm changes/replacement.
 
 ---
 
