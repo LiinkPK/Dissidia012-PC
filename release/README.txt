@@ -13,4 +13,4 @@ Saves from PPSSPP: in the game open the menu (Esc) > System > Saves and import y
 
 Third-party software: FFmpeg (LGPL, see FFmpeg-LICENSE.txt and FFmpeg-SOURCE.txt), SDL3, Dear ImGui and others
 bundled by PortableKit keep their own licences.
-Credits: VCKing101 (Dissidia012-pc, MIT). Project: github.com/LiinkPK/PSPRecomp-d012
+Credits: VCKing101 (Dissidia012-pc, MIT). Project: github.com/LiinkPK/Dissidia012-PC

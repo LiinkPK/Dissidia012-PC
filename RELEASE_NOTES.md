@@ -63,4 +63,4 @@ If no window appears, update your graphics driver.
 
 This release bundles FFmpeg (LGPL; `FFmpeg-LICENSE.txt` and `FFmpeg-SOURCE.txt` are included), SDL3, Dear ImGui, stb, xxHash and other libraries through PortableKit. Each keeps its own licence. This project is not affiliated with Square Enix or Sony; *Dissidia* and *Final Fantasy* are trademarks of their owners.
 
-Source and development log: https://github.com/LiinkPK/PSPRecomp-d012
+Source and development log: https://github.com/LiinkPK/Dissidia012-PC
