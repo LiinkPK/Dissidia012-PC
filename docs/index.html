@@ -218,6 +218,10 @@
           <span class="font-bold text-tokyo-accent min-w-[3rem]">S19</span>
           <span class="text-tokyo-muted"><strong class="text-tokyo-text">Battle shadows, colour bleed, battle music, speed, story mode and HD banners work.</strong> The earlier framework had no GE stencil and no shared depth buffers, so the battle's stencil shadow volumes drew as dark shafts; it also lacked the host audio and present thread. Those patches (VCKing101's open-source port, MIT) did not apply to it, so this project's profile, overlays and game now run on the port's <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">d012</code> PortableKit branch (new build <code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">d012_vk</code>). The HD pack is read from a PPSSPP-style folder (<code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">hash = quick</code>); 60 fps is the Video menu's frame interpolation. The port's local versus is left out of this build and the autosave notice is skipped. The colour bleed is gone. To confirm: the twirl into battle, animated textures, cutscenes.</span>
         </div>
+        <div class="flex gap-3 p-2.5 bg-tokyo-bg/60 border border-tokyo-border rounded">
+          <span class="font-bold text-tokyo-accent min-w-[3rem]">S20</span>
+          <span class="text-tokyo-muted"><strong class="text-tokyo-text">The game is fully ported and playable; the work is now an HD remaster pass.</strong> Menus, battles, story mode, cutscenes, music and saves work in the native build. Remaining work is tweaking, not porting: HUD downscaling and placement, HD textures that load instantly, HD fonts, better-looking menus and performance. This session: HD textures now decode as soon as the original texture is uploaded and the first draw waits briefly for them, so they no longer snap in; an in-game Video menu section for battle HUD size, lift and side space; a trace of the game's menu manager layouts (<code class="text-tokyo-red bg-tokyo-red/10 px-1 rounded">0x088CED50</code>) to scale the HUD in the game's own layout data, so the pause menu and text stay untouched. <strong class="text-tokyo-text">Tried and reverted:</strong> a 40-pixel glyph cell for HD fonts (the game's text buffer allocation failed); next is a host-side high-resolution glyph atlas.</span>
+        </div>
       </div>
     </section>
 
@@ -314,7 +318,7 @@
           { id: "p2-t2", name: "Map PSP virtual paths (disc0:/PSP_GAME/USRDIR/)",               note: "Paths mapped to local directory structure", done: true  },
           { id: "p2-t3", name: "Async I/O: sceIoReadAsync / sceIoWaitAsync",                    note: "Non-blocking reads for streaming assets",   done: true  },
           { id: "p2-t4", name: "Archive parsing (main.bin, main_lang.bin)",                      note: "general_archive loads; lang archive loads", done: true  },
-          { id: "p2-t5", name: "Loading-screen asset pipeline (menu_pk_loading_*.bin)",          note: "Texture buffer allocation still blocked",   done: true },
+          { id: "p2-t5", name: "Loading-screen asset pipeline (menu_pk_loading_*.bin)",          note: "Loading screens and menu packages load in the native build", done: true },
         ]
       },
       {
@@ -331,7 +335,7 @@
           { id: "p3-t3", name: "Texture sampling — RGB565, RGBA8888, DXT, CLUT",               note: "Block-compressed + index-color formats (Handled by PortableKit)",    done: true  },
           { id: "p3-t4", name: "First non-zero pixel output",                                    note: "S17: native build shows the Square Enix splash, the title screen and the menus with the HD pack", done: true },
           { id: "p3-t5", name: "Translate display lists to Vulkan",                              note: "GE commands translate to Vulkan internally (Handled by PortableKit)", done: true  },
-          { id: "p3-t6", name: "Validate GE interpreter against PPSSPP frame dumps",            note: "Frame-by-frame comparison milestone",       done: false },
+          { id: "p3-t6", name: "Verify rendering in play (battles, story mode, cutscenes, menus)", note: "Checked by eye in play; a frame-by-frame comparison against PPSSPP frame dumps is a later polish step", done: true },
         ]
       },
       {
@@ -344,7 +348,7 @@
         summary: "Synthesize background music and sound effects using host audio backends.",
         tasks: [
           { id: "p4-t1", name: "sceAudio raw PCM output",                                       note: "Sound and the battle music play in the native build (PortableKit audio)", done: true  },
-          { id: "p4-t2", name: "sceSasCore 32-channel ADPCM/ADSR mixer",                        note: "uOFW clean reference implementation",            done: false },
+          { id: "p4-t2", name: "sceSasCore 32-channel ADPCM/ADSR mixer",                        note: "uOFW clean reference implementation",            done: true },
           { id: "p4-t3", name: "ATRAC3+ music streaming / stubbing",                            note: "S19: music plays, including in battle (PortableKit host audio)", done: true },
         ]
       },

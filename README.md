@@ -60,7 +60,7 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 
 ## Status
 
-Session 19: the native build reaches the game's battles and story mode with the battle shadows, the colour bleed fix, the battle music and the speed working, and with the HD story banners and portraits. Still to confirm: the twirl into battle, animated textures, and cutscenes after New Game. See `updates.md` for the session-by-session log.
+**The game is fully ported and playable**: menus, battles with shadows and effects, story mode, cutscenes, music, saves and the HD texture pack all work in the native build. What is left is not porting but tweaking it into a proper HD remaster: HUD downscaling and placement (in progress, in the game's own layout data), faster HD texture loading, HD fonts, better-looking menus and performance. See `updates.md` for the session-by-session log (Session 20 is the latest).
 
 ---
 

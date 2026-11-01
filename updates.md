@@ -1,6 +1,6 @@
 ﻿# PSPRecomp — Dissidia 012 (ULES01505.BIN) — Current State
 
-**Last updated:** 30/10/2026 (Session 18)
+**Last updated:** 01/11/2026 (Session 20)
 
 **Goal:** Genuinely boot Dissidia 012's original startup path and visibly render the authentic Square Enix logo through guest asset I/O — guest VRAM — GE — the native window. A blank window, hard-coded logo, placeholder, or host overlay does not count.
 
@@ -540,3 +540,30 @@ Not confirmed yet
 Housekeeping
 - Credits to VCKing101 added to the README. The old builds (`out/d012_pk`, `out/d012`, `out/framework`, `out/build`), the `.rea` folder and the Visual Studio cache were deleted. The game folder was moved into the new build.
 - Independence from the PortableKit branch and `third_party/dissidia012-pc` is deferred until the user decides the port is complete.
+
+---
+
+## Session 20 (01/11/2026)
+
+**Result: the game is fully ported and playable (menus, battles, story mode, cutscenes, music, saves). The project is now a tweaking pass to make it a proper HD remaster: HUD downscaling, texture processing, better-looking menus, HD fonts and performance. Nothing below is a porting blocker.**
+
+Confirmed by the user
+- Cutscenes work without issues.
+
+Changed, not yet built or confirmed (code is in the PortableKit `d012` branch checkout, `host/`)
+- **HD textures snap in late.** The HD image was decoded on a worker thread and the original was drawn until it was ready (about 0.4 s). Decoding now starts when the original texture is uploaded, the first draw waits for it (80 ms per image, 200 ms per frame at most) and the per-frame upload cap went from 32 MB to 128 MB (`replacement_textures.cpp`, `texture_pack.cpp`, `vulkan_renderer.cpp`). A scene change with many large textures may now hitch instead of snapping.
+- **Battle HUD size, lift and side space.** Video menu, Battle HUD: HUD size (50 to 100 %), HUD lift (0 to 30 game pixels; about 4 pixels each on a 1080p window) and HUD side space (0 to 40; player 1's HUD moves right, player 2's left). Stored in `settings.ini` as `hud.scale`, `hud.margin`, `hud.side_margin`; `D012_HUD_SCALE` and `D012_HUD_MARGIN` override for one run.
+
+What did not work
+- **40-pixel glyph cell (HD fonts).** Reporting a 40x40 glyph to the game crashed it at the first text: the game's text-line routine (`FUN_0887D7B8`, from `FUN_0887F294`) allocates a line buffer sized from the cell, the heap returned null and `memcpy` (`0x08935524`) wrote to address 0. Reverted (`kScale = 1` in `fonts/game_font.hpp`). Next: keep the game's 20x20 cells and swap in high-resolution glyphs at draw time (host-side atlas). Deferred by the user.
+- **HUD scaling in the renderer.** Scaling "2D drawn after the last 3D draw" works for the character HUD (gauges, portraits, BRV numbers, the stage BRV counter scaled about the screen centre) but also catches the pause menu's bottom panel, so it cannot be made exact. Matching by texture address failed (addresses change per run) and by content hash cannot cover portraits and outfits.
+- **Test machine:** a Quadro K2200 showed sound but no window: the machine needs a current NVIDIA driver with Vulkan (the SDK is not needed). Not resolved.
+
+HUD in the game's own data (in progress)
+- The menu manager draws every layout (character HUD, pause menu, speech text) from `main 0x088CED50(manager)`: layouts are linked from `manager+0x24` through their own `+0x24`, a layout draws while its byte `+0x14` has bit 1 and neither `0x0C` nor `0x20`; its sprites hang from the layout's first word, linked through `+0x3C`; a layout whose `+0x10` is 0 is drawn by another routine (text) (`FUN_088D16F4`).
+- `profiles/d012_vk/d012_hud_layout.cpp` wraps `0x088CED50` (the port's decomp override system with `call_original`). With `D012_TRACE_HUD_LAYOUTS=1` it logs when a layout starts or stops drawing and the words of its first sprites. About 60 layouts start at battle load; five stop while paused. Next: read the sprite position and size fields, pick the character HUD layouts, then scale them in the game's data before the original draw runs and put them back after. That is also the base for any other UI element.
+
+Other
+- `docs/index.html`: roadmap item p3-t6 reworded to "Verify rendering in play" (done); p2-t5's note corrected. The PPSSPP frame-dump comparison is now a later polish step (the port has no `.ppdmp` replayer; compare screenshots instead).
+- A clean copy of the build (exe, DLLs, overlays, `game/`, `data/`) was made outside the repo for testing on a second PC.
+- `project_overview_goals.md` states the next goals: no ISO dependency (extract and stream assets natively) and a one-click Windows installer.

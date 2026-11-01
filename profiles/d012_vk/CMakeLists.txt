@@ -35,6 +35,7 @@ portablekit_add_game(d012_native
     PROFILE_DIR "${D012_WORK_DIR}"
     SOURCES "${D012_PROFILE_HOST}/d012_profile.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_versus.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/d012_hud_layout.cpp"
             "${D012_PORT_DIR}/host/d012_hle.cpp"
             "${D012_PORT_DIR}/host/d012_prx.cpp"
             "${D012_PORT_DIR}/host/d012_json.cpp"
