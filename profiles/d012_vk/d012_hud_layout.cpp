@@ -19,6 +19,7 @@
 #include <cstring>
 #include <map>
 #include <set>
+#include <vector>
 
 namespace {
 
@@ -79,11 +80,85 @@ void trace_layouts(Guest *g, std::uint32_t manager) {
     std::fflush(stdout);
 }
 
+const std::set<std::uint32_t> &hud_layouts();
+float env_number(const char *name, float fallback);
+
+// Where each named layout hangs from (0, 240 or 480 on x), decided from its first element, in run_sprite_draw.
+std::map<std::uint32_t, float> &layout_anchors() {
+    static std::map<std::uint32_t, float> anchors;
+    return anchors;
+}
+
+struct HudParams {
+    float scale, lift, side;
+};
+
+const HudParams &hud_params() {
+    static const HudParams params = {std::fmin(1.0f, std::fmax(0.1f, env_number("D012_HUD_SCALE", 80.0f) / 100.0f)),
+                                     env_number("D012_HUD_MARGIN", 0.0f), env_number("D012_HUD_SIDE", 0.0f)};
+    return params;
+}
+
+float load_float(Guest *g, std::uint32_t address) {
+    const std::uint32_t word = g_ld32(g, address);
+    float value;
+    std::memcpy(&value, &word, 4);
+    return value;
+}
+
+void store_float(Guest *g, std::uint32_t address, float value) {
+    std::uint32_t word;
+    std::memcpy(&word, &value, 4);
+    g_st32(g, address, word);
+}
+
+// The sprites of the named layouts get their own position (+0x10, +0x14) and scale (+0x18, +0x1C) changed for
+// the one draw, the way the game's draw reads them (FUN_088D16F4: the screen position is the sprite's plus the
+// element's translation, the size the sprite's scale times the element's), then put back.
 void run_menu_draw(Guest *g, const CallState &in, GuestRegs &) {
     if (tracing()) trace_layouts(g, in.gpr[4]);
+    struct Saved {
+        std::uint32_t sprite;
+        float x, y, sx, sy;
+    };
+    std::vector<Saved> saved;
+    const HudParams &hud = hud_params();
+    if (!hud_layouts().empty() && g_ld8(g, in.gpr[4] + 0x20u) != 0u) {
+        unsigned layouts = 0;
+        for (std::uint32_t layout = g_ld32(g, in.gpr[4] + 0x24u); layout != 0u && layouts < 512u;
+             layout = g_ld32(g, layout + 0x24u), ++layouts) {
+            const auto anchor = layout_anchors().find(layout);
+            if (hud_layouts().count(layout) == 0u || anchor == layout_anchors().end()) continue;
+            const float ax = anchor->second;
+            const float target = ax < 1.0f ? hud.side : ax > 479.0f ? 480.0f - hud.side : 240.0f;
+            const float ox = target - ax * hud.scale;
+            const float oy = (272.0f - hud.lift) - 272.0f * hud.scale;
+            unsigned sprites = 0;
+            for (std::uint32_t sprite = g_ld32(g, layout); sprite != 0u && sprites < 512u;
+                 sprite = g_ld32(g, sprite + 0x3Cu), ++sprites) {
+                const std::uint16_t flags = static_cast<std::uint16_t>(g_ld16s(g, sprite + 0x20u));
+                if ((flags & 0x800u) != 0u) continue;  // projected from the world, not placed on the screen
+                saved.push_back({sprite, load_float(g, sprite + 0x10u), load_float(g, sprite + 0x14u),
+                                 load_float(g, sprite + 0x18u), load_float(g, sprite + 0x1Cu)});
+                const Saved &s = saved.back();
+                store_float(g, sprite + 0x10u, s.x * hud.scale + ox);
+                store_float(g, sprite + 0x14u, s.y * hud.scale + oy);
+                if ((flags & 0x400u) == 0u) {
+                    store_float(g, sprite + 0x18u, s.sx * hud.scale);
+                    store_float(g, sprite + 0x1Cu, s.sy * hud.scale);
+                }
+            }
+        }
+    }
     GuestRegs regs{};
     for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
     d012::decomp::call_original(g, kMenuDraw, regs);
+    for (const Saved &s : saved) {
+        store_float(g, s.sprite + 0x10u, s.x);
+        store_float(g, s.sprite + 0x14u, s.y);
+        store_float(g, s.sprite + 0x18u, s.sx);
+        store_float(g, s.sprite + 0x1Cu, s.sy);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -128,6 +203,17 @@ void run_sprite_draw(Guest *g, const CallState &in, GuestRegs &out) {
     const std::uint32_t layout = in.gpr[4];
     const std::uint32_t manager = g_ld32(g, kMenuManager);
     const std::uint32_t before = manager != 0u ? g_ld32(g, manager + 0x14u) : 0u;
+    // The parent matrix (4th argument, $a2... the sprite's +0x2C) the game multiplies in: where the layout
+    // really sits on screen. Logged once per layout and matrix.
+    if (tracing() && in.gpr[6] != 0u) {
+        static std::set<std::pair<std::uint32_t, std::uint32_t>> seen;
+        if (seen.insert({layout, in.gpr[6]}).second && seen.size() < 600u) {
+            float p[16];
+            std::memcpy(p, g_ptr(g, in.gpr[6], 64u), 64u);
+            std::printf("[hudlayout] parent layout %08X matrix %08X scale %.2f %.2f translation %.1f %.1f (%.2f %.2f)\n",
+                        layout, in.gpr[6], p[0], p[5], p[12], p[13], p[1], p[4]);
+        }
+    }
     GuestRegs regs{};
     for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
     regs.f[0] = in.fpr[12];
@@ -141,34 +227,37 @@ void run_sprite_draw(Guest *g, const CallState &in, GuestRegs &out) {
     static std::map<std::uint32_t, Box> boxes;
     static std::uint64_t calls = 0;
     const bool change = hud_layouts().count(layout) != 0u;
-    static const float scale = std::fmin(1.0f, std::fmax(0.1f, env_number("D012_HUD_SCALE", 80.0f) / 100.0f));
-    static const float lift = env_number("D012_HUD_MARGIN", 0.0f);
-    static const float side = env_number("D012_HUD_SIDE", 0.0f);
+    const HudParams &hud = hud_params();
+    const std::uint32_t sprite = in.gpr[7];
+    const std::uint16_t flags = static_cast<std::uint16_t>(g_ld16s(g, sprite + 0x20u));
+    const bool projected = (flags & 0x800u) != 0u;
     for (std::uint32_t i = before; i < after; ++i) {
         const std::uint32_t matrix = base + i * 0x50u + 0x10u;
         float m[16];
         std::memcpy(m, g_ptr(g, matrix, 64u), 64u);
+        // Absolute screen position: the element's translation plus the sprite's own.
+        const float abs_x = m[12] + (projected ? 0.0f : load_float(g, sprite + 0x10u));
+        const float abs_y = m[13] + (projected ? 0.0f : load_float(g, sprite + 0x14u));
         if (tracing()) {
             Box &box = boxes[layout];
-            box.x0 = std::fmin(box.x0, m[12]);
-            box.y0 = std::fmin(box.y0, m[13]);
-            box.x1 = std::fmax(box.x1, m[12]);
-            box.y1 = std::fmax(box.y1, m[13]);
+            box.x0 = std::fmin(box.x0, abs_x);
+            box.y0 = std::fmin(box.y0, abs_y);
+            box.x1 = std::fmax(box.x1, abs_x);
+            box.y1 = std::fmax(box.y1, abs_y);
             ++box.elements;
         }
-        if (!change) continue;
-        // Scale about the corner this piece hangs from, then lift and space it: left pieces move right,
-        // right pieces left, the centre stays. x and y outputs are columns 0 and 1 of the matrix.
-        const float ax = m[12] < 200.0f ? 0.0f : m[12] > 280.0f ? 480.0f : 240.0f;
-        const float tx = (ax < 1.0f ? side : ax > 479.0f ? 480.0f - side : 240.0f) - ax * scale;
-        const float ty = (272.0f - lift) - 272.0f * scale;
-        for (int row : {0, 4, 8}) { m[row] *= scale; m[row + 1] *= scale; }
-        m[12] = m[12] * scale + tx;
-        m[13] = m[13] * scale + ty;
+        if (!change || projected) continue;
+        // Which side the layout hangs from, from its first element, kept for the sprite fields above.
+        if (layout_anchors().count(layout) == 0u)
+            layout_anchors()[layout] = abs_x < 200.0f ? 0.0f : abs_x > 280.0f ? 480.0f : 240.0f;
+        m[12] *= hud.scale;
+        m[13] *= hud.scale;
+        if ((flags & 0x400u) != 0u)  // the sprite's own scale is ignored: scale the element's
+            for (int row : {0, 4, 8}) { m[row] *= hud.scale; m[row + 1] *= hud.scale; }
         std::memcpy(g_ptr(g, matrix, 64u), m, 64u);
     }
     if (tracing() && (++calls % 20000u) == 0u) {
-        std::printf("[hudlayout] boxes after %llu sprite draws (element translations, game pixels):\n",
+        std::printf("[hudlayout] boxes after %llu sprite draws (screen positions, game pixels):\n",
                     static_cast<unsigned long long>(calls));
         for (const auto &[addr, box] : boxes)
             std::printf("[hudlayout]   layout %08X  x %.0f..%.0f  y %.0f..%.0f  elements %u\n", addr, box.x0, box.x1,

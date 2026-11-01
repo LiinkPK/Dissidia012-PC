@@ -61,7 +61,6 @@ pyvenv.cfg
 Roadmap.*
 .aider*
 .claude*
-.rea*
 .continue*
 PROGRESS.json
 reasoning_trace.json
@@ -69,3 +68,5 @@ run*.*
 /Roadmap.html
 discord.md
 *.psd
+# release zips built by scripts/make_release.ps1
+dist/

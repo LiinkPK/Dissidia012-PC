@@ -68,4 +68,8 @@ if(WIN32)
     # Icon of the .exe itself (Explorer, taskbar); the window icon is set at runtime
     target_sources(d012_native PRIVATE "${D012_PROFILE_HOST}/d012.rc")
     target_link_libraries(d012_native PRIVATE winmm gdi32 user32)
+    # No console window: a windowed program that still starts at main(). Output redirected to a file
+    # (`> log.txt`) keeps working; started from a terminal it prints nothing there, as expected.
+    set_target_properties(d012_native PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_options(d012_native PRIVATE "/ENTRY:mainCRTStartup")
 endif()
