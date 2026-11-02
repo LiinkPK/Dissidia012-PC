@@ -1,4 +1,13 @@
-<p align="center" ><img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
+<div align="center" >
+
+<img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
+
+[![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
+[![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
+
+</div>
+
+<hr>
 
 # PSPRecomp — Dissidia 012 PC Port
 
@@ -6,7 +15,8 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 
 > **Game files not included.** You need your own copy of the game (the ISO). Nothing copyrighted is in this repository.
 
-**Just want to play?** Download the zip from the Releases page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)): run `requirements.bat`, put your ISO in `game\`, start `d012_native.exe`. The rest of this page is for building from source.
+>[!IMPORTANT]
+>**Just want to play?** Download the zip from the Releases page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)): run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
 
 ---
 
