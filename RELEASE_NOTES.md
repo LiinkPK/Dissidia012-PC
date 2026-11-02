@@ -1,15 +1,24 @@
-<p align="center" ><img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
+<div align="center" >
 
-# Dissidia 012 Final Fantasy HD Remastered (PC) — Early Release
+<img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
 
-**Dissidia 012 [duodecim] Final Fantasy runs natively on Windows.** This is not an emulator: the PSP game's code is translated to C++ ahead of time and runs as a normal PC program with a Vulkan renderer, HD textures and 60 fps frame interpolation.
+[![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
+[![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
+
+</div>
+
+<hr>
+
+# Dissidia 012 Final Fantasy HD Remastered (PC) — Early BETA
+
+**Dissidia 012 [duodecim] Final Fantasy runs natively on your computer.** This is not an emulator: the PSP game's code is translated to C++ ahead of time and runs as a normal PC program with a Vulkan renderer, HD textures and 60 fps frame interpolation.
 
 ## State of the game
 
 The game is **fully ported and playable**: menus, battles, story mode, cutscenes, music and sound effects, saves. What is left is polish to make it a proper HD remaster, not getting the game to run.
 
 - Battles run with working shadows, effects and battle music
-- HD textures: banners, portraits, menus and more, from a PPSSPP-style texture pack (included)
+- HD textures: banners, portraits, menus and more from my HD texture pack (included)
 - 60 fps (and higher) option (Video menu, frame interpolation)
 - Keyboard and gamepad support
 - Import your existing PPSSPP saves from the in-game menu (System tab); your old saves are backed up first
@@ -17,37 +26,37 @@ The game is **fully ported and playable**: menus, battles, story mode, cutscenes
 **Known limits of this release**
 - Text is still the game's original, soft font; HD fonts are not done yet
 - The battle HUD breaks if it gets scaled-down (work in progress)
-- The North American disc is accepted but not tested yet, and PPSSPP saves from it (`ULUS10566…`) are not recognised by the save import yet; European saves (`ULES01505…`) are
 
 ## What is included
 
-- The game's executable (`d012_native.exe`) and the libraries it needs
+- The game's executable (`d012_native`) and the libraries it needs
 - [My HD texture pack](https://github.com/LiinkPK/Dissidia-012-HD-Textures)
-- `requirements.bat`, which installs what the game needs
+- `requirements` script, which installs what the game needs
 
 ## What is NOT included
 
-- **The game itself.** No ISO, no game files, no `EBOOT`. You need your own copy of **Dissidia 012 [duodecim] Final Fantasy** as an `.iso`: the European release (ULES01505), or the North American release v1.00 (ULUS10566), which carries the same game executable. Nothing copyrighted is in this release.
+- **The game itself.** No ISO, no game files, no `EBOOT`. You need your own copy of **Dissidia 012 [duodecim] Final Fantasy** as an `.iso`: the European release (ULES01505), or the North American release (ULUS10566), which carries the same game executable. Nothing copyrighted is in this release.
 
 ## Requirements
 
-- Windows 10 or 11, 64-bit
+- Windows 10 or 11, 64-bit **or** Debian-based Linux
 - A graphics card and driver with **Vulkan** support (GeForce 600 series / Radeon HD 7000 series / Intel HD 4000 or newer, with an up-to-date driver)
-- Microsoft Visual C++ runtime (installed by `requirements.bat`)
+- Microsoft Visual C++ runtime (installed by `requirements.bat`/`requirements.sh`)
 - About 1 GB of free space for the game and HD textures, plus room for your ISO (about 3.3 GB)
-- Your own ISO of the European (ULES01505) or North American v1.00 (ULUS10566) release. The Japanese release is not supported yet.
+- Your own ISO of the European (ULES01505) or North American (ULUS10566) release. The Japanese release is not supported yet.
 
 ## How to install
 
 1. Unzip anywhere.
-2. Double-click **`requirements.bat`** once. It asks for administrator rights and installs Vulkan and the Visual C++ runtime if they are missing.
-3. Put your ISO in **`game`** and run `requirements.bat` again, or start the game and drop the ISO onto its window.
-4. Start **`d012_native.exe`**.
-
-> [!NOTE]
-> In order for the HD Texture pack to work in the US version, rename the folder inside `data\textures\` from `ULES01505` to `ULUS10566`.
+2. Double-click **`requirements`** once. It asks for administrator/root rights and installs Vulkan and the Visual C++ runtime if they are missing.
+3. Put your ISO in **`game`** and run `requirements` again, or start the game and drop the ISO onto its window.
+4. Start **`d012_native.exe`**/**`d012_native`**.
 
 If no window appears, update your graphics driver.
+
+> [!NOTE]
+> Even if you're running the US version, there is no need to change the texture folder's name from `ULES01505` to `ULUS10566`.
+> Simply find the folder in the **Menu** -> **Import texture pack...** -> And then confirm changes/replacement.
 
 ## Special thanks to:
 
