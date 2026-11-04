@@ -60,6 +60,10 @@ The game is **fully ported and playable**: menus, battles, story mode, cutscenes
 
 If no window appears, update your graphics driver.
 
+> [!NOTE]
+> Even if you're running the US version, there is no need to change the texture folder's name from `ULES01505` to `ULUS10566`.
+> Simply find the folder in the **Menu** -> **Import texture pack...** -> And then confirm changes/replacement.
+
 ## Special thanks to:
 
 - [VCKing101](https://github.com/VCKing101/Dissidia012-pc) 
