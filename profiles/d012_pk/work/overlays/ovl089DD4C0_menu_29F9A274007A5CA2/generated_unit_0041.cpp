@@ -4,6 +4,8 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace psprecomp {
@@ -137,6 +139,43 @@ static const std::uint16_t kEntryIds_ovl089DD4C0_menu_29F9A274007A5CA2_unit_0041
     4033, 4034, 4035, 4036, 4037, 4038, 4039, 4040, 4041, 4042, 4043, 4044, 4045, 4046, 4047, 4048, 4049, 4050, 4051, 4052, 4053, 4054, 4055, 4056, 4057, 4058, 4059, 4060, 4061, 4062, 4063, 4064,
     4065, 4066, 4067, 4068, 4069, 4070, 4071, 4072, 4073, 4074, 4075, 4076, 4077, 4078, 4079, 4080, 4081, 4082, 4083, 4084, 4085, 4086, 4087, 4088, 4089, 4090, 4091, 4092, 4093, 4094, 4095, 4096,
 };
+// Quick Battle roster (d012 port): the select screen's layout table (menu 0x08A864D0, 33 rows of 6 s16, the
+// character id in the fifth) is rewritten into the order of the two-row roster: rows 0..31 are the 31 fighters
+// and Feral Chaos, row 32 (Random) stays. The rows are kept whole, found by character id in a copy of the
+// original table taken the first time.
+// The select screens share one grid code. The Quick Battle, CPU and Labyrinth rosters use it as 2 rows x 17 columns
+// (the slot of position p is p, or p + 1 from 16 on); the Party roster (screen word +4 == 11) keeps the game's own
+// 4 x 10 grid and slot gaps. Set each time a grid is built, read by the lookup, wrap and neighbour code.
+std::uint32_t g_d012_grid_cols = 17u;
+std::uint32_t g_d012_grid_rows = 2u;
+std::uint32_t g_d012_grid_party = 0u;
+
+static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std::uint32_t mode) {
+    // The Party roster is laid out like the CPU roster now (2 rows, the last cell "Remove from Party" after Random).
+    g_d012_grid_party = 0u;
+    g_d012_grid_cols = g_d012_grid_party ? 10u : 17u;
+    g_d012_grid_rows = g_d012_grid_party ? 4u : 2u;
+    constexpr std::uint32_t kTable = 0x08A864D0u;
+    static std::int16_t original[33][6];
+    static bool have = false;
+    if (!have) {
+        for (int r = 0; r < 33; ++r)
+            for (int c = 0; c < 6; ++c)
+                original[r][c] = static_cast<std::int16_t>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + c * 2)));
+        have = true;
+    }
+    static const std::int16_t order[32] = {
+        0x01, 0x03, 0x05, 0x07, 0x18, 0x09, 0x0B, 0x0D, 0x1A, 0x0F, 0x1B, 0x11, 0x13, 0x1C, 0x1E, 0x1F,
+        0x02, 0x04, 0x06, 0x08, 0x0A, 0x0C, 0x0E, 0x10, 0x12, 0x14, 0x16, 0x19, 0x20, 0x15, 0x1D, 0x17};
+    for (int r = 0; r < 32; ++r) {
+        for (int src = 0; src < 32; ++src) {
+            if (original[src][4] != order[r]) continue;
+            for (int c = 0; c < 6; ++c)
+                m.aot_store16(kTable + static_cast<std::uint32_t>(r * 12 + c * 2), static_cast<std::uint16_t>(original[src][c]));
+            break;
+        }
+    }
+}
 void ovl089DD4C0_menu_29F9A274007A5CA2_unit_0041_entry(CorpusRuntime &rt, AllegrexContext &ctx, std::uint16_t direct_entry_id, AotFastView &aot_mem) {
     std::uint32_t jump_target = 0u;
     std::uint32_t local_transfers = 0u;
@@ -6163,7 +6202,7 @@ L_08A81C58:
     ctx.gpr[4] = (aot_mem.aot_load32(ctx.gpr[16] + static_cast<std::uint32_t>(40)));
     goto L_08A81C5C;
 L_08A81C5C:
-    ctx.gpr[5] = (0u | 2u);
+    ctx.gpr[5] = (g_d012_grid_party ? 2u : 0u);
     goto L_08A81C60;
 L_08A81C60:
     aot_mem.aot_store32(ctx.gpr[4] + static_cast<std::uint32_t>(1540), 0u);
@@ -7685,13 +7724,13 @@ L_08A82308:
     ctx.gpr[6] = (aot_mem.aot_load32(ctx.gpr[5] + static_cast<std::uint32_t>(1544)));
     goto L_08A8230C;
 L_08A8230C:
-    ctx.gpr[7] = (ctx.gpr[4] << 3u);
+    ctx.gpr[7] = (ctx.gpr[4] << 4u);
     goto L_08A82310;
 L_08A82310:
     ctx.gpr[7] = (ctx.gpr[4] + ctx.gpr[7]);
     goto L_08A82314;
 L_08A82314:
-    ctx.gpr[4] = (ctx.gpr[4] + ctx.gpr[7]);
+    ctx.gpr[4] = (ctx.gpr[4] * g_d012_grid_cols);
     goto L_08A82318;
 L_08A82318:
     ctx.gpr[4] = (ctx.gpr[4] + ctx.gpr[6]);
@@ -8835,13 +8874,13 @@ L_08A827F8:
     ctx.gpr[6] = (aot_mem.aot_load32(ctx.gpr[4] + static_cast<std::uint32_t>(1544)));
     goto L_08A827FC;
 L_08A827FC:
-    ctx.gpr[7] = (ctx.gpr[5] << 3u);
+    ctx.gpr[7] = (ctx.gpr[5] << 4u);
     goto L_08A82800;
 L_08A82800:
     ctx.gpr[7] = (ctx.gpr[5] + ctx.gpr[7]);
     goto L_08A82804;
 L_08A82804:
-    ctx.gpr[5] = (ctx.gpr[5] + ctx.gpr[7]);
+    ctx.gpr[5] = (ctx.gpr[5] * g_d012_grid_cols);
     goto L_08A82808;
 L_08A82808:
     ctx.gpr[5] = (ctx.gpr[5] + ctx.gpr[6]);
@@ -12031,13 +12070,13 @@ L_08A83528:
     ctx.gpr[6] = (aot_mem.aot_load32(ctx.gpr[4] + static_cast<std::uint32_t>(1544)));
     goto L_08A8352C;
 L_08A8352C:
-    ctx.gpr[7] = (ctx.gpr[5] << 3u);
+    ctx.gpr[7] = (ctx.gpr[5] << 4u);
     goto L_08A83530;
 L_08A83530:
     ctx.gpr[7] = (ctx.gpr[5] + ctx.gpr[7]);
     goto L_08A83534;
 L_08A83534:
-    ctx.gpr[5] = (ctx.gpr[5] + ctx.gpr[7]);
+    ctx.gpr[5] = (ctx.gpr[5] * g_d012_grid_cols);
     goto L_08A83538;
 L_08A83538:
     ctx.gpr[5] = (ctx.gpr[5] + ctx.gpr[6]);
@@ -15795,6 +15834,42 @@ L_08A84460:
     goto L_08A84464;
 L_08A84464:
     ctx.gpr[4] = (aot_mem.aot_load32(ctx.gpr[16] + static_cast<std::uint32_t>(40)));
+    // The character description on hover: this function builds the elements of the select screen for the state's flag
+    // word (W+1520, the previous one at W+1516); the description (slot 1, flag 0x10000) is only part of the confirmation
+    // state. Here the flag is set while the cursor is on a character (id 1..0x20 in the roster table at 0x08A864D0, so
+    // not on Random, Remove from Party or Free character) and cleared otherwise, which makes the game hide it. It runs
+    // every frame, so the old flag is only cleared (the text built again) when the selected slot changed.
+    {
+      const std::uint32_t d_w = ctx.gpr[4];
+      if (d_w != 0u) {
+        static std::uint32_t d_last_slot = 0xFFFFFFFFu;
+        std::uint32_t d_slot = aot_mem.aot_load32(d_w + 1532u);
+        int d_id = d_slot < 33u ? static_cast<std::int16_t>(aot_mem.aot_load16(0x08A864D0u + d_slot * 12u + 8u)) : -1;
+        // Party screen, cursor on the party slots (W+1508 == 0x6E): the party list is at W-0x2F4 (8 bytes per slot: the
+        // character id, 0 or -1 when empty) and the slot cursor at W-0x2C8 (the words at
+        // W-0x2F4+40 == 8 and +64 == -1 are constant there and tell this layout from other screens). The description is that
+        // slot's character, or none for an empty slot.
+        if (aot_mem.aot_load32(d_w + 1508u) == 0x6Eu && aot_mem.aot_load32(d_w - 0x2F4u + 40u) == 8u &&
+            aot_mem.aot_load32(d_w - 0x2F4u + 64u) == 0xFFFFFFFFu) {
+          const std::uint32_t d_cursor = aot_mem.aot_load32(d_w - 0x2C8u);
+          const int d_member = d_cursor < 5u ? static_cast<std::int32_t>(aot_mem.aot_load32(d_w - 0x2F4u + 8u * d_cursor)) : -1;
+          d_id = -1;
+          d_slot = 0xFFFFFFFFu;
+          for (std::uint32_t d_r = 0; d_r < 32u && d_member >= 1; ++d_r)
+            if (static_cast<std::int16_t>(aot_mem.aot_load16(0x08A864D0u + d_r * 12u + 8u)) == d_member) { d_slot = d_r; d_id = d_member; break; }
+          if (d_id >= 1) aot_mem.aot_store32(d_w + 1532u, d_slot);
+        }
+        const bool d_character = d_id >= 1 && d_id <= 0x20;
+        std::uint32_t d_new = aot_mem.aot_load32(d_w + 1520u);
+        d_new = d_character ? (d_new | 0x10000u) : (d_new & ~0x10000u);
+        aot_mem.aot_store32(d_w + 1520u, d_new);
+        if (d_slot != d_last_slot) {
+          d_last_slot = d_slot;
+          if (d_character) aot_mem.aot_store32(d_w + 1516u, aot_mem.aot_load32(d_w + 1516u) & ~0x10000u);
+        }
+      }
+    }
+
     goto L_08A84468;
 L_08A84468:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(20), ctx.gpr[17]);
@@ -18677,6 +18752,7 @@ L_08A84FD0:
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(48));
     goto L_08A84FD4;
 L_08A84FD4:
+    d012_roster_prepare_table(aot_mem, ctx.gpr[4], ctx.gpr[5]);
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-64));
     goto L_08A84FD8;
 L_08A84FD8:
@@ -19236,6 +19312,12 @@ L_08A85228:
     ctx.gpr[23] = (ctx.gpr[22] + ctx.gpr[22]);
     goto L_08A8522C;
 L_08A8522C:
+    // Two rows of 16 (the game split 6 / 10 / 10 / 6): the first row's cells are positions 0..15, the rest 16..31.
+    if (!g_d012_grid_party) {
+        if (ctx.gpr[22] >= 17u) { ctx.gpr[16] = 16u; ctx.gpr[22] = ctx.gpr[22] - 16u; }
+        else { ctx.gpr[16] = ctx.gpr[22]; ctx.gpr[22] = 0u; }
+        goto L_08A85278;
+    }
     ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[22]) < 27 ? 1u : 0u);
     goto L_08A85230;
 L_08A85230:
@@ -19387,7 +19469,8 @@ L_08A852B8:
     ctx.gpr[4] = (ctx.gpr[23] + ctx.gpr[4]);
     goto L_08A852BC;
 L_08A852BC:
-    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[4] + static_cast<std::uint32_t>(-2))))));
+    // The second row starts at position 16 (first block count), no centring offset; the Party roster keeps the table.
+    ctx.gpr[4] = g_d012_grid_party ? static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[4] + static_cast<std::uint32_t>(-2))))) : 0u;
     goto L_08A852C0;
 L_08A852C0:
     ctx.gpr[23] = (0u | 0u);
@@ -19577,6 +19660,9 @@ L_08A8537C:
     goto L_08A85380;
 L_08A85380:
     ctx.gpr[5] = (ctx.gpr[4] | 0u);
+    // The cursor starts on Warrior of Light (character id 1, the first cell now) instead of Lightning (0x1F), which
+    // is the game's default selection; a character the player chose before is kept.
+    if (ctx.gpr[5] == 0x1Fu) ctx.gpr[5] = 1u;
     goto L_08A85384;
 L_08A85384:
     ctx.gpr[31] = (0x08A8538Cu);

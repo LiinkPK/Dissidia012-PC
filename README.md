@@ -1,4 +1,13 @@
-<p align="center" ><img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
+<div align="center" >
+
+<img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
+
+[![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
+[![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
+
+</div>
+
+<hr>
 
 # PSPRecomp — Dissidia 012 PC Port
 
@@ -6,7 +15,8 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 
 > **Game files not included.** You need your own copy of the game (the ISO). Nothing copyrighted is in this repository.
 
-**Just want to play?** Download the zip from the Releases page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)): run `requirements.bat`, put your ISO in `game\`, start `d012_native.exe`. The rest of this page is for building from source.
+>[!IMPORTANT]
+>**Just want to play?** Download the zip from the Releases page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)): run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
 
 ---
 
@@ -73,14 +83,15 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 
 ## Status
 
-**The game is fully ported and playable**: menus, battles with shadows and effects, story mode, cutscenes, music, saves and the HD texture pack all work in the native build. What is left is not porting but tweaking it into a proper HD remaster:
-- **HUD downscaling and placement:** in progress and experimental. Scaling in the renderer works for the character HUD but also catches the pause menu and text, so the work moved into the game's own layout data (`profiles/d012_vk/d012_hud_layout.cpp`).
+**Version v1.0.1.** **The game is fully ported and playable**: menus, battles with shadows and effects, story mode, cutscenes, music, saves and the HD texture pack all work in the native build. What is left is not porting but tweaking it into a proper HD remaster:
+- **HUD downscaling and placement:** done in the game's own layout data (`profiles/d012_vk/d012_hud_layout.cpp`; Video menu: HUD size, lift, side space). The shrink still reaches some story mode screens (dialogue boxes, the "Skip cutscene?" prompt, cutscene images); that is being fixed.
+- **HD text:** done. Each line of text is drawn again from the TrueType font at 3 times its size, so menus, descriptions and dialogue are sharp; Text > Size sets the letter size. Subtitles are crisp, raised and smaller (Subtitle size and Subtitle height).
+- **Select screens:** the roster is two rows of 16 with the Party roster and descriptions working. Next: a 3D model of the hovered character (a placeholder exists; reading the models from the disc is in progress).
 - **HD textures that load instantly:** a fix is written (decode at upload, short wait on the first draw), not yet confirmed.
-- **HD fonts:** not done. Raising the game's glyph cell crashed it; the plan is a host-side high-resolution glyph atlas.
 - **Region support:** the North American disc is accepted but untested, and its PPSSPP saves are not recognised by the save import yet. The Japanese disc is not supported.
 - Better-looking menus and performance.
 
-See `updates.md` for the session-by-session log (Session 20 is the latest).
+See `updates.md` for the session-by-session log (Session 21 is the latest).
 
 ---
 

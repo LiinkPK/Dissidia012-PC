@@ -201,9 +201,13 @@ struct Machine {
     std::vector<std::string> *calls_log = nullptr;
 };
 
+// The override the game is running, for the fatal message.
+const char *g_running_override = "";
+
 void guest_fault(Guest *g, const char *what, gaddr address) {
     const Machine *m = static_cast<const Machine *>(g->impl);
-    fatal(std::string(what) + " at " + hex(address) + (m->live ? " (game)" : " (reference)"));
+    fatal(std::string(what) + " at " + hex(address) + (m->live ? " (game)" : " (reference)") + " in " + g_running_override +
+          " called from " + hex(m->caller.gpr[31]));
 }
 
 // Runs from c.pc until it returns to kReturnMagic.
@@ -525,6 +529,7 @@ void live_entry(CorpusRuntime &corpus, AllegrexContext &ctx) {
     }
     const CallState in = state_of(ctx);
     Machine m{rt, ctx, true};
+    g_running_override = reg.o.name;
     try {
         run_decomp(m, ctx, in, reg.o.run, reg.o.returns);
     } catch (const std::exception &e) {

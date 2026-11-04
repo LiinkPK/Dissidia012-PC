@@ -783,7 +783,9 @@ std::int32_t list_every_row(Guest *g, gaddr entries, gaddr names, std::int32_t m
 } // namespace
 
 bool enabled() {
-    static const bool on = !flag("D012_NO_BGM_PLAYLIST");
+    // Off unless D012_BGM_PLAYLIST=1: this release does not use the playlist, and its overrides of the selector's
+    // list and frame (d012_decomp_bgm.cpp) made the Battlegen list on the opponent screen drift down every match.
+    static const bool on = flag("D012_BGM_PLAYLIST") && !flag("D012_NO_BGM_PLAYLIST");
     return on;
 }
 

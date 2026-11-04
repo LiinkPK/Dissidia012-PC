@@ -1,4 +1,4 @@
-﻿# PSPRecomp — Dissidia 012 (ULES01505.BIN) — Current State
+﻿# PSPRecomp — Dissidia 012 — Current State
 
 **Last updated:** 01/11/2026 (Session 20)
 
@@ -567,3 +567,32 @@ Other
 - `docs/index.html`: roadmap item p3-t6 reworded to "Verify rendering in play" (done); p2-t5's note corrected. The PPSSPP frame-dump comparison is now a later polish step (the port has no `.ppdmp` replayer; compare screenshots instead).
 - A clean copy of the build (exe, DLLs, overlays, `game/`, `data/`) was made outside the repo for testing on a second PC.
 - `project_overview_goals.md` states the next goals: no ISO dependency (extract and stream assets natively) and a one-click Windows installer.
+
+---
+
+## Session 21 (02/11/2026 to 04/11/2026), release v1.0.1
+
+**Result: the HUD, the select screens, the text and the subtitles are now remastered; the next step is a 3D model on the select screen.**
+
+Confirmed by the user
+- **HUD scaling in the game's own layout data** (Video menu: HUD size, lift, side space) works; the pause menu and text are untouched by it.
+- **Quick Battle / CPU / Labyrinth roster:** two rows of 16, cursor frame and hand follow the cells; the Party roster at 85%; the skill-name box scaling; the first DOWN press fix; the character description on hover; message boxes.
+- **HD text.** Every line of text the game draws is now rasterised again from the TrueType font at 3 times its size (`host/fonts/game_font.cpp`, `render_line`; `host/gpu/vulkan_renderer.cpp`, `text_line_descriptor`). Menus, descriptions and dialogue look sharp. The glyph size is 90% of the game's cell by default.
+- **Customization no longer crashes.** `hud_menu_draw` (`profiles/d012_vk/d012_hud_layout.cpp`) followed a layout list of another shape on that screen and read a bad pointer (0x7210006B); every pointer it follows is now range-checked (`in_guest`). The decomp harness now names the override and the caller in a fatal message (`d012_decomp_harness.cpp`).
+- **Subtitles** (cutscenes and battle) are raised and smaller, crisp, and the outline stays attached.
+
+How the HD text works
+- The game writes each glyph into a small 4-bit texture per line (512x32, `sceFontGetCharGlyphImage`, with the pen position in 1/64 pixel). The host records which glyph went where (`note_line_glyph` in `hle_font.cpp`'s `blit_glyph`) and, when the renderer draws that texture, draws a 3x image built from the font and the texture's own palette instead. Nothing in the game's own code changes.
+- Cost: about 0.6 MB of GPU memory per 512x32 line at 3x; lines unused for 240 frames are freed. `D012_TEXT_HD_SCALE=N` sets the factor (0 = the game's own lines).
+- The subtitle is one such line drawn five times a frame (four copies at plus or minus 1 pixel for the outline, one in the middle), after the bloom pass. It is found by its place (main heap, centred, near the bottom) and moved with the new Text settings: Size (the letters), Subtitle size and Subtitle height (menu rows, `text.size`, `text.subtitle_size`, `text.subtitle_lift`).
+- `D012_TRACE_TEXT_DRAWS=1` plus creating `<temp>/d012_text_draws.trigger` writes the next three frames' text draws to `<temp>/d012_text_draws.log`.
+
+What did not work
+- **Bigger glyph cells again** (`kScale = 2` with the larger text heaps of `d012_text_heap.cpp`): the whole screen glitched. Reverted; the re-rasterising above replaced it.
+- **Museum model viewer on the roster:** ran the museum's controls on the select screen, crashed for every character but Cloud, and its always-on wrappers broke battle loading. All of it was removed.
+- **A decoded 3D model from `PACKAGE.BIN`:** model N is the Nth GMO header (930 of them; model 360 is Warrior of Light). The chunk tree is understood (vertex arrays, triangle lists, motions) but raw vertices are bone-relative and the skeleton is not decoded yet. `d012_model_store.cpp` reads a model; nothing calls it. The select screen currently shows a placeholder OBJ (`D012_ROSTER_OBJ`).
+
+Known problems
+- The Battle HUD shrink (it scales all 2D drawn after the last 3D draw) also hits story mode's dialogue boxes, the "Skip cutscene?" prompt, the portrait banners and images in cutscenes.
+- The subtitle rule can also catch other centred text near the bottom of the screen.
+- Still untested: the Text > Size and Subtitle rows in the menu on a clean install; HD textures that load instantly (Session 20).

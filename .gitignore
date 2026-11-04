@@ -68,5 +68,6 @@ run*.*
 /Roadmap.html
 discord.md
 *.psd
+make_release.ps1
 # release zips built by scripts/make_release.ps1
 dist/

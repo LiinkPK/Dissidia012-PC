@@ -99,8 +99,6 @@ void register_extra_hle(portablekit::HleRegistrar &hle) {
     dlc::install(hle);
     // Mods: music added to the game (d012_mods.cpp, docs/port/mod-folder.md).
     mods::install(hle);
-    // The loading screen's music choice by series (d012_bgm_playlist.cpp).
-    playlist::install(hle);
     // The right-stick battle camera and R3 (d012_camera.cpp).
     camera::install(hle);
     // Local versus: player 2 on a second controller (d012_versus.cpp), after

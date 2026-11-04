@@ -17,13 +17,33 @@
 #include "d012_hle.hpp"
 #include "d012_icon.hpp"
 
+#include <span>
+#include <string_view>
+
 namespace portablekit {
 namespace {
+
+// The version of this release, as its GitHub tag. Change it here for every release: the in-game update check
+// compares it with the newest release on https://github.com/LiinkPK/Dissidia012-PC/releases.
+constexpr const char *kReleaseVersion = "v1.0.1";
 
 // The game names its saves "ms0:/PSP/SAVEDATA/%s%s": the disc id followed by the slot.
 constexpr SaveFolder kSaveFolders[] = {
     {"ULES01505GameData00", "Save slot 1", true},
     {"ULES01505GameData01", "Save slot 2", true},
+};
+constexpr SaveFolder kUsaSaveFolders[] = {
+    {"ULUS10566GameData00", "Save slot 1", true},
+    {"ULUS10566GameData01", "Save slot 2", true},
+};
+
+// What differs between the two discs: the identity the game's saves, textures and cheats go by. The disc image
+// the player set up says which one runs (set_active_disc_id).
+struct Release {
+    const char *disc_id;
+    const char *disc_id_display;
+    const char *name;
+    std::span<const SaveFolder> saves;
 };
 
 // One overlay window. The game loads OVL_MENU_APP.ELF, OVL_BATTLE_APP.ELF or OVL_EXTRA_APP.ELF there; each is
@@ -32,8 +52,7 @@ constexpr SaveFolder kSaveFolders[] = {
 constexpr std::uint32_t kOverlaySlots[] = {0x089DD4C0u, 0x08B62F70u};
 
 // The North American disc: another EBOOT.BIN around the same executable, accepted so a player with either disc
-// can use the port. Its saves are in ULUS10566 folders, which the port does not read; copy them to the
-// ULES01505 names to use them.
+// can use the port. Its saves are in ULUS10566 folders, which the running disc's profile reads (game()).
 constexpr ProfileVariant kVariants[] = {
     {"usa", "North American release (ULUS10566)",
      // No executable hash of its own: it runs the profile's executable and corpus (the installer falls back to
@@ -56,22 +75,22 @@ constexpr gpu::interpolation::CutThresholds kInterpolationThresholds{
 // The game opens a notice at start-up that it autosaves; it is not shown.
 bool skip_autosave_notice(std::string_view text) { return text.find("autosave function") != std::string_view::npos; }
 
-} // namespace
-
-const GameProfile &game() {
-    static const GameProfile profile{
+GameProfile build(const Release &r) {
+    return GameProfile{
         .app_name = "d012_native",
         .project_name = "Dissidia 012 Final Fantasy HD Remastered",
         .env_prefix = "D012",
         .data_organization = "Dissidia012",
         .data_application = "D012",
 
-        .disc_id = "ULES01505",
-        .disc_id_display = "ULES-01505",
+        .disc_id = r.disc_id,
+        .disc_id_display = r.disc_id_display,
         .game_title = "Dissidia 012 Duodecim Final Fantasy",
         .executable_path_on_disc = "PSP_GAME/SYSDIR/EBOOT.BIN",
         .param_sfo_path_on_disc = "PSP_GAME/PARAM.SFO",
-        .release_name = "the European release (ULES01505)",
+        .release_name = r.name,
+        .release_version = kReleaseVersion,
+        .hud_scaled_by_game = true,  // the game marks its HUD layouts in the display list (d012_vk/d012_hud_layout.cpp)
         // SHA-256 of PSP_GAME/SYSDIR/EBOOT.BIN on the disc, and of its decryption.
         .encrypted_executable_sha256 = "0c0c12c0f46e9cc37adb0a649a761975fab92a20c8d2e9252f514ef29d1ca289",
         .executable_sha256 = "0bc8e779aad2814a3d1bd77346f69ca5e16665845ed053cd0ad44a9cbfaefe6d",
@@ -83,14 +102,14 @@ const GameProfile &game() {
         .variants = kVariants,
 
         .load_base = 0x08804000u,
-        .guest_ram_bytes = 32u * 1024u * 1024u,
+        .guest_ram_bytes = 64u * 1024u * 1024u,  // the PSP slim's
         .boot_path = "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN",
         .overlay_slots = kOverlaySlots,
 
-        .save_game_name = "ULES01505",
-        .save_folders = kSaveFolders,
+        .save_game_name = r.disc_id,
+        .save_folders = r.saves,
 
-        .adhoc_product_code = "ULES01505",
+        .adhoc_product_code = r.disc_id,
 
         // L2 and R2, which a PSP lacks, switch the loading screen's D-pad between its menu and the battle
         // music (d012_bgm_playlist.cpp); R3 recentres the battle camera (d012_camera.cpp).
@@ -112,7 +131,16 @@ const GameProfile &game() {
         .system_language = 1u,
         .confirm_button = 1u,
     };
-    return profile;
+}
+
+} // namespace
+
+const GameProfile &game() {
+    static const GameProfile eur =
+        build({"ULES01505", "ULES-01505", "the European release (ULES01505)", kSaveFolders});
+    static const GameProfile usa =
+        build({"ULUS10566", "ULUS-10566", "the North American release (ULUS10566)", kUsaSaveFolders});
+    return active_disc_id() == usa.disc_id ? usa : eur;
 }
 
 } // namespace portablekit

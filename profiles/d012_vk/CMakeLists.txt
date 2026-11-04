@@ -73,3 +73,21 @@ if(WIN32)
     set_target_properties(d012_native PROPERTIES WIN32_EXECUTABLE TRUE)
     target_link_options(d012_native PRIVATE "/ENTRY:mainCRTStartup")
 endif()
+# The game looks for its overlay libraries in an "overlays" folder next to the executable, while the build writes
+# them to bin/overlays/<config>. Without this copy, a rebuilt overlay never reaches the folder the game reads.
+file(GLOB D012_OVERLAY_META CONFIGURE_DEPENDS "${D012_WORK_DIR}/overlays/*/meta.txt")
+set(D012_OVERLAY_TARGETS "")
+foreach(meta IN LISTS D012_OVERLAY_META)
+    get_filename_component(overlay_dir "${meta}" DIRECTORY)
+    get_filename_component(overlay_name "${overlay_dir}" NAME)
+    if(TARGET overlay_${overlay_name})
+        list(APPEND D012_OVERLAY_TARGETS overlay_${overlay_name})
+    endif()
+endforeach()
+if(D012_OVERLAY_TARGETS)
+    add_custom_target(d012_copy_overlays ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:d012_native>/overlays"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/bin/overlays/$<CONFIG>" "$<TARGET_FILE_DIR:d012_native>/overlays"
+        COMMENT "Copying the overlay libraries next to the executable")
+    add_dependencies(d012_copy_overlays ${D012_OVERLAY_TARGETS})
+endif()
