@@ -91,6 +91,9 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 - **Region support:** the North American disc is accepted but untested, and its PPSSPP saves are not recognised by the save import yet. The Japanese disc is not supported.
 - Better-looking menus and performance.
 
+<img width="1280" height="720" alt="roster2 0" src="https://github.com/user-attachments/assets/c6c092ce-2f13-4e00-aabb-958f9d6cda53" />
+<img width="1280" height="720" alt="hud1" src="https://github.com/user-attachments/assets/1ce7ac8e-db31-4b18-a5ed-2f6b7a051020" />
+
 See `updates.md` for the session-by-session log (Session 21 is the latest).
 
 ---
