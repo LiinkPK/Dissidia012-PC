@@ -23,7 +23,7 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 - Linux distros `(tested on Ubuntu, Mint, Kali and SteamOS)`
 
 >[!IMPORTANT]
->**Just want to play?** Download the zip from the [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases/latest) page (see [`RELEASE_NOTES.md`](https://github.com/LiinkPK/Dissidia012-PC/releases/latest)): run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
+>**Just want to play?** Download the zip from the [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases/latest) page, run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
 
 ## Repository layout
 
