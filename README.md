@@ -1,6 +1,6 @@
 <div align="center" >
-
-<img width="200" height="200" alt="favicon" text-align="center" src="https://github.com/user-attachments/assets/56672c57-c906-423a-b55f-8b4742a7fcd0" /></p>
+<img width="1366" height="200" alt="GitHub Banner" src="https://github.com/user-attachments/assets/6512d139-da17-4b6a-b6fd-c5078f5600c9" />
+</p>
 
 [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
 [![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
@@ -109,6 +109,7 @@ The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
 - **VCKing101**, author of [Dissidia 012 Duodecim Final Fantasy: native PC port and decompilation](https://github.com/VCKing101/Dissidia012-pc) (MIT licence, kept in `third_party/dissidia012-pc/LICENSE`). Its documentation named the cause of the battle shadows, and its renderer, audio and frame-pacing work for PortableKit is what the current build runs on. This project does not use its base, but it got past its Session 19 problems thanks to it. Its local versus and split screen are the port's own work and are not part of this build.
 - ZodiarkAmano
 - Rocher
+- Neo
 - Henrik Rydgård ([PPSSPP](https://github.com/hrydgard/PPSSPP))
 - [TeamGDB](https://github.com/TeamGDB)
 - [BasedYuki](https://github.com/BasedYuki/the-3rd-birthday-recomp)
