@@ -24,6 +24,7 @@
 #include "psprecomp/elf32.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <cstdint>
 #include <algorithm>
 #include <cctype>
 #include <iostream>

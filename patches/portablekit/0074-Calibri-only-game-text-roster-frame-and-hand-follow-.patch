@@ -1,0 +1,185 @@
+From dcb069ba1f1fb5f2782f9caa1e32e84d4cf4bf54 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Thu, 5 Nov 2026 20:04:20 +0100
+Subject: [PATCH 74/74] Calibri-only game text, roster frame and hand follow
+ the grid on default HUD settings, macOS per-architecture FFmpeg
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ cmake/FFmpeg.cmake           | 19 +++++++++++++++++
+ host/fonts/game_font.cpp     | 39 +++++++++++++++++++++++++---------
+ host/gpu/vulkan_renderer.cpp |  3 ++-
+ host/ui/font_menu.cpp        | 41 +++---------------------------------
+ 4 files changed, 53 insertions(+), 49 deletions(-)
+
+diff --git a/cmake/FFmpeg.cmake b/cmake/FFmpeg.cmake
+index 5fbfec5..9a18f3b 100644
+--- a/cmake/FFmpeg.cmake
++++ b/cmake/FFmpeg.cmake
+@@ -224,6 +224,25 @@ else()
+     set(_portablekit_ffmpeg_flags ${PORTABLEKIT_FFMPEG_CONFIGURE_FLAGS})
+     if(APPLE)
+         list(APPEND _portablekit_ffmpeg_flags --install-name-dir=@rpath)
++        # One architecture asked for with CMAKE_OSX_ARCHITECTURES (the macOS universal build makes one build per
++        # architecture and joins them with lipo): FFmpeg is cross-compiled when it is not the machine's own.
++        list(LENGTH CMAKE_OSX_ARCHITECTURES _portablekit_osx_arch_count)
++        if(_portablekit_osx_arch_count EQUAL 1)
++            set(_portablekit_osx_arch "${CMAKE_OSX_ARCHITECTURES}")
++            if(_portablekit_osx_arch STREQUAL "arm64")
++                set(_portablekit_ffmpeg_arch aarch64)
++            else()
++                set(_portablekit_ffmpeg_arch "${_portablekit_osx_arch}")
++            endif()
++            list(APPEND _portablekit_ffmpeg_flags
++                "--arch=${_portablekit_ffmpeg_arch}"
++                "--extra-cflags=-arch ${_portablekit_osx_arch}"
++                "--extra-ldflags=-arch ${_portablekit_osx_arch}")
++            if(NOT CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL _portablekit_osx_arch AND
++               NOT (CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "aarch64" AND _portablekit_osx_arch STREQUAL "arm64"))
++                list(APPEND _portablekit_ffmpeg_flags --enable-cross-compile --target-os=darwin "--cc=clang -arch ${_portablekit_osx_arch}")
++            endif()
++        endif()
+         if(CMAKE_OSX_DEPLOYMENT_TARGET)
+             list(APPEND _portablekit_ffmpeg_flags
+                 "--extra-cflags=-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
+index ade5020..2708396 100644
+--- a/host/fonts/game_font.cpp
++++ b/host/fonts/game_font.cpp
+@@ -353,17 +353,36 @@ void load(State &s) {
+             s.fallback = load_face(install::path_to_utf8(bundled), 0, error);
+         }
+     }
+-    const std::string &value = settings::current().font;
+-    if (!value.empty()) {
+-        std::string path;
+-        int face = 0;
+-        parse_value(value, path, face);
+-        s.chosen = load_face(path, face, error);
++    // The game's text is drawn from Calibri Regular only: the HD text path is tuned to its metrics, and other
++    // faces (or a heavier weight) break it. The settings' font and the font environment variable are ignored.
++    // Characters Calibri lacks (kana, kanji) come from the Japanese fallback above.
++    s.bold = 0;
++    {
++        std::vector<std::string> calibri = {"C:/Windows/Fonts/calibri.ttf"};
++        if (const char *windir = std::getenv("WINDIR")) calibri.push_back(std::string(windir) + "/Fonts/calibri.ttf");
++        calibri.push_back(user_font_folder() + "/calibri.ttf");
++        // Linux and macOS: an installed Calibri, or Carlito, the metric-compatible free font (same letter widths and
++        // heights, so the HD text lays out the same).
++        for (const char *candidate : {
++                 "/usr/share/fonts/truetype/msttcorefonts/calibri.ttf", "/usr/share/fonts/truetype/calibri.ttf",
++                 "/usr/share/fonts/TTF/calibri.ttf", "/usr/share/fonts/calibri/calibri.ttf",
++                 "/Library/Fonts/Calibri.ttf", "/Applications/Microsoft Word.app/Contents/Resources/DFonts/calibri.ttf",
++                 "/usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf", "/usr/share/fonts/crosextra-carlito/Carlito-Regular.ttf",
++                 "/usr/share/fonts/carlito/Carlito-Regular.ttf", "/usr/share/fonts/truetype/carlito/Carlito-Regular.ttf",
++                 "/usr/share/fonts/TTF/Carlito-Regular.ttf", "/run/host/fonts/truetype/crosextra/Carlito-Regular.ttf"})
++            calibri.push_back(candidate);
++        for (const std::filesystem::path &bundled : bundled_fonts()) {
++            std::string name = install::path_to_utf8(bundled.filename());
++            for (char &c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++            if (name == "calibri.ttf" || name == "carlito-regular.ttf") calibri.push_back(install::path_to_utf8(bundled));
++        }
++        for (const std::string &candidate : calibri) {
++            s.chosen = load_face(candidate, 0, error);
++            if (s.chosen) break;
++        }
+         if (!s.chosen) {
+-            s.problem = error;
+-            std::cout << "[font] " << error << "; using the default font\n";
+-        } else if (s.fallback && s.chosen->path == s.fallback->path && s.chosen->index == s.fallback->index) {
+-            s.chosen.reset();
++            s.problem = "Calibri Regular (calibri.ttf) was not found";
++            std::cout << "[font] Calibri Regular was not found; using the default font. Put calibri.ttf in the data/fonts folder" << '\n';
+         }
+     }
+     const Face *used = s.chosen ? s.chosen.get() : s.fallback.get();
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 6866330..cfc41e2 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -8476,7 +8476,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+         if (portablekit::game().hud_scaled_by_game && impl.in_hud_layout && !call.clear_mode &&
+             impl.shows(call.target.color_address) &&
+             (hud_scale < 1.0f || hud_margin > 0.0f || hud_side > 0.0f || impl.hud_anchor_left ||
+-             impl.hud_mode == kMarkerHudBeginPanelRight) && !impl.scratch.empty()) {
++             impl.hud_mode == kMarkerHudBeginPanelRight || impl.hud_mode == kMarkerHudBeginRosterFrame ||
++             impl.hud_mode == kMarkerHudBeginRosterHand) && !impl.scratch.empty()) {
+             // Quads and triangle lists move one quad at a time. Any other primitive (a strip or fan of more than
+             // four vertices: the corners and spikes of the bars) moves as one piece about its own bounding box,
+             // so no part of a marked layout is left at its old place.
+diff --git a/host/ui/font_menu.cpp b/host/ui/font_menu.cpp
+index 7a6e874..cd4830b 100644
+--- a/host/ui/font_menu.cpp
++++ b/host/ui/font_menu.cpp
+@@ -146,7 +146,7 @@ void build_preview(Preview &p, int size) {
+         ImTextureDataQueueUpload(p.texture, 0, 0, kPreviewWidth, kPreviewHeight);
+ }
+ 
+-void draw_preview() {
++[[maybe_unused]] void draw_preview() {
+     Preview &p = preview();
+     // As large as the game's text is in the window.
+     const float window_scale = ImGui::GetIO().DisplaySize.y / 272.0f;
+@@ -166,7 +166,7 @@ void draw_preview() {
+                    {shown / kPreviewWidth, static_cast<float>(size) / kPreviewHeight}, colors::kText);
+ }
+ 
+-std::string current_font_label() {
++[[maybe_unused]] std::string current_font_label() {
+     const settings::Settings &s = settings::current();
+     if (s.font.empty()) return "Default";
+     if (!fonts::problem().empty()) return "Default (chosen font unreadable)";
+@@ -181,33 +181,7 @@ void font_rows() {
+     settings::Settings &s = settings::current();
+     fonts::start_catalog();
+     section("Text");
+-    {
+-        RowOptions o = options_for("text.font", "The font the game's text is drawn with. Characters it lacks, such "
+-                                                "as Japanese in a Latin font, come from the default: " +
+-                                                    fonts::fallback_name() + ".");
+-        if (!fonts::problem().empty()) o.description += "\n" + fonts::problem();
+-        if (focus_font_row) {
+-            focus_next_row();
+-            focus_font_row = false;
+-        }
+-        if (value_row("Font", current_font_label(), o)) {
+-            list_open = true;
+-            focus_current = true;
+-        }
+-    }
+-    {
+-        static const char *const kWeights[] = {"Regular", "Bold", "Heavy"};
+-        const int current = static_cast<int>(std::min(s.font_weight, settings::kMaxFontWeight));
+-        if (const int delta = choice_row(
+-                "Weight", kWeights[current],
+-                options_for("text.weight", "Thickens the strokes of the game's text. The game squeezes Latin "
+-                                           "letters to half width, which thins them; Bold makes up for it."))) {
+-            const int count = static_cast<int>(settings::kMaxFontWeight) + 1;
+-            s.font_weight = static_cast<std::uint32_t>(((current + delta) % count + count) % count);
+-            settings::save();
+-            fonts::reload();
+-        }
+-    }
++    // Font and Weight are fixed (Calibri Regular, see game_font.cpp load()): only the size is a choice.
+     {
+         // Applied by the renderer on the next frame; no reload needed.
+         const std::string size_text = std::to_string(s.text_size) + "%";
+@@ -237,15 +211,6 @@ void font_rows() {
+             settings::save();
+         }
+     }
+-    draw_preview();
+-    if (button_row("Open the fonts folder",
+-                   {false, {}, "Fonts put in this folder (.ttf, .otf, .ttc) are listed first under Font: " +
+-                                   fonts::user_font_folder()})) {
+-        const std::string folder = fonts::user_font_folder();
+-        std::error_code ec;
+-        std::filesystem::create_directories(install::path_from_utf8(folder), ec);
+-        open_folder(install::path_from_utf8(folder));
+-    }
+     section("Battle HUD");
+     {
+         // Applied by the renderer on the next frame; no reload needed.
+-- 
+2.54.0.windows.1
+

@@ -1,0 +1,2752 @@
+From 034191daa4c05bd5087266e304babda39ce9c916 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Thu, 5 Nov 2026 15:31:36 +0100
+Subject: [PATCH 73/74] Dissidia 012 port: roster grid markers, HD text, HUD
+ scaling, updater, texture pack fixes
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ cmake/PortableKit.cmake                 |   1 +
+ host/fonts/game_font.cpp                | 112 ++++-
+ host/fonts/game_font.hpp                |  30 +-
+ host/gpu/replacement_textures.cpp       |  26 +-
+ host/gpu/replacement_textures.hpp       |   2 +
+ host/gpu/texture_decode.cpp             |   4 +
+ host/gpu/texture_decode.hpp             |   3 +
+ host/gpu/texture_pack.cpp               |  15 +
+ host/gpu/texture_pack.hpp               |   6 +
+ host/gpu/vulkan_renderer.cpp            | 594 +++++++++++++++++++++++-
+ host/gpu/vulkan_renderer.hpp            |  29 ++
+ host/hle/hle_font.cpp                   |  35 +-
+ host/hle/hle_io.cpp                     |   2 +
+ host/hle/hle_media.cpp                  |   4 +
+ host/install/executable_preparation.cpp |   4 +-
+ host/install/installer.cpp              |   6 +-
+ host/install/user_data.cpp              |  55 ++-
+ host/install/user_data.hpp              |   5 +
+ host/kernel/kernel.cpp                  |   7 +-
+ host/main.cpp                           |  21 +
+ host/profile.cpp                        |   8 +
+ host/profile.hpp                        |  22 +
+ host/settings/settings.cpp              |  19 +
+ host/settings/settings.hpp              |   9 +
+ host/ui/file_browser.cpp                |   6 +-
+ host/ui/font_menu.cpp                   |  78 +++-
+ host/ui/menu.cpp                        | 450 +++++++++++++++++-
+ host/ui/save_screen.cpp                 |  16 +
+ host/ui/ui.hpp                          |  10 +
+ host/ui/updater.cpp                     | 301 ++++++++++++
+ host/ui/updater.hpp                     |  36 ++
+ 31 files changed, 1835 insertions(+), 81 deletions(-)
+ create mode 100644 host/ui/updater.cpp
+ create mode 100644 host/ui/updater.hpp
+
+diff --git a/cmake/PortableKit.cmake b/cmake/PortableKit.cmake
+index 4e1ec2a..9780d8a 100644
+--- a/cmake/PortableKit.cmake
++++ b/cmake/PortableKit.cmake
+@@ -108,6 +108,7 @@ set(PORTABLEKIT_RENDERER_SOURCES
+     host/ui/input_script.cpp
+     host/ui/layer.cpp
+     host/ui/menu.cpp
++    host/ui/updater.cpp
+     host/ui/message_dialog.cpp
+     host/ui/save_list_dialog.cpp
+     host/ui/save_screen.cpp
+diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
+index 56a5f96..ade5020 100644
+--- a/host/fonts/game_font.cpp
++++ b/host/fonts/game_font.cpp
+@@ -3,6 +3,7 @@
+ #include "app_paths.hpp"
+ 
+ #include "install/user_data.hpp"
++#include "profile.hpp"
+ #include "settings/settings.hpp"
+ 
+ #define STB_TRUETYPE_IMPLEMENTATION
+@@ -93,22 +94,22 @@ constexpr char32_t kJapaneseSample[] = U"あいうアイウー、。【】装備
+ 
+ // The largest em size used: about the size the text had with a 16-pixel face
+ // in the game's former 16x18 cells, now in 20x22 ones.
+-constexpr float kMaxEm = 19.0f;
+-constexpr float kMinEm = 8.0f;
++constexpr float kMaxEm = 19.0f * kScale;
++constexpr float kMinEm = 8.0f * kScale;
+ 
+ std::filesystem::path expand(const std::string &folder) {
+     std::string text = folder;
+     if (!text.empty() && text[0] == '~') {
+-        const char *home = std::getenv("HOME");
+-        if (home == nullptr) return {};
+-        text = std::string(home) + text.substr(1);
++        const std::optional<std::string> home = install::environment_utf8("HOME");
++        if (!home) return {};
++        text = *home + text.substr(1);
+     }
+     for (std::size_t start = text.find('%'); start != std::string::npos; start = text.find('%')) {
+         const std::size_t end = text.find('%', start + 1);
+         if (end == std::string::npos) return {};
+-        const char *value = std::getenv(text.substr(start + 1, end - start - 1).c_str());
+-        if (value == nullptr) return {};
+-        text.replace(start, end - start + 1, value);
++        const std::optional<std::string> value = install::environment_utf8(text.substr(start + 1, end - start - 1).c_str());
++        if (!value) return {};
++        text.replace(start, end - start + 1, *value);
+     }
+     return install::path_from_utf8(text);
+ }
+@@ -264,8 +265,8 @@ int pick_baseline(const Face &face) {
+     measure(face, above, below);
+     if (above + below <= 0.0f) return kBaseline;
+     const float rows = static_cast<float>(kInkBottom - kInkTop);
+-    return std::clamp(kInkTop + static_cast<int>(std::lround(rows * above / (above + below))), kInkTop + 10,
+-                      kInkBottom - 3);
++    return std::clamp(kInkTop + static_cast<int>(std::lround(rows * above / (above + below))), kInkTop + 10 * kScale,
++                      kInkBottom - 3 * kScale);
+ }
+ 
+ // Picks the em size: as large as kMaxEm allows while the sample's tallest
+@@ -604,6 +605,97 @@ GlyphBitmap render(std::uint32_t code, float shift_x, float shift_y) {
+     return s.bitmaps.emplace(key, std::move(bitmap)).first->second;
+ }
+ 
++namespace {
++struct LineRecord {
++    std::vector<LineGlyph> glyphs;
++    std::uint64_t version{};
++};
++std::mutex &lines_mutex() {
++    static std::mutex value;
++    return value;
++}
++std::unordered_map<std::uint32_t, LineRecord> &lines() {
++    static std::unordered_map<std::uint32_t, LineRecord> value;
++    return value;
++}
++} // namespace
++
++void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64) {
++    std::lock_guard lock(lines_mutex());
++    LineRecord &line = lines()[buffer];
++    // A glyph that starts left of the last one begins a new line in the same buffer, unless it is the same glyph drawn
++    // again a little to the left (the game's second, bolder pass).
++    if (!line.glyphs.empty()) {
++        const LineGlyph &last = line.glyphs.back();
++        // The same glyph drawn again a little to the left and not lower: the second, bolder pass.
++        const bool same_again = last.code == code && last.x64 - x64 >= 0 && last.x64 - x64 < 64 && std::abs(last.y64 - y64) < 64;
++        if (same_again) return;
++        // Going back left starts the line again, unless it is a lower row of the same buffer: glyphs vary in height, so
++        // a row is a new one only when it starts well (a quarter of the buffer's glyph height) below the last glyph.
++        if (x64 <= last.x64 && y64 < last.y64 + 8 * 64) line.glyphs.clear();
++    }
++    line.glyphs.push_back({code, x64, y64});
++    ++line.version;
++}
++
++bool line_known(std::uint32_t buffer) {
++    std::lock_guard lock(lines_mutex());
++    return lines().find(buffer) != lines().end();
++}
++
++bool line_glyphs(std::uint32_t buffer, std::vector<LineGlyph> &out, std::uint64_t &version) {
++    std::lock_guard lock(lines_mutex());
++    const auto found = lines().find(buffer);
++    if (found == lines().end() || found->second.glyphs.empty()) return false;
++    out = found->second.glyphs;
++    version = found->second.version;
++    return true;
++}
++
++std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int width, int height, int scale) {
++    State &s = loaded_state();
++    const int out_w = width * scale, out_h = height * scale;
++    std::vector<std::uint8_t> out(static_cast<std::size_t>(out_w) * static_cast<std::size_t>(out_h), 0u);
++    std::vector<std::uint8_t> bits;
++    for (const LineGlyph &g : glyphs) {
++        const Layout &layout = layout_for(s, g.code);
++        if (layout.face == nullptr || layout.metrics.width <= 0) continue;
++        const float full_x = layout.scale_x * static_cast<float>(scale), full_y = layout.scale_y * static_cast<float>(scale);
++        // The Text > Size setting (<prefix>_TEXT_SIZE): percent of the size the game's cell gives the glyph. The glyph
++        // shrinks about its centre across and its baseline up, so lines keep the game's spacing and baseline.
++        const float size_factor = static_cast<float>(std::clamp<std::uint32_t>(settings::current().text_size, 50u, 100u)) / 100.0f;
++        const float sx = full_x * size_factor, sy = full_y * size_factor;
++        int fx0 = 0, fy0 = 0, fx1 = 0, fy1 = 0;
++        stbtt_GetGlyphBitmapBox(&layout.face->info, layout.glyph, full_x, full_y, &fx0, &fy0, &fx1, &fy1);
++        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
++        stbtt_GetGlyphBitmapBox(&layout.face->info, layout.glyph, sx, sy, &x0, &y0, &x1, &y1);
++        GlyphBitmap bitmap;
++        bitmap.width = std::max(x1 - x0, 0);
++        bitmap.height = std::max(y1 - y0, 0);
++        if (bitmap.width == 0 || bitmap.height == 0) continue;
++        bitmap.pixels.assign(static_cast<std::size_t>(bitmap.width) * static_cast<std::size_t>(bitmap.height), 0u);
++        stbtt_MakeGlyphBitmap(&layout.face->info, bitmap.pixels.data(), bitmap.width, bitmap.height, bitmap.width, sx, sy,
++                              layout.glyph);
++        if (layout.bold > 0) embolden(bitmap, layout.bold * scale);
++        // The game placed the low-resolution bitmap, whose box starts at natural_x0/natural_y0, at (x64, y64)/64.
++        // Centred where the full-size glyph's box was; the baseline is where the game's bitmap puts it.
++        const int left = (g.x64 * scale) / 64 + fx0 - layout.natural_x0 * scale + ((fx1 - fx0) - (x1 - x0)) / 2;
++        const int baseline = (g.y64 * scale) / 64 - layout.natural_y0 * scale;
++        const int top = baseline + y0;
++        for (int row = 0; row < bitmap.height; ++row) {
++            const int y = top + row;
++            if (y < 0 || y >= out_h) continue;
++            for (int column = 0; column < bitmap.width; ++column) {
++                const int x = left + column;
++                if (x < 0 || x >= out_w) continue;
++                std::uint8_t &dst = out[static_cast<std::size_t>(y) * out_w + x];
++                dst = std::max(dst, bitmap.pixels[static_cast<std::size_t>(row) * bitmap.width + column]);
++            }
++        }
++    }
++    return out;
++}
++
+ static void (*reload_hook)() = nullptr;
+ 
+ void reload() {
+diff --git a/host/fonts/game_font.hpp b/host/fonts/game_font.hpp
+index 697dbe1..dcf980a 100644
+--- a/host/fonts/game_font.hpp
++++ b/host/fonts/game_font.hpp
+@@ -41,18 +41,21 @@
+ namespace portablekit::fonts {
+ 
+ // The game's glyph buffer and, with the metrics below, its atlas cell.
+-inline constexpr int kCell = 20;
++// HD text: the cell is the game's 20 pixels times this. The game sizes its
++// glyph buffers and atlas cells from the font info, so it follows.
++inline constexpr int kScale = 1;  // larger cells crash the game and glitch the screen; sharp text is drawn by the renderer instead (render_line)
++inline constexpr int kCell = 20 * kScale;
+ // Where ink may go inside the cell: a column is kept free on each side, for the
+ // second, bolder pass on the left and for the sprites that leave out the
+ // cell's last column on the right.
+-inline constexpr int kInkLeft = 1;
+-inline constexpr int kInkRight = 19;   // exclusive
++inline constexpr int kInkLeft = 1 * kScale;
++inline constexpr int kInkRight = 19 * kScale;   // exclusive
+ inline constexpr int kInkTop = 0;
+-inline constexpr int kInkBottom = 20;  // exclusive
++inline constexpr int kInkBottom = 20 * kScale;  // exclusive
+ // Row of the baseline inside the cell, as reported to the game. Each face's
+ // own baseline goes on the row that best splits the cell between its
+ // ascenders and descenders; glyph tops are reported relative to this one.
+-inline constexpr int kBaseline = 16;
++inline constexpr int kBaseline = 16 * kScale;
+ // The maximum ascender reported in the font info: the game adds 1.
+ inline constexpr int kAscender = kBaseline - 1;
+ 
+@@ -84,6 +87,23 @@ bool ready();
+ // Renders `code` shifted right by shift_x and down by shift_y, both in [0, 1).
+ [[nodiscard]] GlyphBitmap render(std::uint32_t code, float shift_x, float shift_y);
+ 
++// --- Text lines, redrawn sharp ------------------------------------------------
++// The game draws each line of text into a small texture of its own, glyph by glyph. The host notes which glyphs went where
++// and can rasterise the same line again, from the font, at `scale` times the texture's size.
++struct LineGlyph {
++    std::uint32_t code{};
++    int x64{};  // where the game put the glyph bitmap's top-left pixel in the line texture, in 1/64 texel
++    int y64{};
++};
++// Called for every glyph blitted into the buffer at guest address `buffer`.
++void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64);
++// The glyphs of the line last drawn into `buffer` and a number that changes when they do; false: none known.
++bool line_glyphs(std::uint32_t buffer, std::vector<LineGlyph> &out, std::uint64_t &version);
++// Whether glyphs have been written into the buffer at `buffer`.
++[[nodiscard]] bool line_known(std::uint32_t buffer);
++// The line as 8-bit coverage, width*scale by height*scale.
++[[nodiscard]] std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int width, int height, int scale);
++
+ // Rereads the font settings and clears every cached glyph, so the next glyph
+ // the game asks for comes from the new font, then runs the hook.
+ void reload();
+diff --git a/host/gpu/replacement_textures.cpp b/host/gpu/replacement_textures.cpp
+index d821c10..bc5f52c 100644
+--- a/host/gpu/replacement_textures.cpp
++++ b/host/gpu/replacement_textures.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include <algorithm>
+ #include <bit>
++#include <chrono>
+ #include <cstdlib>
+ #include <cstring>
+ #include <iostream>
+@@ -15,7 +16,11 @@ constexpr std::uint32_t kMaxResident = 4096u;
+ // Pixels copied to the GPU per frame, at most, past the first image: a scene
+ // change can bring in dozens of large images, and copying them all in one
+ // frame would stall it.
+-constexpr std::uint64_t kUploadBytesPerFrame = 32ull * 1024u * 1024u;
++constexpr std::uint64_t kUploadBytesPerFrame = 128ull * 1024u * 1024u;
++// How long a draw may wait for its replacement to decode, so the HD image
++// shows from the first frame rather than snapping in after the original.
++constexpr std::chrono::milliseconds kWaitPerImage{80};
++constexpr std::chrono::milliseconds kWaitPerFrame{200};
+ // A replacement drawn within this many frames is never dropped for the budget.
+ // When a frame begins, the renderer has waited only for the frame two back:
+ // the frame before may still be drawing, and so may the presents between the
+@@ -144,17 +149,22 @@ VkDescriptorSet ReplacementTextures::descriptor(Replacement &replacement, Textur
+         resident.last_used = frame;
+         return resident.descriptor;
+     }
+-    switch (replacement.state.load(std::memory_order_acquire)) {
+-    case Replacement::State::Unloaded:
+-        pack.request(replacement);
+-        return VK_NULL_HANDLE;
+-    case Replacement::State::Decoded: break;
+-    default: return VK_NULL_HANDLE;
+-    }
+     if (frame != frame_) {
+         frame_ = frame;
+         uploaded_this_frame_ = 0u;
++        waited_this_frame_ = std::chrono::milliseconds{0};
++    }
++    if (replacement.state.load(std::memory_order_acquire) == Replacement::State::Unloaded)
++        pack.request(replacement);
++    // Drawing the original until the HD image is ready shows as a snap. Wait
++    // for the decode instead, within a per-image and a per-frame limit.
++    if (replacement.state.load(std::memory_order_acquire) == Replacement::State::Queued &&
++        waited_this_frame_ < kWaitPerFrame) {
++        const auto start = std::chrono::steady_clock::now();
++        pack.wait_decoded(replacement, kWaitPerImage);
++        waited_this_frame_ += std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+     }
++    if (replacement.state.load(std::memory_order_acquire) != Replacement::State::Decoded) return VK_NULL_HANDLE;
+     if (uploaded_this_frame_ != 0u && uploaded_this_frame_ + replacement.pixels.size() > kUploadBytesPerFrame)
+         return VK_NULL_HANDLE;  // next frame; the original is drawn meanwhile
+     if (resident_.size() >= kMaxResident) return VK_NULL_HANDLE;
+diff --git a/host/gpu/replacement_textures.hpp b/host/gpu/replacement_textures.hpp
+index 71dcf2b..dc9a464 100644
+--- a/host/gpu/replacement_textures.hpp
++++ b/host/gpu/replacement_textures.hpp
+@@ -4,6 +4,7 @@
+ 
+ #include <vulkan/vulkan.h>
+ 
++#include <chrono>
+ #include <cstdint>
+ #include <memory>
+ #include <mutex>
+@@ -91,6 +92,7 @@ private:
+     std::uint64_t budget_bytes_{};
+     std::uint64_t frame_{};
+     std::uint64_t uploaded_this_frame_{};
++    std::chrono::milliseconds waited_this_frame_{};
+     bool warned_budget_{};
+ };
+ 
+diff --git a/host/gpu/texture_decode.cpp b/host/gpu/texture_decode.cpp
+index 6ad2486..c2b2660 100644
+--- a/host/gpu/texture_decode.cpp
++++ b/host/gpu/texture_decode.cpp
+@@ -345,6 +345,10 @@ void decode_texels(ReadClut read_entry, const TextureState &texture, std::uint32
+ 
+ } // namespace
+ 
++std::uint32_t clut_color(const GuestMemory &memory, const TextureState &texture, std::uint32_t index) {
++    return read_clut(memory, texture, index);
++}
++
+ bool decode_texture(const GuestMemory &memory, const TextureState &texture, std::vector<std::uint32_t> &out) {
+     const std::uint32_t width = texture.width;
+     const std::uint32_t height = texture.height;
+diff --git a/host/gpu/texture_decode.hpp b/host/gpu/texture_decode.hpp
+index 131a4db..81335ad 100644
+--- a/host/gpu/texture_decode.hpp
++++ b/host/gpu/texture_decode.hpp
+@@ -12,6 +12,9 @@ namespace portablekit::gpu {
+ // and the swizzled layout. Returns false when the texture cannot be read.
+ bool decode_texture(const GuestMemory &memory, const TextureState &texture, std::vector<std::uint32_t> &out);
+ 
++// The RGBA8888 colour of palette entry `index` of an indexed texture, as decode_texture() gives it.
++std::uint32_t clut_color(const GuestMemory &memory, const TextureState &texture, std::uint32_t index);
++
+ // What decoding a texture reads from guest memory, copied, so that it can be
+ // decoded on another thread while the game goes on changing memory.
+ struct TextureSnapshot {
+diff --git a/host/gpu/texture_pack.cpp b/host/gpu/texture_pack.cpp
+index 1fe5b3e..0b808c9 100644
+--- a/host/gpu/texture_pack.cpp
++++ b/host/gpu/texture_pack.cpp
+@@ -590,6 +590,16 @@ void TexturePack::request(Replacement &replacement) {
+     wake_.notify_one();
+ }
+ 
++bool TexturePack::wait_decoded(Replacement &replacement, std::chrono::milliseconds timeout) {
++    const auto finished = [&] {
++        const Replacement::State state = replacement.state.load(std::memory_order_acquire);
++        return state == Replacement::State::Decoded || state == Replacement::State::Failed;
++    };
++    std::unique_lock lock(mutex_);
++    done_.wait_for(lock, timeout, finished);
++    return replacement.state.load(std::memory_order_acquire) == Replacement::State::Decoded;
++}
++
+ void TexturePack::consumed(Replacement &replacement) {
+     std::size_t freed = replacement.pixels.size();
+     std::vector<std::uint8_t>().swap(replacement.pixels);
+@@ -631,6 +641,11 @@ void TexturePack::loader_main() {
+             queue_.pop_front();
+         }
+         decode(*replacement);
++        {
++            // Taking the lock orders the state store before a waiter's recheck.
++            std::lock_guard lock(mutex_);
++        }
++        done_.notify_all();
+     }
+ }
+ 
+diff --git a/host/gpu/texture_pack.hpp b/host/gpu/texture_pack.hpp
+index 2a93bb6..8f6a4f2 100644
+--- a/host/gpu/texture_pack.hpp
++++ b/host/gpu/texture_pack.hpp
+@@ -3,6 +3,7 @@
+ #include "ge_state.hpp"
+ 
+ #include <atomic>
++#include <chrono>
+ #include <condition_variable>
+ #include <cstdint>
+ #include <deque>
+@@ -149,6 +150,10 @@ public:
+     // Starts decoding an Unloaded replacement on a loader thread. Only the
+     // renderer's thread calls this and consumed().
+     void request(Replacement &replacement);
++    // Blocks up to `timeout` while a Queued replacement is decoded, so the
++    // first draw can use the HD image instead of showing the original first.
++    // Returns true when it is Decoded.
++    bool wait_decoded(Replacement &replacement, std::chrono::milliseconds timeout);
+     // The renderer has uploaded a Decoded replacement: frees its pixels and
+     // marks it Resident.
+     void consumed(Replacement &replacement);
+@@ -196,6 +201,7 @@ private:
+     std::mutex mutex_;
+     std::condition_variable wake_;
+     std::condition_variable room_;
++    std::condition_variable done_;  // a decode finished (Decoded or Failed)
+     std::deque<Replacement *> queue_;
+     std::vector<std::thread> loaders_;
+     bool stopping_{};
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index a17b6cb..6866330 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1,4 +1,5 @@
+ #include "../profile.hpp"
++#include "fonts/game_font.hpp"
+ #include "portablekit_build_label.hpp"
+ #include "ui/input_script.hpp"
+ #include "vulkan_renderer.hpp"
+@@ -56,13 +57,24 @@
+ #include <map>
+ #include <memory>
+ #include <string>
++#include <unordered_map>
+ #include <utility>
+ #include <set>
+ #include <sstream>
+ #include <thread>
+ #include <vector>
+ 
++
++// Published by the game each frame while the Quick Battle roster is on screen (d012_hud_layout.cpp): the
++// game's own top-left position of each grid cell, in position order.
++float g_d012_roster_cells[40][2];
++int g_d012_roster_count = 0;
++
+ namespace portablekit::gpu {
++std::atomic<float> g_d012_model_scale{1.0f};  // the replayed 3D model's size about the screen centre,
++std::atomic<float> g_d012_model_dx{0.0f};     // and its shift in game pixels (480 x 272); set by the profile
++std::atomic<float> g_d012_model_dy{0.0f};
++std::atomic<bool> g_d012_defer_3d{false};      // set by the profile while the select screen's 3D viewer runs (kMarkerReplay3D)
+ 
+ namespace {
+ // How many renderer calls the calling thread is inside (VulkanRenderer::Impl::
+@@ -96,6 +108,22 @@ constexpr std::uint32_t kSettleFrames = 12u;
+ // a fade, a backdrop or a copy of the picture, which spreads with the 3D view
+ // instead of keeping the interface's proportions.
+ constexpr float kScreenWideDraw = 470.0f;
++// ============================================================================
++// HUD SIZE: now set in the game's menu (Video > Battle HUD); this is only the
++// fallback and no longer read.
++//   1.0 = original size (off)   0.8 = 80% of the size   0.5 = half the size
++// Allowed range 0.1 to 0.99. D012_HUD_SCALE overrides it without a rebuild.
++// ============================================================================
++constexpr float kHudScale = 0.8f;
++// ============================================================================
++// HUD MARGIN: lifts the HUD off the bottom edge. In PSP pixels of the 480x272
++// picture: 1 PSP pixel = 3.8 pixels of a 1080p window, so 5.0 is about 20
++// pixels there. 0.0 = against the edge. D012_HUD_MARGIN overrides it.
++// ============================================================================
++constexpr float kHudMarginBottom = 5.0f;
++// What is scaled: the 2D quads drawn after the frame's last 3D draw, which is
++// where the game's menu manager draws the HUD (main 0x088CED50). It does not
++// depend on any texture, so every character, outfit and number follows.
+ // Room for one frame's vertices. With frame interpolation a frame cannot reuse
+ // its region part way through, so all of it must fit: measured at 16.1 MiB in
+ // the busiest areas found (Flooded Forest area 3, Tundra area 2), where 16 MiB
+@@ -936,7 +964,49 @@ struct VulkanRenderer::Impl {
+         // How far down a 512-tall texture has been drawn, which decides how
+         // much of it the pack's hash covers; see texture_pack.hpp.
+         std::uint16_t max_seen_v{};
++        // Hash of the texture's bytes, the same on every run (addresses are
++        // not); how kHudTextures names the interface's pieces.
++        std::uint32_t content_hash{};
++    };
++
++    std::uint64_t hud_frame{};
++    bool saw_3d{};  // a 3D draw has been made in the frame so far
++    // g_d012_defer_3d: the 3D draws into the shown picture are kept, with copies of the guest data they point at, and drawn at the
++    // next kMarkerReplay3D.
++    struct DeferredDraw {
++        DrawCall call;
++        std::vector<std::uint8_t> raw;
++        std::array<float, 96> bones{};
++        bool has_bones{};
+     };
++    std::vector<DeferredDraw> deferred;
++    const GuestMemory *deferred_memory{};
++    bool replaying{};
++    // A flat screen-sized quad was drawn after the 3D (the dim behind the pause menu and dialogs): what is drawn
++    // after it is a menu of the game's, not the battle HUD, and is left at its size.
++    bool menu_over_hud{};
++    // Between a kMarkerHudBegin and a kMarkerHudEnd of the display list.
++    bool in_hud_layout{};
++    bool hud_anchor_left{};
++    // The roster is placed from what the game draws: each cell is one marked span, tagged with its position (marker
++    // 0x1000 + position); the first quad of a span is the portrait, 1 game pixel inside the cell, which gives the
++    // cell's drawn top-left. Those are kept for the frame and the hand of the same frame.
++    int roster_p{-1};
++    bool roster_counted{};
++    unsigned roster_cells_cur{}, roster_cells_prev{};  // cells drawn this frame / last frame: a grid has 20 or more
++    bool roster_origin_valid{};
++    float roster_origin_x{}, roster_origin_y{};
++    float roster_drawn[40][2]{};
++    std::uint64_t roster_drawn_frame[40]{};
++    float roster_hand_dx{}, roster_hand_dy{};  // where the hand goes, from the last frame quad
++    std::uint64_t roster_frame_stamp = ~0ull;  // the frame number of the last frame quad mapped
++    bool roster_hand_flip{};                   // the frame is on the first column: the hand points from the right
++    float roster_tile_cx{};                    // the frame's tile centre on screen
++    std::uint32_t hud_mode{};  // 0 normal, 0x13 left keeping y, 0x14 right with the upper part at the top
++    // Inside any marked layout, and which one.
++    bool in_layout_span{};
++    std::uint32_t span_kind{};
++    std::uint32_t span_id{};
+ 
+     RendererConfig config;
+     SDL_Window *window{};
+@@ -2197,6 +2267,16 @@ struct VulkanRenderer::Impl {
+     std::uint64_t replaced_draws{};  // this second, for <prefix>_TRACE_TEXTURE_PACK
+     void apply_texture_pack();
+     [[nodiscard]] VkDescriptorSet texture_descriptor(const GuestMemory &memory, const DrawCall &call);
++    // Lines of the game's text redrawn from the font at several times their size (fonts::render_line), by the address of
++    // the line's texture. `stamp` says which glyphs and which original texture the image was made from.
++    struct TextLine {
++        Texture texture;
++        std::uint64_t stamp{};
++        std::uint64_t last_frame{};
++    };
++    std::unordered_map<std::uint32_t, TextLine> text_lines;
++    [[nodiscard]] VkDescriptorSet text_line_descriptor(const GuestMemory &memory, const DrawCall &call,
++                                                       const Texture &original);
+     std::uint64_t texture_clock{};
+     // texture_key results for the display list being walked, by the state that
+     // feeds the key; cleared by begin_display_list().
+@@ -5132,16 +5212,114 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+     texture.max_seen_v = max_seen_v;
+     // The pack's hash reads the whole texture, so it is taken here, once per
+     // upload, and never on the per-draw path above.
+-    if (pack) texture.replacement = pack->find(memory, state, max_seen_v);
++    {
++        static const TexturePackOptions kHashOptions = [] {
++            TexturePackOptions options;
++            options.ignore_address = true;
++            return options;
++        }();
++        TexturePackKey hash_key;
++        std::uint32_t covered_width = 0u, covered_height = 0u;
++        if (compute_texture_pack_key(memory, state, max_seen_v, pack ? pack->options() : kHashOptions, hash_key,
++                                     covered_width, covered_height))
++            texture.content_hash = hash_key.data_hash;
++    }
++    if (pack) {
++        texture.replacement = pack->find(memory, state, max_seen_v);
++        // Decoding starts now, ahead of the first draw that uses the image.
++        if (texture.replacement) pack->request(*texture.replacement);
++    }
+     Texture &cached = textures.emplace(key, std::move(texture)).first->second;
+     memo->texture = &cached;
+     memo->erased = textures_erased;
+     return cached;
+ }
+ 
++VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &memory, const DrawCall &call,
++                                                           const Texture &original) {
++    // <prefix>_TEXT_HD_SCALE=N: texels per original texel of a text line (default 3; 0 draws the game's own lines).
++    static const int scale = [] {
++        const char *text = portablekit::env("TEXT_HD_SCALE");
++        return text != nullptr ? std::clamp(std::atoi(text), 0, 6) : 3;
++    }();
++    const TextureState &state = call.texture;
++    if (scale == 0 || state.format != TextureFormat::Clut4 || state.width == 0u || state.height == 0u ||
++        state.width > 1024u || state.height > 128u)
++        return VK_NULL_HANDLE;
++    const std::uint32_t address = state.address & 0x0FFFFFFFu;
++
++    // Lines no draw has used for a while give their images back.
++    if (frames % 120u == 0u) {
++        for (auto it = text_lines.begin(); it != text_lines.end();) {
++            if (frames - it->second.last_frame > 240u) {
++                if (async_uploads()) {
++                    slots[slot].retired_textures.push_back(it->second.texture);
++                } else {
++                    queue_wait_idle();
++                    destroy_texture(it->second.texture);
++                }
++                it = text_lines.erase(it);
++            } else {
++                ++it;
++            }
++        }
++    }
++
++    std::vector<fonts::LineGlyph> glyphs;
++    std::uint64_t version = 0;
++    if (!fonts::line_glyphs(address, glyphs, version)) return VK_NULL_HANDLE;
++    std::uint32_t palette[16];
++    std::uint64_t palette_hash = 1469598103934665603ull;
++    for (std::uint32_t i = 0; i < 16u; ++i) {
++        palette[i] = clut_color(memory, state, i);
++        palette_hash = (palette_hash ^ palette[i]) * 1099511628211ull;
++    }
++    const std::uint64_t stamp = palette_hash ^ version * 0x9E3779B97F4A7C15ull ^ (static_cast<std::uint64_t>(original.content_hash) << 20u) ^
++                                (static_cast<std::uint64_t>(state.width) << 48u) ^
++                                (static_cast<std::uint64_t>(state.height) << 40u) ^ fonts::generation() ^
++                                (static_cast<std::uint64_t>(settings::current().text_size) << 32u);
++    TextLine &line = text_lines[address];
++    line.last_frame = frames;
++    if (line.texture.descriptor != VK_NULL_HANDLE && line.stamp == stamp) return line.texture.descriptor;
++
++    // The game writes a glyph's coverage as a 4-bit palette index (coverage / 16), so the palette is the colour ramp: each
++    // texel takes the colour between the two entries its coverage falls between.
++    const std::vector<std::uint8_t> coverage = fonts::render_line(glyphs, state.width, state.height, scale);
++    std::vector<std::uint32_t> image(coverage.size());
++    for (std::size_t i = 0; i < coverage.size(); ++i) {
++        const std::uint32_t position = coverage[i] * 15u * 256u / 255u;  // 0 .. 15 in 1/256
++        const std::uint32_t low = position >> 8u, fraction = position & 0xFFu;
++        const std::uint32_t a = palette[low], b = palette[std::min(low + 1u, 15u)];
++        std::uint32_t mixed = 0u;
++        for (std::uint32_t shift = 0; shift < 32u; shift += 8u) {
++            const std::uint32_t ca = (a >> shift) & 0xFFu, cb = (b >> shift) & 0xFFu;
++            mixed |= ((ca * (256u - fraction) + cb * fraction) >> 8u) << shift;
++        }
++        image[i] = mixed;
++    }
++
++    Texture fresh = create_texture(state.width * static_cast<std::uint32_t>(scale),
++                                   state.height * static_cast<std::uint32_t>(scale), image.data());
++    if (fresh.descriptor == VK_NULL_HANDLE) return VK_NULL_HANDLE;
++    if (line.texture.descriptor != VK_NULL_HANDLE) {
++        if (async_uploads()) {
++            slots[slot].retired_textures.push_back(line.texture);
++        } else {
++            queue_wait_idle();
++            destroy_texture(line.texture);
++        }
++    }
++    line.texture = fresh;
++    line.stamp = stamp;
++    return line.texture.descriptor;
++}
++
+ VkDescriptorSet VulkanRenderer::Impl::texture_descriptor(const GuestMemory &memory, const DrawCall &call) {
+     const perf::SplitScope split(perf::Split::Texture);
+     Texture &texture = texture_for(memory, call);
++    if (call.through && call.texture.format == TextureFormat::Clut4) {
++        if (const VkDescriptorSet sharp = text_line_descriptor(memory, call, texture)) return sharp;
++    }
+     if (texture.replacement && pack) {
+         // Until the image is decoded and on the GPU, the original is drawn.
+         if (const VkDescriptorSet replaced = replacements.descriptor(*texture.replacement, *pack, frames)) {
+@@ -7828,6 +8006,9 @@ void VulkanRenderer::begin_display_list() {
+     if (!impl_) return;
+     const Impl::Guard guard(*impl_);
+     ++impl_->display_lists;
++    // A layout's markers never reach across display lists: one whose end was lost must not leak into the next.
++    impl_->in_hud_layout = impl_->in_layout_span = impl_->hud_anchor_left = false;
++    impl_->hud_mode = 0;
+     impl_->list_texture_keys.clear();
+     impl_->last_texture = nullptr;
+ }
+@@ -7835,10 +8016,72 @@ void VulkanRenderer::begin_display_list() {
+ void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
+     Impl &impl = *impl_;
+     if (!impl.ready) return;
++    if (marker == kMarkerReplay3D) {
++        std::vector<Impl::DeferredDraw> draws;
++        const GuestMemory *memory = nullptr;
++        {
++            const Impl::Guard guard(impl);
++            draws.swap(impl.deferred);
++            memory = impl.deferred_memory;
++            impl.replaying = true;
++        }
++        for (Impl::DeferredDraw &draw : draws) {
++            // The 3D scene is submitted after the 2D layers of the same frame: these draws are the last frame's, and that frame's
++            // buffer is not the one drawn into now.
++            if (target_address != 0u) draw.call.target.color_address = target_address;
++            // The 2D layers drawn before this point may have left depth values that fail every test of the model: draw it
++            // without the depth test (a test: the parts then draw in submission order).
++            {
++                // The viewport maps the picture: screen = ndc * scale + offset - origin (origin 2048 - half the size). Scaling the
++                // scale and moving the offset about the screen centre (240, 136) moves and resizes the model as a whole.
++                const float s = g_d012_model_scale.load(), dx = g_d012_model_dx.load(), dy = g_d012_model_dy.load();
++                ViewportState &vp = draw.call.viewport;
++                const float ox = 2048.0f - 240.0f, oy = 2048.0f - 136.0f;
++                vp.x_offset = ox + 240.0f + dx + s * (vp.x_offset - ox - 240.0f);
++                vp.y_offset = oy + 136.0f + dy + s * (vp.y_offset - oy - 136.0f);
++                vp.x_scale *= s;
++                vp.y_scale *= s;
++            }
++            draw.call.depth.test_enabled = false;
++            draw.call.depth.write_enabled = false;
++            draw.call.raw_vertices = draw.raw.empty() ? nullptr : draw.raw.data();
++            draw.call.bone_matrices = draw.has_bones ? draw.bones.data() : nullptr;
++            if (memory != nullptr) submit(draw.call, *memory);
++        }
++        {
++            const Impl::Guard guard(impl);
++            impl.replaying = false;
++        }
++        return;
++    }
+     const Impl::Guard guard(impl);
+     if (!impl.recording) begin_frame();
+     if (marker == kMarkerSplitLeft) impl.take_split_left(target_address);
+     if (marker == kMarkerSplitCompose) impl.compose_split(target_address);
++    if (marker == kMarkerHudBegin) impl.in_hud_layout = impl.in_layout_span = true;
++    if (marker == kMarkerHudEnd) impl.hud_mode = 0;
++    if (marker == kMarkerHudEnd) impl.in_hud_layout = impl.in_layout_span = impl.hud_anchor_left = false;
++    if (marker == kMarkerHudBeginLeftMid || marker == kMarkerHudBeginRightSplit || marker == kMarkerHudBeginBigLow ||
++        marker == kMarkerHudBeginRosterFrame || marker == kMarkerHudBeginRosterHand ||
++        marker == kMarkerHudBeginSmallLow || marker == kMarkerHudBeginPanelRight) {
++        impl.in_hud_layout = impl.in_layout_span = true;
++        impl.hud_mode = marker;
++    }
++    if (marker == kMarkerHudBeginLeft) {
++        impl.in_hud_layout = impl.in_layout_span = impl.hud_anchor_left = true;
++        impl.roster_p = -1;  // a new cell: its rank among the cells drawn this frame is taken at its first quad
++        impl.roster_origin_valid = false;
++        impl.roster_counted = false;
++    }
++    if (marker >= 0x1000u && marker < 0x1100u) {
++        impl.roster_p = static_cast<int>(marker & 0xFFu);
++        impl.roster_origin_valid = false;
++        impl.roster_counted = false;
++    }
++    if (marker == kMarkerLayoutBegin) impl.in_layout_span = true;
++    if (marker == kMarkerLayoutEnd) impl.in_layout_span = false;
++    if (marker >= 0x0100u && marker < 0x0200u) impl.span_kind = marker & 0xFFu;
++    if (marker >= 0x2000u) impl.span_id = marker & 0x1FFFu;
+ }
+ 
+ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7847,6 +8090,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     const Impl::Guard guard(impl);
+     const perf::SplitScope split(perf::Split::Draw);
+     if (!impl.recording) begin_frame();
++    // The HUD is drawn in 2D once, after all of the frame's 3D drawing, so a
++    // through-mode draw after a 3D one is the HUD's (see kHudScale).
++    if (impl.hud_frame != impl.frames) {
++        impl.hud_frame = impl.frames;
++        impl.saw_3d = false;
++        impl.menu_over_hud = false;
++        impl.roster_cells_prev = impl.roster_cells_cur;
++        impl.roster_cells_cur = 0;
++        impl.in_hud_layout = impl.in_layout_span = impl.hud_anchor_left = false;
++    }
++    if (g_d012_defer_3d.load() && !impl.replaying && !call.through && !call.clear_mode && impl.shows(call.target.color_address)) {
++        Impl::DeferredDraw held;
++        held.call = call;
++        if (call.raw_vertices != nullptr) held.raw.assign(call.raw_vertices, call.raw_vertices + static_cast<std::size_t>(call.raw_count) * call.raw_stride);
++        if (call.bone_matrices != nullptr) { std::copy(call.bone_matrices, call.bone_matrices + 96, held.bones.begin()); held.has_bones = true; }
++        held.call.raw_vertices = nullptr;
++        held.call.bone_matrices = nullptr;
++        if (impl.deferred.size() > 30000u) impl.deferred.clear();  // nothing replays them (a screen without the replay layout)
++        impl.deferred.push_back(std::move(held));
++        impl.deferred_memory = &memory;
++        return;
++    }
++    if (!call.through && !call.clear_mode) impl.saw_3d = true;
+     // Presents between flips fall due while the game draws, too: a busy
+     // frame spends most of its time in here.
+     if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
+@@ -7952,10 +8218,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
+     // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
+     // texture state it samples, to find the tiles a 2D screen is built from.
+-    static const std::uint64_t trace_sprites_frame = [] {
++    // N is seconds after launch: the first frame drawn once N seconds have
++    // passed is the one traced.
++    static const double trace_sprites_seconds = [] {
+         const char *text = portablekit::env("TRACE_SPRITES");
+-        return text != nullptr ? std::strtoull(text, nullptr, 10) : ~0ull;
++        return text != nullptr ? std::atof(text) : -1.0;
+     }();
++    static const auto trace_sprites_start = std::chrono::steady_clock::now();
++    static std::uint64_t trace_sprites_latched = ~0ull;
++    if (trace_sprites_latched == ~0ull && trace_sprites_seconds >= 0.0 &&
++        std::chrono::duration<double>(std::chrono::steady_clock::now() - trace_sprites_start).count() >=
++            trace_sprites_seconds)
++        trace_sprites_latched = impl.frames;
++    const std::uint64_t trace_sprites_frame = trace_sprites_latched;
+ 
+     // Transformed triangles, strips and fans go straight into the vertex
+     // buffer: each decoded vertex once, converted as it is written, and a
+@@ -8125,6 +8400,319 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
+                                    static_cast<float>(call.texture.height));
+         }
++        // HD text (GameProfile::hd_text_base): a quad from one of the game's text-line textures, made kScale
++        // times larger than the game's, is drawn at 1/kScale of its size from its top-left corner.
++        {
++            const portablekit::GameProfile &game = portablekit::game();
++            const std::uint32_t texture_address = call.texture.address & 0x0FFFFFFFu;
++            // <prefix>_TEXT_NO_SHRINK=1: leave these quads as the game drew them (for the glyph-metric test,
++            // <prefix>_TEXT_LAYOUT_1X, in hle_font.cpp).
++            static const bool no_shrink = portablekit::env("TEXT_NO_SHRINK") != nullptr;
++            if (!no_shrink && game.hd_text_bytes != 0u && call.texture.enabled && quads &&
++                texture_address >= game.hd_text_base &&
++                texture_address - game.hd_text_base < game.hd_text_bytes) {
++                constexpr float kInverse = 1.0f / static_cast<float>(fonts::kScale);
++                // The game draws a long line as chunks, each placed one chunk's width after the one before
++                // (at the larger size), so every quad from one line texture in a frame shrinks about the
++                // corner the first one starts at: that shrinks the gaps between chunks too.
++                static std::uint64_t anchor_frame = ~0ull;
++                static std::unordered_map<std::uint32_t, std::array<float, 2>> anchors;
++                if (anchor_frame != impl.frames) {
++                    anchor_frame = impl.frames;
++                    anchors.clear();
++                }
++                for (std::size_t first = 0; first + 6u <= impl.scratch.size(); first += 6u) {
++                    float x0 = impl.scratch[first].x, y0 = impl.scratch[first].y;
++                    for (std::size_t i = first; i < first + 6u; ++i) {
++                        x0 = std::min(x0, impl.scratch[i].x);
++                        y0 = std::min(y0, impl.scratch[i].y);
++                    }
++                    auto found = anchors.find(texture_address);
++                    if (found == anchors.end() || x0 < found->second[0] - 0.5f ||
++                        std::fabs(y0 - found->second[1]) > 1.5f)
++                        found = anchors.insert_or_assign(texture_address, std::array<float, 2>{x0, y0}).first;
++                    const float ax = found->second[0], ay = found->second[1];
++                    for (std::size_t i = first; i < first + 6u; ++i) {
++                        impl.scratch[i].x = ax + (impl.scratch[i].x - ax) * kInverse;
++                        impl.scratch[i].y = ay + (impl.scratch[i].y - ay) * kInverse;
++                    }
++                }
++            }
++        }
++        // <prefix>_HUD_SCALE=0.8 shrinks the interface's quads about the
++        // screen corner they sit nearest to (test). Every quad moves as one
++        // piece, so a bar's frame, fill and mask keep their relative shape.
++        // Read every draw from the settings menu (Video > Battle HUD), so a
++        // change shows on the next frame. D012_HUD_SCALE / D012_HUD_MARGIN
++        // override the menu for a run.
++        static const char *const hud_scale_env = portablekit::env("HUD_SCALE");
++        static const char *const hud_margin_env = portablekit::env("HUD_MARGIN");
++        const settings::Settings &hud_settings = settings::current();
++        const float hud_scale_value = hud_scale_env != nullptr ? static_cast<float>(std::atof(hud_scale_env))
++                                                                : static_cast<float>(hud_settings.hud_scale) / 100.0f;
++        const float hud_scale = hud_scale_value > 0.1f && hud_scale_value < 1.0f ? hud_scale_value : 1.0f;
++        const float hud_margin = std::clamp(hud_margin_env != nullptr ? static_cast<float>(std::atof(hud_margin_env))
++                                                                       : static_cast<float>(hud_settings.hud_margin),
++                                            0.0f, 60.0f);
++        // The HUD is whatever 2D is drawn after the frame's 3D drawing.
++        const float hud_side = std::clamp(static_cast<float>(hud_settings.hud_side_margin), 0.0f, 40.0f);
++        const bool hud_texture = impl.saw_3d;
++        if (hud_texture && !call.texture.enabled && !call.clear_mode && call.blend.enabled && !impl.scratch.empty()) {
++            float x0 = impl.scratch[0].x, x1 = x0, y0 = impl.scratch[0].y, y1 = y0;
++            for (const GpuVertex &vertex : impl.scratch) {
++                x0 = std::min(x0, vertex.x);
++                x1 = std::max(x1, vertex.x);
++                y0 = std::min(y0, vertex.y);
++                y1 = std::max(y1, vertex.y);
++            }
++            if (x1 - x0 >= kScreenWideDraw && y1 - y0 >= 250.0f) impl.menu_over_hud = true;
++        }
++        // The game marks the display-list commands of its HUD layouts (see kMarkerHudBegin): every draw between
++        // the markers is moved with one rule, and nothing else is, so no part of the screen is taken for the HUD
++        // by where it is or how big it is. A corner piece scales about its own side, the bottom-centre counter
++        // about the middle, the same as the rule below.
++        // Only draws into the picture that is shown: the shadows, the lock-on and the cut-ins render into other
++        // targets first, and those must keep their own coordinates.
++        if (portablekit::game().hud_scaled_by_game && impl.in_hud_layout && !call.clear_mode &&
++            impl.shows(call.target.color_address) &&
++            (hud_scale < 1.0f || hud_margin > 0.0f || hud_side > 0.0f || impl.hud_anchor_left ||
++             impl.hud_mode == kMarkerHudBeginPanelRight) && !impl.scratch.empty()) {
++            // Quads and triangle lists move one quad at a time. Any other primitive (a strip or fan of more than
++            // four vertices: the corners and spikes of the bars) moves as one piece about its own bounding box,
++            // so no part of a marked layout is left at its old place.
++            const bool by_quad = quads || (call.primitive == PrimitiveType::Triangles && impl.scratch.size() % 6u == 0u);
++            const std::size_t group = by_quad ? 6u : impl.scratch.size();
++            for (std::size_t first = 0; first + group <= impl.scratch.size(); first += group) {
++                float x0 = impl.scratch[first].x, x1 = x0;
++                float y0 = impl.scratch[first].y, y1 = y0;
++                for (std::size_t i = first; i < first + group; ++i) {
++                    x0 = std::min(x0, impl.scratch[i].x);
++                    x1 = std::max(x1, impl.scratch[i].x);
++                    y0 = std::min(y0, impl.scratch[i].y);
++                    y1 = std::max(y1, impl.scratch[i].y);
++                }
++                // A quad that covers the whole screen is a fade or dim (battle start, summons), not a HUD piece:
++                // shrunk it would show as a square in the middle of the screen.
++                if (x0 <= 1.0f && x1 >= 479.0f && y0 <= 1.0f && y1 >= 271.0f) continue;
++                const float centre_x = (x0 + x1) * 0.5f;
++                if (impl.hud_mode == kMarkerHudBeginPanelRight) {
++                    // Party roster panel: x 347..480, y 28..274 in the box trace; its middle is y = 151.
++                    for (std::size_t i = first; i < first + group; ++i) {
++                        impl.scratch[i].x = 480.0f + (impl.scratch[i].x - 480.0f) * 0.85f;
++                        impl.scratch[i].y = 151.0f + (impl.scratch[i].y - 151.0f) * 0.85f;
++                    }
++                    continue;
++                }
++                if (impl.hud_mode == kMarkerHudBeginSmallLow) {
++                    const float cy = (y0 + y1) * 0.5f;
++                    if (y1 - y0 > 14.0f || x1 - x0 > 30.0f || cy < 250.0f) {
++                        // Not a digit. The skill-name message (layout kind 0xFE id 0x1FFE: a box x 176..304, y 8..40 and its
++                        // text, y 17..31, in the box trace) shrinks in place about the middle of the box; anything else in
++                        // these layouts stays as drawn.
++                        if (y1 <= 46.0f && y0 >= 0.0f && centre_x > 120.0f && centre_x < 360.0f) {
++                            for (std::size_t i = first; i < first + group; ++i) {
++                                impl.scratch[i].x = 240.0f + (impl.scratch[i].x - 240.0f) * hud_scale;
++                                impl.scratch[i].y = 24.0f + (impl.scratch[i].y - 24.0f) * hud_scale;
++                            }
++                        }
++                        continue;
++                    }
++                }
++                if (impl.hud_mode == kMarkerHudBeginBigLow && (x1 - x0 < 40.0f || y1 - y0 < 18.0f || (y0 + y1) * 0.5f < 200.0f))
++                    continue;
++                // The health bars end at about x = 207 and start at about 273: the centre band must not cut
++                // through them, or their pieces anchor to different places and come apart.
++                const float anchor_x = impl.hud_anchor_left ? 0.0f : centre_x < 212.0f ? 0.0f : centre_x > 268.0f ? 480.0f : 240.0f;
++                float bottom = 272.0f - hud_margin;
++                float anchor_y = 272.0f;
++                float anchor_x_mode = anchor_x;
++                if (impl.hud_mode == kMarkerHudBeginLeftMid) {
++                    anchor_x_mode = 0.0f;
++                    anchor_y = (y0 + y1) * 0.5f;
++                    bottom = anchor_y;
++                } else if (impl.hud_mode == kMarkerHudBeginRightSplit) {
++                    // This layout also draws the VS name and the subtitles at the start of a battle, in the
++                    // middle of the screen: only what sits at the right edge (RULES, AP Chance) is scaled.
++                    if (x0 < 245.0f) continue;
++                    anchor_x_mode = 480.0f;
++                    if ((y0 + y1) * 0.5f < 180.0f) {
++                        anchor_y = 110.0f;
++                        bottom = 110.0f;
++                    }
++                }
++                const float target_x = anchor_x_mode < 1.0f ? hud_side : anchor_x_mode > 479.0f ? 480.0f - hud_side : 240.0f;
++                if (impl.hud_mode == kMarkerHudBeginRosterFrame || impl.hud_mode == kMarkerHudBeginRosterHand) {
++                    // The cursor frame and the hand follow the cell they are on. Cells are 32 x 39 at the top-left
++                    // the game drew them (roster_drawn, this frame); the frame belongs to the cell nearest to its
++                    // centre, the hand (about 34 x 26) to the cell whose top-left, plus (-29, +10), is nearest.
++                    const bool is_frame = impl.hud_mode == kMarkerHudBeginRosterFrame;
++                    const bool hand_size = x1 - x0 > 28.0f && x1 - x0 < 42.0f && y1 - y0 > 20.0f && y1 - y0 < 32.0f;
++                    if (is_frame || hand_size) {
++                        int best = -1;
++                        float best_distance = is_frame ? 30.0f * 30.0f : 10.0f * 10.0f;
++                        for (int c = 0; c < 40; ++c) {
++                            if (impl.roster_drawn_frame[c] != impl.frames) continue;
++                            // A frame piece lies inside its tile (32 x 39, a few pixels of margin): the Party panel's
++                            // slot frame, which is much larger and near the roster's right end, is not one.
++                            if (is_frame && (x0 < impl.roster_drawn[c][0] - 4.0f || x1 > impl.roster_drawn[c][0] + 36.0f ||
++                                             y0 < impl.roster_drawn[c][1] - 4.0f || y1 > impl.roster_drawn[c][1] + 43.0f))
++                                continue;
++                            const float dx = is_frame ? impl.roster_drawn[c][0] + 16.0f - (x0 + x1) * 0.5f : impl.roster_drawn[c][0] - 29.0f - x0;
++                            const float dy = is_frame ? impl.roster_drawn[c][1] + 19.0f - (y0 + y1) * 0.5f : impl.roster_drawn[c][1] + 10.0f - y0;
++                            if (dx * dx + dy * dy < best_distance) {
++                                best_distance = dx * dx + dy * dy;
++                                best = c;
++                            }
++                        }
++                        if (best >= 0) {
++                            const float ox = impl.roster_drawn[best][0], oy = impl.roster_drawn[best][1];
++                            const int row = best < 16 ? 0 : 1;
++                            const float nx = 28.0f + 32.0f * static_cast<float>(best - 16 * row);
++                            const float ny = 113.0f + 39.0f * static_cast<float>(row);
++                            const float tile_x = 7.0f + (nx - 28.0f) * 0.65f, tile_y = 203.0f + (ny - 113.0f) * 0.65f;
++                            if (is_frame) {
++                                for (std::size_t i = first; i < first + group; ++i) {
++                                    impl.scratch[i].x = 7.0f + (impl.scratch[i].x - ox + nx - 28.0f) * 0.65f;
++                                    impl.scratch[i].y = 203.0f + (impl.scratch[i].y - oy + ny - 113.0f) * 0.65f;
++                                }
++                            } else {
++                                // The hand keeps its size. 1.5 game pixels up, and a little more on top (2 screen pixels,
++                                // 0.5) and bottom (3, 0.75). First column (Warrior of Light, Garland): it would leave the
++                                // screen on the left, so it is mirrored across the tile's centre and points from the right.
++                                const float up = 1.5f + (best < 16 ? 0.5f : 0.75f);
++                                const bool flip = best == 0 || best == 16;
++                                const float cx = tile_x + 16.0f * 0.65f;
++                                for (std::size_t i = first; i < first + group; ++i) {
++                                    float x = impl.scratch[i].x + (tile_x - ox);
++                                    if (flip) x = 2.0f * cx - x;
++                                    impl.scratch[i].x = x;
++                                    impl.scratch[i].y += (tile_y - oy) - up;
++                                }
++                            }
++                        } else if (x0 >= 345.0f) {
++                            // Not on a roster cell: the Party panel's slot frame and the hand pointing at its slots or OK
++                            // (x 345 and over in the game's coordinates) follow the panel, shrunk to 85% about (480, 151).
++                            // The frame shrinks with it; the hand keeps its size and only moves.
++                            const float hx = 480.0f + ((x0 + x1) * 0.5f - 480.0f) * 0.85f - (x0 + x1) * 0.5f;
++                            const float hy = 151.0f + ((y0 + y1) * 0.5f - 151.0f) * 0.85f - (y0 + y1) * 0.5f;
++                            for (std::size_t i = first; i < first + group; ++i) {
++                                if (is_frame) {
++                                    impl.scratch[i].x = 480.0f + (impl.scratch[i].x - 480.0f) * 0.85f;
++                                    impl.scratch[i].y = 151.0f + (impl.scratch[i].y - 151.0f) * 0.85f;
++                                } else {
++                                    impl.scratch[i].x += hx;
++                                    impl.scratch[i].y += hy;
++                                }
++                            }
++                        }
++                    }
++                    continue;
++                }
++                if (impl.hud_anchor_left) {
++                    // The Quick Battle roster (two rows of 16 at x = 28 + 32 n, y = 113 and 152 in the game's own
++                    // positions, see place_roster in d012_hud_layout.cpp): a fixed 0.65 of its size, the left edge
++                    // at x = 7 and the top row's top at y = 203, whatever the Battle HUD settings say (the mockup).
++                    // The position of a cell is its rank among the cells drawn this frame, in the order the game draws them
++                    // (unused cell layouts draw nothing and take no position).
++                    if (!impl.roster_counted) {
++                        impl.roster_counted = true;
++                        impl.roster_p = static_cast<int>(impl.roster_cells_cur++);
++                    }
++                    if (impl.roster_p >= 0 && impl.roster_p < 40) {
++                        // A cell: its first quad is the portrait, 1 pixel inside the tile; the tile's new place is the
++                        // grid position of its index, whatever place the game gave it.
++                        if (!impl.roster_origin_valid) {
++                            impl.roster_origin_valid = true;
++                            impl.roster_origin_x = x0 - 1.0f;
++                            impl.roster_origin_y = y0 - 1.0f;
++                            impl.roster_drawn[impl.roster_p][0] = impl.roster_origin_x;
++                            impl.roster_drawn[impl.roster_p][1] = impl.roster_origin_y;
++                            impl.roster_drawn_frame[impl.roster_p] = impl.frames;
++                        }
++                        const int row = impl.roster_p < 16 ? 0 : 1;
++                        const float nx = 28.0f + 32.0f * static_cast<float>(impl.roster_p - 16 * row);
++                        const float ny = 113.0f + 39.0f * static_cast<float>(row);
++                        for (std::size_t i = first; i < first + group; ++i) {
++                            impl.scratch[i].x = 7.0f + (nx - 28.0f + impl.scratch[i].x - impl.roster_origin_x) * 0.65f;
++                            impl.scratch[i].y = 203.0f + (ny - 113.0f + impl.scratch[i].y - impl.roster_origin_y) * 0.65f;
++                        }
++                    }
++                    continue;
++                }
++                for (std::size_t i = first; i < first + group; ++i) {
++                    impl.scratch[i].x = target_x + (impl.scratch[i].x - anchor_x_mode) * hud_scale;
++                    impl.scratch[i].y = bottom + (impl.scratch[i].y - anchor_y) * hud_scale;
++                }
++            }
++        }
++        if (hud_texture && !impl.menu_over_hud && !portablekit::game().hud_scaled_by_game && (hud_scale < 1.0f || hud_margin > 0.0f || hud_side > 0.0f) &&
++            !call.clear_mode &&
++            (quads || (call.primitive == PrimitiveType::Triangles && impl.scratch.size() % 6u == 0u))) {
++            // Triangle lists count too: a health bar's fill is cut to length by an invisible mask drawn that
++            // way, and a mask left at its old size shows the fill past the scaled frame.
++            for (std::size_t first = 0; first + 6u <= impl.scratch.size(); first += 6u) {
++                float x0 = impl.scratch[first].x, x1 = x0, y0 = impl.scratch[first].y, y1 = y0;
++                for (std::size_t i = first; i < first + 6u; ++i) {
++                    x0 = std::min(x0, impl.scratch[i].x);
++                    x1 = std::max(x1, impl.scratch[i].x);
++                    y0 = std::min(y0, impl.scratch[i].y);
++                    y1 = std::max(y1, impl.scratch[i].y);
++                }
++                // Fades and backdrops, and shadow or effect quads that reach
++                // far off screen, are not the HUD.
++                if (x1 - x0 >= kScreenWideDraw || x0 < -40.0f || x1 > 520.0f || y0 < -40.0f || y1 > 312.0f) continue;
++                // The character HUD sits low on the screen: the corners, and
++                // the counter at the bottom centre. The attack-name bars at
++                // the top, the lock-on cursor, speech text in the middle and
++                // the tall full-screen strips of the shadow and fade passes
++                // are left alone.
++                {
++                    const float centre_x = (x0 + x1) * 0.5f;
++                    const float centre_y = (y0 + y1) * 0.5f;
++                    const bool corner = centre_x < 200.0f || centre_x > 280.0f;
++                    if (centre_y < 170.0f || y1 - y0 >= 150.0f || !(corner || y0 >= 232.0f)) continue;
++                }
++                // Corner pieces scale about their own side, the stage BRV
++                // counter at the bottom centre about the middle of the
++                // screen, so its digits stay together.
++                const float centre_x = (x0 + x1) * 0.5f;
++                const float anchor_x = centre_x < 200.0f ? 0.0f : centre_x > 280.0f ? 480.0f : 240.0f;
++                // The bottom edge the HUD hangs from, lifted by the margin.
++                const float bottom = 272.0f - hud_margin;
++                // Player 1's side moves right, player 2's left; the centre stays.
++                const float target_x = anchor_x < 1.0f ? hud_side : anchor_x > 479.0f ? 480.0f - hud_side : 240.0f;
++                for (std::size_t i = first; i < first + 6u; ++i) {
++                    impl.scratch[i].x = target_x + (impl.scratch[i].x - anchor_x) * hud_scale;
++                    impl.scratch[i].y = bottom + (impl.scratch[i].y - 272.0f) * hud_scale;
++                }
++            }
++        }
++    }
++
++    // Subtitles: a text line (a texture the font hook has written glyphs into) drawn centred on the screen near its bottom,
++    // from the main heap rather than the menu's text heap. The game draws one line five times, the outline at +-1 pixel
++    // and the letters in the middle, so every quad takes the same shrink about the bottom centre and the same lift:
++    // Text > Subtitle size and Subtitle height.
++    if (call.through && call.texture.enabled && call.texture.format == TextureFormat::Clut4 && !impl.scratch.empty() &&
++        (call.primitive == PrimitiveType::Sprites || ((call.primitive == PrimitiveType::TriangleStrip ||
++                                                       call.primitive == PrimitiveType::TriangleFan) && impl.scratch.size() == 6u)) &&
++        (call.texture.address & 0x0FFFFFFFu) < 0x09600000u && fonts::line_known(call.texture.address & 0x0FFFFFFFu)) {
++        const settings::Settings &subtitle_settings = settings::current();
++        const float size = std::clamp(static_cast<float>(subtitle_settings.subtitle_size), 50.0f, 100.0f) / 100.0f;
++        const float lift = std::clamp(static_cast<float>(subtitle_settings.subtitle_lift), 0.0f, 60.0f);
++        for (std::size_t first = 0; first + 6u <= impl.scratch.size(); first += 6u) {
++            float x0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
++            for (std::size_t i = first; i < first + 6u; ++i) {
++                x0 = std::min(x0, impl.scratch[i].x);
++                x1 = std::max(x1, impl.scratch[i].x);
++                y1 = std::max(y1, impl.scratch[i].y);
++            }
++            if (std::fabs(0.5f * (x0 + x1) - 240.0f) > 3.0f || y1 < 190.0f || y1 > 272.0f || x1 - x0 < 16.0f) continue;
++            for (std::size_t i = first; i < first + 6u; ++i) {
++                impl.scratch[i].x = 240.0f + (impl.scratch[i].x - 240.0f) * size;
++                impl.scratch[i].y = 272.0f + (impl.scratch[i].y - 272.0f) * size - lift;
++            }
++        }
+     }
+ 
+     if (trace && impl.draws < 400u) {
+diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
+index 9b08d55..35724d9 100644
+--- a/host/gpu/vulkan_renderer.hpp
++++ b/host/gpu/vulkan_renderer.hpp
+@@ -154,6 +154,35 @@ public:
+     // game draws after it (its interface) lies over both.
+     static constexpr std::uint32_t kMarkerSplitLeft = 1u;
+     static constexpr std::uint32_t kMarkerSplitCompose = 2u;
++    // A profile with GameProfile::hud_scaled_by_game writes these around the display-list commands of each
++    // layout of the game's HUD: the draws between a begin and an end are the HUD's, whatever and wherever they
++    // are, and only those take the Battle HUD settings.
++    static constexpr std::uint32_t kMarkerHudBegin = 0x10u;
++    static constexpr std::uint32_t kMarkerHudEnd = 0x11u;
++    // Like kMarkerHudBegin, but every draw scales about the bottom-left corner (a grid that must stay together).
++    static constexpr std::uint32_t kMarkerHudBeginLeft = 0x12u;
++    // Scales about the left edge, each quad keeping its own vertical centre (a bar with text above other things).
++    static constexpr std::uint32_t kMarkerHudBeginLeftMid = 0x13u;
++    // Right side; quads above y = 180 scale about the top right (anchor y 110), the others as usual.
++    static constexpr std::uint32_t kMarkerHudBeginRightSplit = 0x14u;
++    // Only quads of at least 40 x 18 below y = 200 scale (the BREAK word, in a layout of floating numbers).
++    static constexpr std::uint32_t kMarkerHudBeginBigLow = 0x15u;
++    // The Quick Battle roster's cursor frame and hand: moved to the new place of the cell they are on (found from
++    // the cell positions the game publishes in g_d012_roster_cells), the frame shrunk like the cells.
++    // Only small quads (digits, 14 pixels or less) low on the screen scale: the HP numbers, in layouts that also
++    // hold message boxes and other text, which must be left alone.
++    static constexpr std::uint32_t kMarkerHudBeginSmallLow = 0x18u;
++    // The Party roster's right panel (layouts 0x722a / 0x722e): shrunk to 85% about the middle of its right edge.
++    static constexpr std::uint32_t kMarkerHudBeginPanelRight = 0x19u;
++    static constexpr std::uint32_t kMarkerHudBeginRosterFrame = 0x16u;
++    static constexpr std::uint32_t kMarkerHudBeginRosterHand = 0x17u;
++    // The same for a layout that is not scaled, with its kind (0x0100 | kind) and id (0x2000 | id) after the
++    // begin, when <prefix>_TRACE_HUD_BOXES is on: the renderer logs where each layout's draws land.
++    // Replays the 3D draws held back while the profile's g_d012_defer_3d is set (the character viewer on the select screens), at
++    // this place in the 2D layers: after the art, before the rest of the UI.
++    static constexpr std::uint32_t kMarkerReplay3D = 0x22u;
++    static constexpr std::uint32_t kMarkerLayoutBegin = 0x20u;
++    static constexpr std::uint32_t kMarkerLayoutEnd = 0x21u;
+     void marker(std::uint32_t marker, std::uint32_t target_address);
+     // Writes the framebuffer shown a frame or two ago back to guest VRAM, in
+     // the guest's pixel format at 480x272, so game code that copies a frame
+diff --git a/host/hle/hle_font.cpp b/host/hle/hle_font.cpp
+index 4758110..1d5bb85 100644
+--- a/host/hle/hle_font.cpp
++++ b/host/hle/hle_font.cpp
+@@ -29,6 +29,15 @@ constexpr std::uint32_t kPixelFormat32 = 4u;
+ constexpr std::uint32_t kLibraryHandle = 0x00F0F000u;
+ constexpr std::uint32_t kFontHandle = 0x00F0F100u;
+ 
++// <prefix>_TEXT_LAYOUT_1X=1: the glyph metrics the game lays its text out from (the 26.6 and float metrics, the
++// advances, bearings, ascender and descender) are reported at the game's own size, a 20 pixel cell, while the
++// bitmaps and their sizes stay fonts::kScale times larger. The game then measures and aligns a line as it always
++// did, and the sharper bitmaps only fill it. Off: every number is the larger cell's.
++float layout_divisor() {
++    static const float divisor = portablekit::env("TEXT_LAYOUT_1X") != nullptr ? static_cast<float>(fonts::kScale) : 1.0f;
++    return divisor;
++}
++
+ // <prefix>_TRACE_FONT=1: every sceLibFont call with its arguments and results.
+ bool trace_font() {
+     static const bool enabled = portablekit::env("TRACE_FONT") != nullptr;
+@@ -73,16 +82,17 @@ void write_char_info(psprecomp::GuestMemory &memory, std::uint32_t address, cons
+     put(4u, static_cast<std::uint32_t>(glyph.height));
+     put(8u, static_cast<std::uint32_t>(glyph.left));
+     put(12u, static_cast<std::uint32_t>(glyph.top));
+-    put(16u, to_fixed26(static_cast<float>(glyph.width)));
+-    put(20u, to_fixed26(static_cast<float>(glyph.height)));
+-    put(24u, to_fixed26(static_cast<float>(fonts::kAscender)));                  // ascender
+-    put(28u, to_fixed26(static_cast<float>(fonts::kAscender - fonts::kCell)));   // descender
+-    put(32u, to_fixed26(static_cast<float>(glyph.left)));                        // bearing HX
+-    put(36u, to_fixed26(static_cast<float>(glyph.top)));                         // bearing HY
+-    put(40u, 0u);                                                                // bearing VX
+-    put(44u, to_fixed26(static_cast<float>(glyph.top)));                         // bearing VY
+-    put(48u, to_fixed26(glyph.advance));                                         // advance H
+-    put(52u, to_fixed26(static_cast<float>(fonts::kCell)));                      // advance V
++    const float d = layout_divisor();
++    put(16u, to_fixed26(static_cast<float>(glyph.width) / d));
++    put(20u, to_fixed26(static_cast<float>(glyph.height) / d));
++    put(24u, to_fixed26(static_cast<float>(fonts::kAscender) / d));                  // ascender
++    put(28u, to_fixed26(static_cast<float>(fonts::kAscender - fonts::kCell) / d));   // descender
++    put(32u, to_fixed26(static_cast<float>(glyph.left) / d));                        // bearing HX
++    put(36u, to_fixed26(static_cast<float>(glyph.top) / d));                         // bearing HY
++    put(40u, 0u);                                                                    // bearing VX
++    put(44u, to_fixed26(static_cast<float>(glyph.top) / d));                         // bearing VY
++    put(48u, to_fixed26(glyph.advance / d));                                         // advance H
++    put(52u, to_fixed26(static_cast<float>(fonts::kCell) / d));                      // advance V
+     memory.store16(address + 56u, 0u);                                          // shadow flags
+     memory.store16(address + 58u, 0u);                                          // shadow id
+ }
+@@ -106,8 +116,8 @@ void write_font_info(psprecomp::GuestMemory &memory, std::uint32_t address) {
+         cell,             // max advance Y
+     };
+     for (std::uint32_t i = 0; i < 10u; ++i) {
+-        memory.store32(address + i * 4u, to_fixed26(values[i]));
+-        store_float(memory, address + 40u + i * 4u, values[i]);
++        memory.store32(address + i * 4u, to_fixed26(values[i] / layout_divisor()));
++        store_float(memory, address + 40u + i * 4u, values[i] / layout_divisor());
+     }
+     memory.store16(address + 80u, static_cast<std::uint16_t>(fonts::kCell));  // max glyph bitmap width
+     memory.store16(address + 82u, static_cast<std::uint16_t>(fonts::kCell));  // max glyph bitmap height
+@@ -204,6 +214,7 @@ void blit_glyph(psprecomp::GuestMemory &memory, std::uint32_t image_address, std
+     const std::uint32_t buffer = memory.load32(image_address + 20u);
+     if (buffer == 0u) return;
+ 
++    fonts::note_line_glyph(buffer, code, x64, y64);
+     const std::int32_t x_whole = floor_div64(x64);
+     const std::int32_t y_whole = floor_div64(y64);
+     const fonts::GlyphBitmap glyph = fonts::render(code, static_cast<float>(x64 - x_whole * 64) / 64.0f,
+diff --git a/host/hle/hle_io.cpp b/host/hle/hle_io.cpp
+index 9594373..777d857 100644
+--- a/host/hle/hle_io.cpp
++++ b/host/hle/hle_io.cpp
+@@ -13,11 +13,13 @@
+ #include "portablekit/hle_extension.hpp"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cctype>
+ #include <charconv>
+ #include <chrono>
+ #include <cstdio>
+ #include <ctime>
++#include <filesystem>
+ #include <fstream>
+ #include <iostream>
+ #include <memory>
+diff --git a/host/hle/hle_media.cpp b/host/hle/hle_media.cpp
+index e690158..2c2f01a 100644
+--- a/host/hle/hle_media.cpp
++++ b/host/hle/hle_media.cpp
+@@ -29,6 +29,9 @@
+ #endif
+ 
+ #include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <filesystem>
+ #include <cmath>
+ #include <cstring>
+ #include <array>
+@@ -326,6 +329,7 @@ void present_frame(Runtime &rt) {
+         camera::set_rate(camera::Source::Stick, (static_cast<int>(renderer.pad().right_x) - 0x80) / 127.0f,
+                          (static_cast<int>(renderer.pad().right_y) - 0x80) / 127.0f);
+         camera::game_camera_frame(rt);
++        ui::apply_cheats(rt);
+         // The view's shape follows the picture's: the game builds its next
+         // projection with the aspect ratio of the target it will draw into.
+         camera::game_aspect_frame(rt, renderer.game_aspect());
+diff --git a/host/install/executable_preparation.cpp b/host/install/executable_preparation.cpp
+index d06b605..fd24685 100644
+--- a/host/install/executable_preparation.cpp
++++ b/host/install/executable_preparation.cpp
+@@ -237,7 +237,9 @@ std::vector<std::uint8_t> prepare_executable(std::span<const std::uint8_t> eboot
+     // The hash already pins the file; the profile names the key its tag selects.
+     const TagKeyMaterial tag{game().decryption_tag, game().decryption_key, game().decryption_key_table};
+     std::vector<std::uint8_t> executable = decrypt_executable(eboot_bin, tag, progress);
+-    const char *expected = variant != nullptr ? variant->executable_sha256 : game().executable_sha256;
++    // A variant that names no executable hash of its own runs the profile's executable (same code, other wrapper).
++    const char *expected = variant != nullptr && variant->executable_sha256 != nullptr ? variant->executable_sha256
++                                                                                       : game().executable_sha256;
+     if (expected == nullptr || psprecomp::sha256_bytes(executable) != expected)
+         throw psprecomp::Error("The prepared executable does not match the supported one");
+     return executable;
+diff --git a/host/install/installer.cpp b/host/install/installer.cpp
+index 4e41723..9e5fb91 100644
+--- a/host/install/installer.cpp
++++ b/host/install/installer.cpp
+@@ -434,10 +434,14 @@ int restart(char **argv) {
+ void request_setup_on_exit() { setup_on_exit = true; }
+ bool setup_requested_on_exit() { return setup_on_exit; }
+ 
+-int restart_for_setup(const char *program) {
++int restart_for_setup(const char *argv0) {
+     // Nothing buffered survives the exec.
+     std::cout.flush();
+     std::cerr.flush();
++    // argv[0] may be a bare name that only the shell found; the running file's own path always starts it.
++    const std::filesystem::path self = executable_path();
++    const std::string program_path = self.empty() ? std::string(argv0) : self.string();
++    const char *program = program_path.c_str();
+ #if defined(PORTABLEKIT_ANDROID_APP)
+     // The next start runs the setup: a marker in the data directory stands
+     // for --install, which an app is not started with.
+diff --git a/host/install/user_data.cpp b/host/install/user_data.cpp
+index 536eeb8..8aefea2 100644
+--- a/host/install/user_data.cpp
++++ b/host/install/user_data.cpp
+@@ -4,9 +4,21 @@
+ #include "psprecomp/common.hpp"
+ 
+ #include <cstdlib>
++#include <cstring>
+ #include <fstream>
++#include <string>
+ #include <system_error>
+ 
++#if defined(_WIN32)
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#endif
++
+ #if defined(PORTABLEKIT_HAS_SDL)
+ #include <SDL3/SDL_filesystem.h>
+ #include <SDL3/SDL_stdinc.h>
+@@ -27,20 +39,59 @@ std::string trim(const std::string &text) {
+ 
+ #if !defined(PORTABLEKIT_HAS_SDL)
+ std::filesystem::path environment_path(const char *name) {
+-    const char *value = std::getenv(name);
+-    return value != nullptr && *value != '\0' ? path_from_utf8(value) : std::filesystem::path{};
++    const std::optional<std::string> value = environment_utf8(name);
++    return value ? path_from_utf8(*value) : std::filesystem::path{};
+ }
+ #endif
+ 
+ } // namespace
+ 
++std::optional<std::string> environment_utf8(const char *name) {
++#if defined(_WIN32)
++    const std::wstring wide_name(name, name + std::strlen(name));
++    const DWORD length = GetEnvironmentVariableW(wide_name.c_str(), nullptr, 0);
++    if (length <= 1) return std::nullopt;
++    std::wstring wide(length, L'\0');
++    wide.resize(GetEnvironmentVariableW(wide_name.c_str(), wide.data(), length));
++    if (wide.empty()) return std::nullopt;
++    const int bytes = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
++    if (bytes <= 0) return std::nullopt;
++    std::string text(static_cast<std::size_t>(bytes), '\0');
++    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), text.data(), bytes, nullptr, nullptr);
++    return text;
++#else
++    const char *value = std::getenv(name);
++    if (value == nullptr || *value == '\0') return std::nullopt;
++    return std::string(value);
++#endif
++}
++
+ std::string path_to_utf8(const std::filesystem::path &path) {
+     const std::u8string text = path.u8string();
+     return {text.begin(), text.end()};
+ }
+ 
+ std::filesystem::path path_from_utf8(const std::string &text) {
++#if defined(_WIN32)
++    // The path constructor throws on invalid UTF-8, such as a name that came
++    // from the ANSI code page (C:\Users\Danté). Read those as ANSI instead.
++    if (text.empty()) return {};
++    const int size = static_cast<int>(text.size());
++    UINT codepage = CP_UTF8;
++    DWORD flags = MB_ERR_INVALID_CHARS;
++    int length = MultiByteToWideChar(codepage, flags, text.data(), size, nullptr, 0);
++    if (length <= 0) {
++        codepage = CP_ACP;
++        flags = 0;
++        length = MultiByteToWideChar(codepage, flags, text.data(), size, nullptr, 0);
++    }
++    if (length <= 0) return {};
++    std::wstring wide(static_cast<std::size_t>(length), L'\0');
++    MultiByteToWideChar(codepage, flags, text.data(), size, wide.data(), length);
++    return std::filesystem::path(wide);
++#else
+     return std::filesystem::path(std::u8string(text.begin(), text.end()));
++#endif
+ }
+ 
+ std::filesystem::path user_data_directory() {
+diff --git a/host/install/user_data.hpp b/host/install/user_data.hpp
+index 5d2eb39..ceb892d 100644
+--- a/host/install/user_data.hpp
++++ b/host/install/user_data.hpp
+@@ -58,4 +58,9 @@ struct Installation {
+ [[nodiscard]] std::string path_to_utf8(const std::filesystem::path &path);
+ [[nodiscard]] std::filesystem::path path_from_utf8(const std::string &text);
+ 
++// An environment variable as UTF-8, or nullopt when it is unset or empty.
++// std::getenv gives the ANSI code page on Windows, which path_from_utf8
++// rejects for a name like C:\Users\Danté.
++[[nodiscard]] std::optional<std::string> environment_utf8(const char *name);
++
+ } // namespace portablekit::install
+diff --git a/host/kernel/kernel.cpp b/host/kernel/kernel.cpp
+index a811bbe..e3bd816 100644
+--- a/host/kernel/kernel.cpp
++++ b/host/kernel/kernel.cpp
+@@ -95,7 +95,12 @@ void Kernel::install(Runtime &runtime, std::uint32_t gp, std::uint32_t image_end
+ 
+     free_ranges_.clear();
+     const std::uint32_t user_start = align_up(image_end, 0x1000u);
+-    const std::uint32_t user_end = psprecomp::GuestMemory::kPhysicalBase + runtime.memory().size();
++    // The game sees all the RAM, or the part the profile leaves it: a game that sizes its heaps from the free
++    // memory it finds would otherwise take what the host keeps for itself.
++    const std::uint32_t visible = portablekit::game().game_visible_ram_bytes;
++    const std::uint32_t user_end = psprecomp::GuestMemory::kPhysicalBase +
++                                   (visible != 0u ? std::min<std::uint32_t>(visible, runtime.memory().size())
++                                                  : static_cast<std::uint32_t>(runtime.memory().size()));
+     free_ranges_.push_back(FreeRange{user_start, user_end - user_start});
+ 
+     runtime.register_function(kThreadExitStub, &native_thread_exit, "portablekit_thread_exit");
+diff --git a/host/main.cpp b/host/main.cpp
+index 845bf0e..1424597 100644
+--- a/host/main.cpp
++++ b/host/main.cpp
+@@ -14,7 +14,9 @@
+ #include "install/user_data.hpp"
+ #include "gpu/ge_census.hpp"
+ #include "gpu/ge_state.hpp"
++#include "kernel/iso_image.hpp"
+ #include "kernel/kernel.hpp"
++#include "save_data/param_sfo.hpp"
+ 
+ #include "psprecomp/common.hpp"
+ #include "psprecomp/elf32.hpp"
+@@ -34,6 +36,7 @@
+ #include <optional>
+ #include <string>
+ #include <thread>
++#include <vector>
+ 
+ #if defined(__linux__)
+ #include <sys/resource.h>
+@@ -355,6 +358,24 @@ int main(int argc, char **argv) {
+ 
+         const std::optional<GameFiles> files = locate_game(options);
+         if (!files) return 1;
++        // The disc says which edition's identity (saves, textures, cheats) the profile answers with.
++        if (!files->disc_image.empty()) {
++            try {
++                portablekit::IsoImage iso(files->disc_image);
++                if (const auto entry = iso.find(portablekit::game().param_sfo_path_on_disc);
++                    entry && !entry->directory && entry->size <= 65536u) {
++                    std::vector<std::uint8_t> bytes(entry->size);
++                    bytes.resize(iso.read(static_cast<std::uint64_t>(entry->lba) * portablekit::IsoImage::kSectorSize,
++                                          bytes));
++                    if (const auto sfo = portablekit::savedata::ParamSfo::parse(bytes))
++                        if (const auto id = sfo->string("DISC_ID")) {
++                            portablekit::set_active_disc_id(*id);
++                            std::cout << "Disc id:    " << *id << "\n";
++                        }
++                }
++            } catch (const std::exception &) {
++            }
++        }
+         const std::filesystem::path &executable = files->executable;
+         portablekit::ProfilePaths paths;
+         paths.disc_image = files->disc_image;
+diff --git a/host/profile.cpp b/host/profile.cpp
+index 5a603c6..940f3f6 100644
+--- a/host/profile.cpp
++++ b/host/profile.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include <cstdlib>
+ #include <string>
++#include <utility>
+ 
+ namespace portablekit {
+ 
+@@ -46,6 +47,13 @@ bool is_known_executable(std::string_view executable_sha256) {
+            find_variant(executable_sha256) != nullptr;
+ }
+ 
++namespace {
++std::string g_active_disc_id;
++}
++
++void set_active_disc_id(std::string disc_id) { g_active_disc_id = std::move(disc_id); }
++std::string_view active_disc_id() { return g_active_disc_id; }
++
+ void set_active_variant(const ProfileVariant *variant) { g_active_variant = variant; }
+ const ProfileVariant *active_variant() { return g_active_variant; }
+ 
+diff --git a/host/profile.hpp b/host/profile.hpp
+index 4febd7e..97e51c9 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -154,6 +154,19 @@ struct GameProfile {
+     // Which release that is, as the installer names it when it is handed
+     // another one: "the Japanese release". Null: it is named by disc id alone.
+     const char *release_name = nullptr;
++    // The version of this release of the port, as its GitHub tag ("v1.0.1"): what the update check compares with
++    // the newest release. Null: the build's git describe text.
++    const char *release_version = nullptr;
++    // The game moves its own battle HUD to the Battle HUD settings (host code in the profile's sources does it
++    // in the game's layouts), so the renderer must not also scale what it takes for the HUD by its place on the
++    // screen.
++    bool hud_scaled_by_game = false;
++    // HD text: the game's text lines are textures at addresses in this range (the text heaps the profile gives
++    // the game), made fonts::kScale times larger than the game's own size. The game draws each line at the
++    // texture's size times a fixed factor, so the renderer draws a quad from such a texture at 1/kScale of its
++    // size from its top-left corner, which is where the game placed it. Zero bytes: off.
++    std::uint32_t hd_text_base = 0;
++    std::uint32_t hd_text_bytes = 0;
+     // Releases a player may mistake for it. The installer says the note of
+     // the one it was handed, instead of "Other releases and regions are not
+     // supported."
+@@ -181,6 +194,9 @@ struct GameProfile {
+     // --- How the game sits in guest memory ---------------------------------
+     std::uint32_t load_base;
+     std::uint32_t guest_ram_bytes;
++    // How much of that RAM the game's own allocator and free-memory queries see, from the start of RAM; the rest
++    // is the host's (a profile puts buffers of its own there, as the HD text heaps). Zero: all of it.
++    std::uint32_t game_visible_ram_bytes = 0;
+     // argv[0] the game is started with, e.g. "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN".
+     const char *boot_path;
+     // Addresses of the code overlay slots inside the load image's BSS, from
+@@ -335,6 +351,12 @@ struct GameProfile {
+ // null for the profile's own (and before it is known).
+ void set_active_variant(const ProfileVariant *variant);
+ [[nodiscard]] const ProfileVariant *active_variant();
++// The DISC_ID of the disc image the game runs from, read by host/main.cpp
++// from its PARAM.SFO; empty before it is known. A profile whose editions
++// differ in identity (saves, texture folder) returns the one it names from
++// game().
++void set_active_disc_id(std::string disc_id);
++[[nodiscard]] std::string_view active_disc_id();
+ // The profile's hooks and overlay slots as the running edition sets them.
+ using ExtraHleHook = void (*)(HleRegistrar &);
+ using PatchImageHook = void (*)(psprecomp::Runtime &, const psprecomp::Elf32Image &);
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 54078af..2d75aa8 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -236,6 +236,24 @@ const std::vector<Field> &fields() {
+         {"text.weight", nullptr,
+          [](Settings &s, const std::string &t) { return parse_uint(t, 0u, kMaxFontWeight, s.font_weight); },
+          [](const Settings &s) { return std::to_string(s.font_weight); }, nullptr},
++        {"text.size", "TEXT_SIZE",
++         [](Settings &s, const std::string &t) { return parse_uint(t, 50u, 100u, s.text_size); },
++         [](const Settings &s) { return std::to_string(s.text_size); }, nullptr},
++        {"text.subtitle_size", "SUBTITLE_SIZE",
++         [](Settings &s, const std::string &t) { return parse_uint(t, 50u, 100u, s.subtitle_size); },
++         [](const Settings &s) { return std::to_string(s.subtitle_size); }, nullptr},
++        {"text.subtitle_lift", "SUBTITLE_LIFT",
++         [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 60u, s.subtitle_lift); },
++         [](const Settings &s) { return std::to_string(s.subtitle_lift); }, nullptr},
++        {"hud.scale", nullptr,
++         [](Settings &s, const std::string &t) { return parse_uint(t, 50u, 100u, s.hud_scale); },
++         [](const Settings &s) { return std::to_string(s.hud_scale); }, nullptr},
++        {"hud.side_margin", nullptr,
++         [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 40u, s.hud_side_margin); },
++         [](const Settings &s) { return std::to_string(s.hud_side_margin); }, nullptr},
++        {"hud.margin", nullptr,
++         [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 30u, s.hud_margin); },
++         [](const Settings &s) { return std::to_string(s.hud_margin); }, nullptr},
+         {"audio.volume", nullptr,
+          [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 100u, s.volume); },
+          [](const Settings &s) { return std::to_string(s.volume); }, nullptr},
+@@ -422,6 +440,7 @@ const std::vector<Field> &fields() {
+              if (parse_uint(t, 1024u, 65534u, value)) s.adhoc_host_port = value;
+          }},
+         BOOL_FIELD("ui.menu_hint_seen", menu_hint_seen),
++        BOOL_FIELD("updates.notice", update_notice),
+         BOOL_FIELD("saves.backup_timestamp", backup_timestamp),
+         {"ui.last_folder", nullptr,
+          [](Settings &s, const std::string &t) {
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 9405fe7..f4b2f3c 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -61,8 +61,16 @@ struct Settings {
+ 
+     // Text
+     std::string font;                  // the game's text font: path, "#face" for a collection; empty: the default
++    std::uint32_t subtitle_size{85u};  // percent, 50 to 100: cutscene and battle subtitles, on top of the HUD scale
++    std::uint32_t subtitle_lift{12u};  // game pixels the subtitles are raised, 0 to 60
++    std::uint32_t text_size{90u};      // percent of the size the game's cell gives each glyph, 50 to 100
+     std::uint32_t font_weight{1u};     // columns the game's glyphs are thickened by, 0 to kMaxFontWeight
+ 
++    // Battle HUD (read by the renderer every draw, so changes show at once)
++    std::uint32_t hud_scale{100u};     // percent of its size, 50 to 100
++    std::uint32_t hud_side_margin{0u}; // the HUD moves in from each side (P1's right, P2's left), game pixels, 0 to 40
++    std::uint32_t hud_margin{0u};      // lift from the bottom edge, in game pixels (1 = about 4 on a 1080p window), 0 to 30
++
+     // Audio
+     std::uint32_t volume{100u};        // percent
+     bool mute{};
+@@ -134,6 +142,7 @@ struct Settings {
+     // Interface
+     bool menu_pause{true};             // opening the menu pauses the game
+     bool menu_pause_multiplayer{};     // ...also during ad hoc play, where a paused game stops answering its peers
++    bool update_notice{true};          // tell at start when a newer release is out ("Don't show again" clears it)
+     bool menu_hint_seen{};             // the "Esc / L3+R3 opens the menu" hint was shown
+     std::string last_folder;           // where the setup's file browser was last used
+ 
+diff --git a/host/ui/file_browser.cpp b/host/ui/file_browser.cpp
+index a032d5a..2b7e1bb 100644
+--- a/host/ui/file_browser.cpp
++++ b/host/ui/file_browser.cpp
+@@ -81,11 +81,11 @@ struct FileBrowser::SystemDialog {
+ 
+ fs::path FileBrowser::home() {
+ #if defined(_WIN32)
+-    const char *profile = std::getenv("USERPROFILE");
++    const std::optional<std::string> profile = install::environment_utf8("USERPROFILE");
+ #else
+-    const char *profile = std::getenv("HOME");
++    const std::optional<std::string> profile = install::environment_utf8("HOME");
+ #endif
+-    if (profile != nullptr && *profile != '\0') return install::path_from_utf8(profile);
++    if (profile) return install::path_from_utf8(*profile);
+     return fs::current_path();
+ }
+ 
+diff --git a/host/ui/font_menu.cpp b/host/ui/font_menu.cpp
+index 31110d1..7a6e874 100644
+--- a/host/ui/font_menu.cpp
++++ b/host/ui/font_menu.cpp
+@@ -1,6 +1,7 @@
+ #include "ui/font_menu.hpp"
+ 
+ #include "ui/layer.hpp"
++#include "ui/save_screen.hpp"
+ #include "ui/widgets.hpp"
+ 
+ #include "fonts/game_font.hpp"
+@@ -48,20 +49,6 @@ RowOptions options_for(const char *key, std::string description) {
+     return options;
+ }
+ 
+-std::string file_url(const std::string &path) {
+-    std::string url = "file://";
+-    for (const unsigned char c : path) {
+-        if (std::isalnum(c) != 0 || c == '/' || c == '-' || c == '_' || c == '.' || c == '~') {
+-            url += static_cast<char>(c);
+-        } else {
+-            char escaped[4];
+-            std::snprintf(escaped, sizeof(escaped), "%%%02X", c);
+-            url += escaped;
+-        }
+-    }
+-    return url;
+-}
+-
+ void apply(const std::string &value) {
+     settings::Settings &s = settings::current();
+     s.font = value;
+@@ -221,6 +208,35 @@ void font_rows() {
+             fonts::reload();
+         }
+     }
++    {
++        // Applied by the renderer on the next frame; no reload needed.
++        const std::string size_text = std::to_string(s.text_size) + "%";
++        if (const int delta = choice_row("Size", size_text,
++                                         options_for("text.size", "Size of the letters in the game's text. 100% is "
++                                                                  "what the game's own cells allow; spacing stays the "
++                                                                  "game's, so smaller letters are spaced wider."))) {
++            const int next = static_cast<int>(s.text_size) + delta * 5;
++            s.text_size = static_cast<std::uint32_t>(std::clamp(next, 50, 100));
++            settings::save();
++        }
++    }
++    {
++        const std::string subtitle_text = std::to_string(s.subtitle_size) + "%";
++        if (const int delta = choice_row("Subtitle size", subtitle_text,
++                                         options_for("text.subtitle_size", "Size of the subtitles in cutscenes and "
++                                                                           "battles, on top of the Battle HUD size."))) {
++            const int next = static_cast<int>(s.subtitle_size) + delta * 5;
++            s.subtitle_size = static_cast<std::uint32_t>(std::clamp(next, 50, 100));
++            settings::save();
++        }
++        if (const int delta = choice_row("Subtitle height", std::to_string(s.subtitle_lift),
++                                         options_for("text.subtitle_lift", "How far the subtitles are raised from the "
++                                                                           "bottom of the screen, in game pixels."))) {
++            const int next = static_cast<int>(s.subtitle_lift) + delta * 2;
++            s.subtitle_lift = static_cast<std::uint32_t>(std::clamp(next, 0, 60));
++            settings::save();
++        }
++    }
+     draw_preview();
+     if (button_row("Open the fonts folder",
+                    {false, {}, "Fonts put in this folder (.ttf, .otf, .ttc) are listed first under Font: " +
+@@ -228,8 +244,38 @@ void font_rows() {
+         const std::string folder = fonts::user_font_folder();
+         std::error_code ec;
+         std::filesystem::create_directories(install::path_from_utf8(folder), ec);
+-        if (!SDL_OpenURL(file_url(folder).c_str()))
+-            std::cout << "[menu] cannot open " << folder << ": " << SDL_GetError() << "\n";
++        open_folder(install::path_from_utf8(folder));
++    }
++    section("Battle HUD");
++    {
++        // Applied by the renderer on the next frame; no reload needed.
++        const std::string size_text = std::to_string(s.hud_scale) + "%";
++        if (const int delta = choice_row("HUD size", size_text,
++                                         options_for("hud.scale", "Size of the character HUD in battle (gauges, "
++                                                                  "portraits, BRV and HP numbers). 100% is the "
++                                                                  "game's own size."))) {
++            const int next = static_cast<int>(s.hud_scale) + delta * 5;
++            s.hud_scale = static_cast<std::uint32_t>(std::clamp(next, 50, 100));
++            settings::save();
++        }
++        const std::string side_text = std::to_string(s.hud_side_margin);
++        if (const int delta = choice_row("HUD side space", side_text,
++                                         options_for("hud.side_margin", "How far the battle HUD is moved in from "
++                                                                        "each side: player 1's to the right, "
++                                                                        "player 2's to the left, in game pixels."))) {
++            const int next = static_cast<int>(s.hud_side_margin) + delta;
++            s.hud_side_margin = static_cast<std::uint32_t>(std::clamp(next, 0, 40));
++            settings::save();
++        }
++        const std::string margin_text = std::to_string(s.hud_margin);
++        if (const int delta = choice_row("HUD lift", margin_text,
++                                         options_for("hud.margin", "How far the battle HUD is lifted off the bottom "
++                                                                   "edge, in game pixels (1 is about 4 pixels on a "
++                                                                   "1080p window)."))) {
++            const int next = static_cast<int>(s.hud_margin) + delta;
++            s.hud_margin = static_cast<std::uint32_t>(std::clamp(next, 0, 30));
++            settings::save();
++        }
+     }
+ }
+ 
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 1b830d9..89ca429 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -14,6 +14,7 @@
+ #include "ui/texture_pack_screen.hpp"
+ #include "ui/text_input.hpp"
+ #include "ui/touch_overlay.hpp"
++#include "ui/updater.hpp"
+ #include "ui/widgets.hpp"
+ 
+ #include "adhoc/client.hpp"
+@@ -36,6 +37,9 @@
+ #include "platform/android_documents.hpp"
+ #endif
+ 
++#include "psprecomp/guest_memory.hpp"
++#include "psprecomp/runtime.hpp"
++
+ #include "imgui.h"
+ #include "imgui_internal.h"
+ 
+@@ -49,9 +53,11 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <filesystem>
++#include <fstream>
+ #include <iostream>
+ #include <functional>
+ #include <map>
++#include <mutex>
+ #include <optional>
+ #include <string>
+ #include <utility>
+@@ -96,24 +102,277 @@ std::vector<void (*)()> &port_rows() {
+     return list;
+ }
+ 
++// The port's cheats and mods, on the Mods page (add_mod_rows).
++std::vector<void (*)()> &mod_rows() {
++    static std::vector<void (*)()> list;
++    return list;
++}
++
+ int cycle(int value, int delta, int count) { return ((value + delta) % count + count) % count; }
+ 
+-// Percent-encodes a path for a file:// URL.
+-std::string file_url(const std::string &path) {
+-    std::string url = "file://";
+-    for (const unsigned char c : path) {
+-        if (std::isalnum(c) != 0 || c == '/' || c == '-' || c == '_' || c == '.' || c == '~') {
+-            url += static_cast<char>(c);
+-        } else {
+-            char escaped[4];
+-            std::snprintf(escaped, sizeof(escaped), "%%%02X", c);
+-            url += escaped;
++float gain(const settings::Settings &s) { return s.mute ? 0.0f : static_cast<float>(s.volume) / 100.0f; }
++
++// The cheats file of the game, as PPSSPP keeps it: PSP/CHEATS/<disc id>.ini in
++// the memory stick. A line "_C1 title" (on) or "_C0 title" (off) starts a
++// cheat; the "_L" lines under it are its codes. A toggle rewrites the digit.
++struct CheatLine {
++    std::uint32_t a{};
++    std::uint32_t b{};
++};
++
++struct CheatFile {
++    std::filesystem::path path;
++    std::vector<std::string> lines;
++    std::vector<std::size_t> heads;  // the lines that start a cheat
++    std::vector<std::vector<CheatLine>> codes;  // the "_L" lines of each cheat
++    bool crlf{};
++    bool loaded{};
++    std::filesystem::file_time_type stamp{};
++};
++
++CheatFile &cheat_file() {
++    static CheatFile file;
++    return file;
++}
++
++std::filesystem::path cheats_path() {
++    return portablekit::savedata::memory_stick() / "PSP" / "CHEATS" / (std::string(portablekit::game().disc_id) + ".ini");
++}
++
++bool cheat_head(const std::string &line) {
++    return line.size() >= 3 && line[0] == '_' && line[1] == 'C' && (line[2] == '0' || line[2] == '1');
++}
++
++// The menu runs on one thread and the game's flip on another.
++std::mutex &cheat_mutex() {
++    static std::mutex mutex;
++    return mutex;
++}
++
++void parse_codes(CheatFile &f) {
++    f.codes.assign(f.heads.size(), {});
++    for (std::size_t i = 0; i < f.heads.size(); ++i) {
++        const std::size_t end = i + 1 < f.heads.size() ? f.heads[i + 1] : f.lines.size();
++        for (std::size_t n = f.heads[i] + 1; n < end; ++n) {
++            unsigned a = 0, b = 0;
++            if (f.lines[n].rfind("_L", 0) == 0 && std::sscanf(f.lines[n].c_str(), "_L %x %x", &a, &b) == 2)
++                f.codes[i].push_back({a, b});
+         }
+     }
+-    return url;
+ }
+ 
+-float gain(const settings::Settings &s) { return s.mute ? 0.0f : static_cast<float>(s.volume) / 100.0f; }
++// <prefix>_TRACE_CHEATS=1: what each enabled cheat's codes do, to <temp>/d012_cheats.log (the first 60 runs of each
++// cheat): the pointers they follow, the conditions and where a write was skipped because its address is not memory.
++std::FILE *cheat_log() {
++    static std::FILE *file = portablekit::env("TRACE_CHEATS") != nullptr
++                                 ? std::fopen((std::filesystem::temp_directory_path() / "d012_cheats.log").string().c_str(), "w")
++                                 : nullptr;
++    return file;
++}
++bool cheat_logging = false;  // this run of the cheat is one of the logged ones
++
++// One cheat's codes against the guest's memory, as PPSSPP's CWCheatEngine
++// runs them (Core/CwCheat.cpp), less the joker, vibration and shader codes.
++void run_cheat(psprecomp::GuestMemory &m, const std::vector<CheatLine> &lines) {
++    using u32 = std::uint32_t;
++    const auto ok = [&](u32 a, u32 n) { return n != 0u && m.raw_pointer(a, n) != nullptr; };
++    const auto rd = [&](u32 a, int sz) -> u32 {
++        if (!ok(a, static_cast<u32>(sz))) return 0u;
++        return sz == 1 ? m.load8(a) : sz == 2 ? m.load16(a) : m.load32(a);
++    };
++    const auto wr = [&](u32 a, int sz, u32 v) {
++        if (cheat_logging) std::fprintf(cheat_log(), "  write %d bytes at %08X value %08X %s\n", sz, a, v, ok(a, static_cast<u32>(sz)) ? "" : "SKIPPED (not guest memory)");
++        if (!ok(a, static_cast<u32>(sz))) return;
++        if (sz == 1) m.store8(a, static_cast<std::uint8_t>(v));
++        else if (sz == 2) m.store16(a, static_cast<std::uint16_t>(v));
++        else m.store32(a, v);
++    };
++    const auto addr = [](u32 v) { return (v + 0x08800000u) & 0x3FFFFFFFu; };
++    const auto test = [&](u32 a, int sz, u32 v, u32 kind) {
++        if (!ok(a, static_cast<u32>(sz))) return false;
++        const int x = static_cast<int>(rd(a, sz)), y = static_cast<int>(v);
++        return kind == 0u ? x == y : kind == 1u ? x != y : kind == 2u ? x < y : x > y;
++    };
++    const auto add = [&](u32 a, int sz, u32 v, bool subtract) { wr(a, sz, subtract ? rd(a, sz) - v : rd(a, sz) + v); };
++    const auto multi = [&](u32 a, int sz, u32 value, u32 count, u32 step, u32 inc) {
++        for (u32 k = 0; k < count; ++k, a += step, value += inc) wr(a, sz, value);
++    };
++    std::size_t i = 0;
++    const std::size_t n = lines.size();
++    while (i < n) {
++        const u32 p = lines[i].a, arg = lines[i].b;
++        ++i;
++        switch (p >> 28) {
++        case 0x0: wr(addr(p & 0x0FFFFFFFu), (arg & 0xFFFF0000u) ? 4 : (arg & 0xFF00u) ? 2 : 1, arg); break;
++        case 0x1: wr(addr(p & 0x0FFFFFFFu), 2, arg); break;
++        case 0x2: wr(addr(p & 0x0FFFFFFFu), 4, arg); break;
++        case 0x3: {
++            const u32 a = addr(arg & 0x0FFFFFFFu);
++            switch ((p >> 20) & 0xF) {
++            case 1: add(a, 1, p & 0xFFu, false); break;
++            case 2: add(a, 1, p & 0xFFu, true); break;
++            case 3: add(a, 2, p & 0xFFFFu, false); break;
++            case 4: add(a, 2, p & 0xFFFFu, true); break;
++            case 5:
++            case 6:
++                if (i >= n) return;
++                add(a, 4, lines[i++].a, ((p >> 20) & 0xF) == 6u);
++                break;
++            default: return;
++            }
++            break;
++        }
++        case 0x4:
++            if (i >= n) return;
++            multi(addr(p & 0x0FFFFFFFu), 4, lines[i].a, arg >> 16, (arg & 0xFFFFu) * 4u, lines[i].b);
++            ++i;
++            break;
++        case 0x5:
++            if (i >= n) return;
++            {
++                const u32 src = addr(p & 0x0FFFFFFFu), dst = addr(lines[i++].a & 0x0FFFFFFFu);
++                if (ok(src, arg) && ok(dst, arg)) {
++                    std::vector<std::uint8_t> bytes(arg);
++                    m.copy_out(src, bytes);
++                    m.copy_in(dst, bytes);
++                }
++            }
++            break;
++        case 0x6: {
++            if (i >= n) return;
++            const u32 at = addr(p & 0x0FFFFFFFu);
++            const CheatLine l2 = lines[i++];
++            const int count = static_cast<int>(l2.a & 0xFFFFu) - 1;
++            if (count < 0 || i + static_cast<std::size_t>(count) > n) return;
++            const u32 offset = l2.b;
++            const u32 slot = at + static_cast<u32>((static_cast<int>(l2.a) >> 20) * 4);
++            u32 base = rd(slot, 4), val = arg;
++            int type = static_cast<int>((l2.a >> 16) & 0xF);
++            for (int k = 0; k < count; ++k) {
++                const CheatLine l = lines[i++];
++                switch (l.a >> 28) {
++                case 0x1: {
++                    const u32 src = rd(at, 4) + offset, dst = rd(slot, 4) + (l.a & 0x0FFFFFFFu);
++                    if (ok(src, val) && ok(dst, val)) {
++                        std::vector<std::uint8_t> bytes(val);
++                        m.copy_out(src, bytes);
++                        m.copy_in(dst, bytes);
++                    }
++                    type = -1;
++                    break;
++                }
++                case 0x2:
++                case 0x3: {
++                    u32 w = l.a & 0x0FFFFFFFu;
++                    if ((l.a >> 28) == 3u) w = 0u - w;
++                    base = rd(base + w, 4);
++                    if ((l.b >> 28) == 2u || (l.b >> 28) == 3u) {
++                        w = l.b & 0x0FFFFFFFu;
++                        if ((l.b >> 28) == 3u) w = 0u - w;
++                        base = rd(base + w, 4);
++                    }
++                    break;
++                }
++                case 0x9: base += l.a & 0x0FFFFFFFu; val += l.b; break;
++                default: break;
++                }
++            }
++            if (cheat_logging)
++                std::fprintf(cheat_log(), "  pointer at %08X (slot %08X) holds %08X, offset %08X, type %d, value %08X\n", at, slot, base, offset, type, val);
++            if (type >= 0 && type <= 2) wr(base + offset, 1 << type, val);
++            else if (type >= 3 && type <= 5) wr(base - offset, 1 << (type - 3), val);
++            break;
++        }
++        case 0x7: {
++            const u32 a = addr(p & 0x0FFFFFFFu);
++            const int sz = (arg >> 16) & 1u ? 2 : 1;
++            const u32 v = sz == 1 ? arg & 0xFFu : arg & 0xFFFFu;
++            const u32 op = arg >> 17;
++            if ((arg >> 16) > 5u) return;
++            wr(a, sz, op == 0u ? rd(a, sz) | v : op == 1u ? rd(a, sz) & v : rd(a, sz) ^ v);
++            break;
++        }
++        case 0x8: {
++            if (i >= n) return;
++            const CheatLine l2 = lines[i++];
++            const bool b8 = (l2.a & 0xFFFF0000u) == 0u;
++            multi(addr(p & 0x0FFFFFFFu), b8 ? 1 : 2, b8 ? l2.a & 0xFFu : l2.a & 0xFFFFu, arg >> 16,
++                  (arg & 0xFFFFu) * (b8 ? 1u : 2u), l2.b);
++            break;
++        }
++        case 0xC:
++            if (ok(addr(p & 0x0FFFFFFFu), 4) && rd(addr(p & 0x0FFFFFFFu), 4) != arg) return;
++            break;
++        case 0xD: {
++            const u32 kind = arg >> 28;
++            if (kind == 0u || kind == 2u) {
++                const int sz = kind == 2u ? 1 : 2;
++                if (!test(addr(p & 0x0FFFFFFFu), sz, sz == 1 ? arg & 0xFFu : arg & 0xFFFFu, (arg >> 20) & 0xF)) i += 1u;
++            } else if (kind >= 4u && kind <= 7u) {
++                if (i >= n) return;
++                const CheatLine l2 = lines[i++];
++                const int sz = 1 << (l2.b & 0xF);
++                const u32 a = addr(p & 0x0FFFFFFFu), c = addr(arg & 0x0FFFFFFFu);
++                bool pass = ok(a, static_cast<u32>(sz)) && ok(c, static_cast<u32>(sz));
++                if (pass) {
++                    const int x = static_cast<int>(rd(a, sz)), y = static_cast<int>(rd(c, sz));
++                    pass = kind == 4u ? x == y : kind == 5u ? x != y : kind == 6u ? x < y : x > y;
++                }
++                if (!pass) i += l2.a;
++            } else {
++                return;  // jokers: no pad state here
++            }
++            break;
++        }
++        case 0xE: {
++            const bool b8 = (p >> 24) == 0xE1u;
++            if ((arg >> 28) > 3u) return;
++            const u32 v = b8 ? p & 0xFFu : p & 0xFFFFu;
++            const bool passed = test(addr(arg & 0x0FFFFFFFu), b8 ? 1 : 2, v, arg >> 28);
++            if (cheat_logging)
++                std::fprintf(cheat_log(), "  condition at %08X wants %X, memory has %X: %s\n", addr(arg & 0x0FFFFFFFu), v,
++                             rd(addr(arg & 0x0FFFFFFFu), b8 ? 1 : 2), passed ? "passes" : "fails, skips the next lines");
++            if (!passed) i += (p >> 16) & (b8 ? 0xFFu : 0xFFFu);
++            break;
++        }
++        default: break;  // delay, PPSSPP's own codes: not supported
++        }
++    }
++}
++
++// Reads the file again when it is new or has changed on disk.
++void load_cheats() {
++    CheatFile &f = cheat_file();
++    std::error_code ec;
++    const std::filesystem::path path = cheats_path();
++    const auto stamp = std::filesystem::last_write_time(path, ec);
++    if (f.loaded && f.path == path && (ec || stamp == f.stamp)) return;
++    f = CheatFile{};
++    f.path = path;
++    f.loaded = true;
++    if (ec) return;
++    f.stamp = stamp;
++    std::ifstream in(path, std::ios::binary);
++    std::string line;
++    while (std::getline(in, line)) {
++        if (!line.empty() && line.back() == '\r') {
++            line.pop_back();
++            f.crlf = true;
++        }
++        if (cheat_head(line)) f.heads.push_back(f.lines.size());
++        f.lines.push_back(line);
++    }
++    parse_codes(f);
++}
++
++void save_cheats() {
++    CheatFile &f = cheat_file();
++    std::ofstream out(f.path, std::ios::binary | std::ios::trunc);
++    for (const std::string &line : f.lines) out << line << (f.crlf ? "\r\n" : "\n");
++    out.close();
++    std::error_code ec;
++    f.stamp = std::filesystem::last_write_time(f.path, ec);
++}
+ 
+ class Menu {
+ public:
+@@ -121,6 +380,11 @@ public:
+     // One frame; false once the menu closes.
+     bool frame();
+     [[nodiscard]] bool quit() const noexcept { return quit_; }
++    // Opens on the System page with the update question up.
++    void show_update() {
++        tab_ = 6;
++        update_open_ = true;
++    }
+ 
+ private:
+     enum class Confirm { None, Quit, Setup };
+@@ -131,7 +395,10 @@ private:
+     void tilt_controls();
+     void network();
+     void system();
++    void cheats();
++    void mods();
+     bool confirm_dialog();
++    bool update_dialog();
+ 
+     gpu::VulkanRenderer &renderer() { return Layer::get().renderer(); }
+ 
+@@ -144,6 +411,7 @@ private:
+     bool back_{};  // the back button was pressed this frame
+     Confirm confirm_{Confirm::None};
+     bool confirm_opened_{};  // the confirmation was on screen last frame
++    bool update_open_{};     // the update question is up
+     std::optional<input::Action> binding_;  // waiting for a key for this control
+ };
+ 
+@@ -165,12 +433,12 @@ bool Menu::frame() {
+     // Back closes the font list, or the save import and export, before it
+     // closes the menu.
+     const bool font_list_was_open = (tab_ == 0 && (font_list_open() || texture_pack_screen_open())) ||
+-                                    (tab_ == 4 && save_screen_open());
++                                    (tab_ == 6 && save_screen_open());
+     back_ = back || pad_back;
+ 
+     begin_panel("##menu", portablekit::game().project_name, paused_ ? "Paused" : "Running", true);
+-    static const char *const kTabs[] = {"Video", "Audio", "Controls", "Network", "System"};
+-    const bool switched = tab_bar(kTabs, 5, tab_) || first_frame_;
++    static const char *const kTabs[] = {"Video", "Audio", "Controls", "Network", "Cheats", "Mods", "System"};
++    const bool switched = tab_bar(kTabs, 7, tab_) || first_frame_;
+     first_frame_ = false;
+     begin_content();
+     if (switched) {
+@@ -182,10 +450,12 @@ bool Menu::frame() {
+     case 1: audio(); break;
+     case 2: controls(); break;
+     case 3: network(); break;
++    case 4: cheats(); break;
++    case 5: mods(); break;
+     default: system(); break;
+     }
+     begin_footer();
+-    if (tab_ == 4)
++    if (tab_ == 6)
+         hints({{Control::Confirm, "Select"}, {Control::Back, "Back"}, {Control::Tabs, "Section"},
+                {Control::Menu, "Resume"}});
+     else
+@@ -198,11 +468,14 @@ bool Menu::frame() {
+ 
+     if (confirm_ != Confirm::None) {
+         if ((back || pad_back) && confirm_opened_) confirm_ = Confirm::None;
++    } else if (update_open_) {
++        if ((back || pad_back) && updater::status().state != updater::State::Downloading) update_open_ = false;
+     } else if (!font_list_was_open && (((back || pad_back) && !was_editing_) || start)) {
+         close_ = true;
+     }
+     if (close_ && !quit_ && texture_pack_import_busy()) close_ = false;
+     if (!confirm_dialog()) return false;
++    if (!update_dialog()) return false;
+     was_editing_ = ImGui::IsAnyItemActive();
+     return !close_;
+ }
+@@ -1335,6 +1608,46 @@ void Menu::network() {
+     }
+ }
+ 
++void Menu::cheats() {
++    const std::lock_guard<std::mutex> lock(cheat_mutex());
++    load_cheats();
++    CheatFile &f = cheat_file();
++    section("Cheats");
++    if (button_row("Open the cheats file",
++                   {false, {}, std::string("Edit ") + portablekit::game().disc_id + ".ini in PSP/CHEATS, in PPSSPP's format."})) {
++        std::error_code ec;
++        std::filesystem::create_directories(f.path.parent_path(), ec);
++        if (!std::filesystem::exists(f.path, ec)) std::ofstream(f.path).put('\n');
++        open_folder(f.path);
++    }
++    if (button_row("Open the cheats folder", {false, {}, "Show the PSP/CHEATS folder."}))
++        open_folder(f.path.parent_path());
++    if (f.heads.empty()) {
++        info_row("Cheats", "None found");
++        return;
++    }
++    section("Codes");
++    for (std::size_t i = 0; i < f.heads.size(); ++i) {
++        std::string &line = f.lines[f.heads[i]];
++        std::string title = line.size() > 3 ? line.substr(3) : std::string();
++        title.erase(0, title.find_first_not_of(" \t"));
++        if (title.empty()) title = "Cheat " + std::to_string(i + 1);
++        ImGui::PushID(static_cast<int>(i));
++        if (toggle_row(title.c_str(), line[2] == '1')) {
++            line[2] = line[2] == '1' ? '0' : '1';
++            save_cheats();
++        }
++        ImGui::PopID();
++    }
++}
++
++void Menu::mods() {
++    section("Mods");
++    if (button_row("Open the mods folder", {false, {}, "Show the mods folder in the data folder."}))
++        open_folder(install::user_data_directory() / "mods");
++    for (void (*rows)() : mod_rows()) rows();
++}
++
+ void Menu::system() {
+     if (save_screen(back_)) {
+         if (take_restart_request()) {
+@@ -1398,13 +1711,29 @@ void Menu::system() {
+     if (!saved_log_path().empty()) info_row("Log", saved_log_path());
+ #else
+     if (button_row("Open the data folder", {false, {}, std::string("Show ") + portablekit::game().project_name + "'s data folder in the file manager."})) {
+-        if (!SDL_OpenURL(file_url(data_dir).c_str()))
+-            std::cout << "[menu] cannot open " << data_dir << ": " << SDL_GetError() << "\n";
++        open_folder(install::path_from_utf8(data_dir));
+     }
+ #endif
+     if (button_row("Set up game data again…",
+                    {false, {}, "Choose the disc image again, for example after moving it. The game closes first."}))
+         confirm_ = Confirm::Setup;
++    {
++        const updater::Status u = updater::status();
++        const bool newer = u.state == updater::State::Available || u.state == updater::State::Downloading ||
++                           u.state == updater::State::Ready || (u.state == updater::State::Failed && !u.latest.empty());
++        std::string label = newer ? "Update to " + u.latest + "…" : "Check for updates";
++        std::string note = u.state == updater::State::Checking    ? "Checking…"
++                           : u.state == updater::State::UpToDate  ? "Up to date"
++                           : u.state == updater::State::Failed && u.latest.empty() ? "Could not check: " + u.error
++                                                                                    : "";
++        RowOptions o{u.state == updater::State::Checking, note,
++                     "Looks for a newer release on GitHub. An update keeps your data and game folders: saves, "
++                     "settings, textures, cheats and the disc image are not touched."};
++        if (button_row(label.c_str(), o)) {
++            if (newer) update_open_ = true;
++            else updater::start_check();
++        }
++    }
+     if (button_row("Quit game", {false, {}, std::string("Close ") + portablekit::game().project_name + ". Progress since your last save is lost."},
+                    colors::kDanger))
+         confirm_ = Confirm::Quit;
+@@ -1413,7 +1742,7 @@ void Menu::system() {
+     save_rows();
+ 
+     section("About");
+-    info_row(portablekit::game().project_name, std::string(kBuildVersion));
++    info_row(portablekit::game().project_name, updater::local_version());
+     if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
+     info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
+     info_row("Data folder", data_dir);
+@@ -1466,6 +1795,57 @@ bool Menu::confirm_dialog() {
+     return keep_open;
+ }
+ 
++// The update question: what is new, then the download, then the install on the way out.
++bool Menu::update_dialog() {
++    if (!update_open_) return true;
++    if (!ImGui::IsPopupOpen("##update")) ImGui::OpenPopup("##update");
++    const ImGuiIO &io = ImGui::GetIO();
++    const float font = Layer::get().font_size();
++    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
++    ImGui::SetNextWindowSize({std::min(io.DisplaySize.x * 0.9f, font * 26.0f), 0.0f}, ImGuiCond_Always);
++    bool keep_open = true;
++    if (ImGui::BeginPopupModal("##update", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) {
++        const updater::Status u = updater::status();
++        heading("Update available");
++        paragraph(std::string(portablekit::game().project_name) + " " + u.latest + " is out; this is " +
++                      updater::local_version() + ". The game closes, installs the update and starts again. Your data "
++                      "and game folders (saves, settings, textures, cheats, the disc image) are not touched.",
++                  colors::kTextDim);
++        if (u.state == updater::State::Failed) paragraph("The update failed: " + u.error, colors::kDanger);
++        ImGui::Dummy({0.0f, font * 0.6f});
++        const float gap = font * 0.6f;
++        const float width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
++        if (u.state == updater::State::Downloading) {
++            progress_bar(u.progress, "Downloading");
++        } else if (u.state == updater::State::Ready) {
++            if (updater::launch_installer()) {
++                quit_ = true;
++                keep_open = false;
++            } else {
++                paragraph("The installer could not be started.", colors::kDanger);
++                if (big_button("Close", width)) update_open_ = false;
++            }
++        } else {
++            if (big_button(u.state == updater::State::Failed ? "Try again" : "Update now", width, true))
++                updater::start_download();
++            ImGui::SameLine(0.0f, gap);
++            if (big_button("Later", width)) update_open_ = false;
++            ImGui::SetItemDefaultFocus();
++            settings::Settings &s = settings::current();
++            if (toggle_row("Don't show this when the game starts", !s.update_notice,
++                           {false, {}, "Stops this question at start. Update to … in System still works."})) {
++                s.update_notice = !s.update_notice;
++                settings::save();
++            }
++        }
++        ImGui::Dummy({0.0f, font * 0.2f});
++        hints({{Control::Confirm, "Select"}, {Control::Back, "Later"}});
++        if (!update_open_ || !keep_open) ImGui::CloseCurrentPopup();
++        ImGui::EndPopup();
++    }
++    return keep_open;
++}
++
+ // Seconds the menu hint has left, or a negative number once it is gone.
+ double hint_seconds_left() {
+     static const Clock::time_point first_frame = Clock::now();
+@@ -1588,6 +1968,24 @@ void add_menu_rows(void (*rows)()) {
+     if (rows != nullptr) port_rows().push_back(rows);
+ }
+ 
++void apply_cheats(psprecomp::Runtime &runtime) {
++    const std::lock_guard<std::mutex> lock(cheat_mutex());
++    load_cheats();
++    const CheatFile &f = cheat_file();
++    for (std::size_t i = 0; i < f.heads.size(); ++i)
++        if (f.lines[f.heads[i]][2] == '1') {
++            static std::map<std::size_t, unsigned> runs;
++            cheat_logging = cheat_log() != nullptr && ++runs[i] <= 60u;
++            if (cheat_logging) std::fprintf(cheat_log(), "cheat %zu \"%s\" run %u\n", i, f.lines[f.heads[i]].c_str() + 3, runs[i]);
++            run_cheat(runtime.memory(), f.codes[i]);
++            if (cheat_logging) std::fflush(cheat_log());
++        }
++}
++
++void add_mod_rows(void (*rows)()) {
++    if (rows != nullptr) mod_rows().push_back(rows);
++}
++
+ void draw_over_game() {
+     Layer &layer = Layer::get();
+     if (!layer.attached()) return;
+@@ -1610,6 +2008,20 @@ void draw_over_game() {
+         layer.end_frame();
+         return;
+     }
++    // The update check starts with the first frame; a newer release is offered once per run, unless the player
++    // asked not to see it ("Don't show again").
++    static const bool update_check_started = [] {
++        updater::start_check();
++        return true;
++    }();
++    (void)update_check_started;
++    static bool update_offered = false;
++    if (!menu && !update_offered && settings::current().update_notice &&
++        updater::status().state == updater::State::Available) {
++        update_offered = true;
++        open_menu_over_game();
++        if (menu) menu->show_update();
++    }
+     const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
+     const bool overlay = network_overlay();
+     const bool touch = !menu && layer.renderer().touch_controls_visible();
+diff --git a/host/ui/save_screen.cpp b/host/ui/save_screen.cpp
+index 57c2b04..7baf4a0 100644
+--- a/host/ui/save_screen.cpp
++++ b/host/ui/save_screen.cpp
+@@ -16,6 +16,13 @@
+ 
+ #include <SDL3/SDL.h>
+ 
++#if defined(_WIN32)
++#define WIN32_LEAN_AND_MEAN
++#define NOMINMAX
++#include <windows.h>
++#include <shellapi.h>
++#endif
++
+ #include <cctype>
+ #include <chrono>
+ #include <cstdio>
+@@ -583,9 +590,18 @@ bool open_folder(const fs::path &folder) {
+     std::error_code ec;
+     fs::create_directories(folder, ec);
+     const std::string path = utf8(folder);
++#if defined(_WIN32)
++    // A file:// URL of a Windows path (drive letter, backslashes) is not one the shell takes; the shell opens
++    // the path itself, a folder in the file manager and a file in the program its type belongs to.
++    if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32)
++        return true;
++    std::cout << "[menu] cannot open " << path << "\n";
++    return false;
++#else
+     if (SDL_OpenURL(file_url(path).c_str())) return true;
+     std::cout << "[menu] cannot open " << path << ": " << SDL_GetError() << "\n";
+     return false;
++#endif
+ }
+ 
+ void save_rows() {
+diff --git a/host/ui/ui.hpp b/host/ui/ui.hpp
+index 20ce284..e69841f 100644
+--- a/host/ui/ui.hpp
++++ b/host/ui/ui.hpp
+@@ -8,6 +8,9 @@ struct ImFont;
+ // The port's own interface, drawn with Dear ImGui over the game's window: the
+ // in-game menu and the first-run setup screens. Only builds with the renderer
+ // have it.
++namespace psprecomp {
++class Runtime;
++}
+ namespace portablekit::gpu {
+ class VulkanRenderer;
+ }
+@@ -45,6 +48,13 @@ void add_game_overlay(bool (*visible)(), void (*draw)());
+ // leaves keys it does not know in settings.ini alone. "Restore video
+ // defaults" does not touch them.
+ void add_menu_rows(void (*rows)());
++// Cheats and mods of the port's own, on the menu's Mods page (after System):
++// `rows` is called each frame the page is shown and draws its rows as
++// add_menu_rows does. It keeps what they change itself.
++void add_mod_rows(void (*rows)());
++// Runs the cheats switched on in PSP/CHEATS/<disc id>.ini (PPSSPP's cwcheat
++// format) once per game frame, at the game's flip.
++void apply_cheats(psprecomp::Runtime &runtime);
+ // Where the game's 480x272 picture was last drawn, in ImGui's coordinates
+ // (window coordinates): a point (x, y) of the PSP's screen is at
+ // (left + x * width / 480, top + y * height / 272). The whole PSP screen
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+new file mode 100644
+index 0000000..d29549f
+--- /dev/null
++++ b/host/ui/updater.cpp
+@@ -0,0 +1,301 @@
++#include "ui/updater.hpp"
++
++#include "profile.hpp"
++#include "portablekit_version.hpp"
++
++#include <algorithm>
++#include <atomic>
++#include <cctype>
++#include <cstdint>
++#include <filesystem>
++#include <fstream>
++#include <functional>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++#if defined(_WIN32)
++#define WIN32_LEAN_AND_MEAN
++#define NOMINMAX
++#include <windows.h>
++#include <winhttp.h>
++#pragma comment(lib, "winhttp.lib")
++#endif
++
++namespace portablekit::ui::updater {
++namespace {
++
++constexpr const char *kLatestApi = "https://api.github.com/repos/LiinkPK/Dissidia012-PC/releases/latest";
++
++std::string kLocalVersion() {
++    const char *version = portablekit::game().release_version;
++    return version != nullptr && *version != '\0' ? version : portablekit::kBuildVersion;
++}
++
++std::mutex g_mutex;
++Status g_status;
++std::string g_zip_url;
++std::filesystem::path g_zip_path;
++
++void set_status(const std::function<void(Status &)> &change) {
++    const std::lock_guard<std::mutex> lock(g_mutex);
++    change(g_status);
++}
++
++std::vector<int> numbers(const std::string &text) {
++    std::vector<int> out;
++    std::size_t i = text.find_first_of("0123456789");
++    while (i != std::string::npos && i < text.size()) {
++        int value = 0;
++        while (i < text.size() && std::isdigit(static_cast<unsigned char>(text[i]))) value = value * 10 + (text[i++] - '0');
++        out.push_back(value);
++        if (i >= text.size() || text[i] != '.') break;
++        ++i;
++    }
++    return out;
++}
++
++// The text of a JSON string value for `key`, the first one after `from`; empty when absent. Enough for GitHub's
++// release record, whose strings these are.
++std::string json_string(const std::string &json, const std::string &key, std::size_t from = 0u) {
++    const std::size_t at = json.find("\"" + key + "\"", from);
++    if (at == std::string::npos) return {};
++    const std::size_t colon = json.find(':', at);
++    const std::size_t open = colon == std::string::npos ? colon : json.find('"', colon);
++    if (open == std::string::npos) return {};
++    std::string value;
++    for (std::size_t i = open + 1; i < json.size() && json[i] != '"'; ++i) {
++        if (json[i] == '\\' && i + 1 < json.size()) ++i;
++        value += json[i];
++    }
++    return value;
++}
++
++#if defined(_WIN32)
++std::wstring wide(const std::string &text) { return std::wstring(text.begin(), text.end()); }
++
++// GETs `url`; the body goes to `sink`, `total` is the length when the server says (else 0). False with the
++// reason in `error`.
++bool http_get(const std::string &url, const std::function<void(const char *, std::size_t)> &sink,
++              const std::function<void(std::uint64_t, std::uint64_t)> &progress, std::string &error) {
++    const std::wstring w = wide(url);
++    URL_COMPONENTSW parts{};
++    parts.dwStructSize = sizeof(parts);
++    wchar_t host[256]{}, path[2048]{};
++    parts.lpszHostName = host;
++    parts.dwHostNameLength = 256;
++    parts.lpszUrlPath = path;
++    parts.dwUrlPathLength = 2048;
++    if (!WinHttpCrackUrl(w.c_str(), 0, 0, &parts)) {
++        error = "bad address";
++        return false;
++    }
++    HINTERNET session = WinHttpOpen(L"Dissidia012-PC-updater", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
++                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
++    HINTERNET connection = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
++    HINTERNET request = connection ? WinHttpOpenRequest(connection, L"GET", path, nullptr, WINHTTP_NO_REFERER,
++                                                        WINHTTP_DEFAULT_ACCEPT_TYPES,
++                                                        parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)
++                                   : nullptr;
++    bool ok = false;
++    if (request && WinHttpSendRequest(request, L"Accept: application/vnd.github+json\r\n", (DWORD)-1L,
++                                      WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
++        WinHttpReceiveResponse(request, nullptr)) {
++        DWORD status = 0, size = sizeof(status);
++        WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
++                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX);
++        if (status != 200) {
++            error = "HTTP " + std::to_string(status);
++        } else {
++            wchar_t length_text[32]{};
++            size = sizeof(length_text);
++            std::uint64_t total = 0;
++            if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, length_text,
++                                    &size, WINHTTP_NO_HEADER_INDEX))
++                total = std::wcstoull(length_text, nullptr, 10);
++            std::vector<char> buffer(64u * 1024u);
++            std::uint64_t done = 0;
++            DWORD got = 0;
++            ok = true;
++            while (WinHttpReadData(request, buffer.data(), (DWORD)buffer.size(), &got) && got != 0) {
++                sink(buffer.data(), got);
++                done += got;
++                if (progress) progress(done, total);
++            }
++        }
++    } else if (error.empty()) {
++        error = "no connection";
++    }
++    if (request) WinHttpCloseHandle(request);
++    if (connection) WinHttpCloseHandle(connection);
++    if (session) WinHttpCloseHandle(session);
++    return ok;
++}
++
++void check_thread() {
++    std::string body, error;
++    const bool ok = http_get(kLatestApi, [&](const char *data, std::size_t n) { body.append(data, n); }, nullptr, error);
++    const std::string tag = ok ? json_string(body, "tag_name") : std::string();
++    if (tag.empty()) {
++        set_status([&](Status &s) {
++            s.state = State::Failed;
++            s.error = ok ? "no release found" : error;
++        });
++        return;
++    }
++    std::string page = json_string(body, "html_url");
++    // The first attached zip is the release's package.
++    std::string zip;
++    for (std::size_t at = body.find("browser_download_url"); at != std::string::npos;
++         at = body.find("browser_download_url", at + 1u)) {
++        const std::string url = json_string(body, "browser_download_url", at);
++        if (url.size() > 4u && url.compare(url.size() - 4u, 4u, ".zip") == 0) {
++            zip = url;
++            break;
++        }
++    }
++    {
++        const std::lock_guard<std::mutex> lock(g_mutex);
++        g_zip_url = zip;
++    }
++    set_status([&](Status &s) {
++        s.latest = tag;
++        s.page_url = page.empty() ? "https://github.com/LiinkPK/Dissidia012-PC/releases/latest" : page;
++        s.state = is_newer(tag, kLocalVersion()) ? State::Available : State::UpToDate;
++    });
++}
++#endif
++
++} // namespace
++
++bool is_newer(const std::string &latest, const std::string &local) {
++    // The numbers of the tag: "v1.0-8-g424ca06-dirty" is release 1.0 and some commits, so only "1.0" counts.
++    const std::vector<int> a = numbers(latest), b = numbers(local);
++    if (a.empty() || b.empty()) return false;
++    return std::lexicographical_compare(b.begin(), b.end(), a.begin(), a.end());
++}
++
++std::string local_version() { return kLocalVersion(); }
++
++void start_check() {
++#if defined(_WIN32)
++    {
++        const std::lock_guard<std::mutex> lock(g_mutex);
++        if (g_status.state == State::Checking || g_status.state == State::Downloading) return;
++        g_status = Status{};
++        g_status.state = State::Checking;
++    }
++    std::thread(check_thread).detach();
++#endif
++}
++
++Status status() {
++    const std::lock_guard<std::mutex> lock(g_mutex);
++    return g_status;
++}
++
++void start_download() {
++#if defined(_WIN32)
++    std::string url;
++    {
++        const std::lock_guard<std::mutex> lock(g_mutex);
++        if (g_status.state != State::Available && g_status.state != State::Failed) return;
++        url = g_zip_url;
++        g_status.state = State::Downloading;
++        g_status.progress = 0.0f;
++        g_status.error.clear();
++    }
++    std::thread([url] {
++        if (url.empty()) {
++            set_status([](Status &s) {
++                s.state = State::Failed;
++                s.error = "the release has no zip to download";
++            });
++            return;
++        }
++        std::error_code ec;
++        const std::filesystem::path zip = std::filesystem::temp_directory_path(ec) / "d012_update.zip";
++        std::string error;
++        bool ok = false;
++        {
++            std::ofstream out(zip, std::ios::binary | std::ios::trunc);
++            ok = out && http_get(url, [&](const char *data, std::size_t n) { out.write(data, static_cast<std::streamsize>(n)); },
++                                 [](std::uint64_t done, std::uint64_t total) {
++                                     if (total != 0u)
++                                         set_status([&](Status &s) { s.progress = static_cast<float>(done) / static_cast<float>(total); });
++                                 },
++                                 error);
++        }
++        if (ok) {
++            const std::lock_guard<std::mutex> lock(g_mutex);
++            g_zip_path = zip;
++            g_status.state = State::Ready;
++            g_status.progress = 1.0f;
++        } else {
++            std::filesystem::remove(zip, ec);
++            set_status([&](Status &s) {
++                s.state = State::Failed;
++                s.error = error.empty() ? "the download failed" : error;
++            });
++        }
++    }).detach();
++#endif
++}
++
++bool launch_installer() {
++#if defined(_WIN32)
++    std::filesystem::path zip;
++    {
++        const std::lock_guard<std::mutex> lock(g_mutex);
++        if (g_status.state != State::Ready) return false;
++        zip = g_zip_path;
++    }
++    wchar_t exe_buffer[MAX_PATH * 4]{};
++    GetModuleFileNameW(nullptr, exe_buffer, MAX_PATH * 4);
++    const std::filesystem::path exe = exe_buffer;
++    std::error_code ec;
++    const std::filesystem::path script = std::filesystem::temp_directory_path(ec) / "d012_update.ps1";
++    // Waits for the game to close, unpacks the zip, copies it over the game's folder except the player's own
++    // folders (data: saves, settings, textures, cheats; game: the disc image), then starts the game again.
++    // Whatever goes wrong is written to d012_update.log in the temp folder.
++    {
++        std::ofstream out(script, std::ios::trunc);
++        out << "param($ProcessId, $Zip, $Target, $Exe)\r\n"
++               "$log = Join-Path $env:TEMP 'd012_update.log'\r\n"
++               "try {\r\n"
++               "  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue\r\n"
++               "  $x = Join-Path $env:TEMP 'd012_update_files'\r\n"
++               "  if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Recurse -Force }\r\n"
++               "  Expand-Archive -LiteralPath $Zip -DestinationPath $x -Force\r\n"
++               "  $name = Split-Path $Exe -Leaf\r\n"
++               "  $src = (Get-ChildItem -LiteralPath $x -Recurse -Filter $name | Select-Object -First 1).DirectoryName\r\n"
++               "  if (-not $src) { throw 'the update has no ' + $name }\r\n"
++               "  robocopy $src $Target /E /XD data game /R:5 /W:1 | Out-Null\r\n"
++               "  if ($LASTEXITCODE -ge 8) { throw ('robocopy failed: ' + $LASTEXITCODE) }\r\n"
++               "  Remove-Item -LiteralPath $x, $Zip -Recurse -Force\r\n"
++               "} catch { $_ | Out-File -LiteralPath $log }\r\n"
++               "Start-Process -FilePath $Exe -WorkingDirectory $Target\r\n";
++        if (!out) return false;
++    }
++    const std::wstring command = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
++                                 script.wstring() + L"\" -ProcessId " + std::to_wstring(GetCurrentProcessId()) +
++                                 L" -Zip \"" + zip.wstring() + L"\" -Target \"" + exe.parent_path().wstring() +
++                                 L"\" -Exe \"" + exe.wstring() + L"\"";
++    std::vector<wchar_t> mutable_command(command.begin(), command.end());
++    mutable_command.push_back(L'\0');
++    STARTUPINFOW startup{};
++    startup.cb = sizeof(startup);
++    PROCESS_INFORMATION process{};
++    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS,
++                        nullptr, nullptr, &startup, &process))
++        return false;
++    CloseHandle(process.hProcess);
++    CloseHandle(process.hThread);
++    return true;
++#else
++    return false;
++#endif
++}
++
++} // namespace portablekit::ui::updater
+diff --git a/host/ui/updater.hpp b/host/ui/updater.hpp
+new file mode 100644
+index 0000000..efa0449
+--- /dev/null
++++ b/host/ui/updater.hpp
+@@ -0,0 +1,36 @@
++#pragma once
++
++#include <string>
++
++// Checks GitHub for a newer release and installs it over the program's own files. The check runs once, on a
++// thread of its own, and only reads the latest release's tag. An install downloads the release's zip, then a
++// script waits for the game to close and copies the zip's files over the game's folder, leaving the player's
++// own folders (data, game) alone. Windows only; elsewhere nothing is ever reported as available.
++namespace portablekit::ui::updater {
++
++enum class State { Idle, Checking, UpToDate, Available, Failed, Downloading, Ready };
++
++struct Status {
++    State state{State::Idle};
++    std::string latest;       // the newest release's tag, e.g. "v1.1"
++    std::string page_url;     // its page on GitHub
++    std::string error;
++    float progress{};         // 0 to 1 while downloading
++};
++
++// Starts the check; ignored while one or a download is running.
++void start_check();
++[[nodiscard]] Status status();
++// Downloads the release's zip on a thread of its own; State::Ready when it is done.
++void start_download();
++// Starts the script that installs the downloaded zip once this program has exited, then runs the game again.
++// The caller quits straight after. False when it cannot be started.
++bool launch_installer();
++
++[[nodiscard]] std::string local_version();
++
++// True when `latest` is a newer release than `local` (git describe text: "v1.0", "v1.0-8-g424ca06-dirty").
++// A build made after a release is not older than it.
++[[nodiscard]] bool is_newer(const std::string &latest, const std::string &local);
++
++} // namespace portablekit::ui::updater
+-- 
+2.54.0.windows.1
+

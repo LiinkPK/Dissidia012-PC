@@ -21,6 +21,7 @@
 #include "ui/ui.hpp"
 #endif
 
+#include <cstdint>
 #include <algorithm>
 #include <cctype>
 #include <cmath>

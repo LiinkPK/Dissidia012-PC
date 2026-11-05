@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(Dissidia012 VERSION 0.1.0 LANGUAGES CXX RC)
+project(Dissidia012 VERSION 0.1.0 LANGUAGES CXX)
+if(WIN32)
+    enable_language(RC)
+endif()
 
 set(PORTABLEKIT_ROOT "" CACHE PATH
     "Path to PortableKit source directory (e.g. path/to/Tenkawa/portablekit)")

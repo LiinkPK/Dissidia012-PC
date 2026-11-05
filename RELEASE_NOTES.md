@@ -5,7 +5,7 @@
 [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
 [![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
 
-**_v1.0.1 — Early BETA_**
+**_v1.0.2 — Early BETA_**
 
 </div>
 

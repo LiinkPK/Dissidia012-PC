@@ -16,6 +16,7 @@
 #include "psprecomp/elf32.hpp"
 #include "psprecomp/runtime.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>

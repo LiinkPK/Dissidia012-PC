@@ -1,0 +1,46 @@
+From e52bc34c2091cdc3e78715e8b1aafecadc5e2a69 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Sat, 31 Oct 2026 17:52:48 +0100
+Subject: [PATCH 70/74] Profile hook for an instruction the recompiled code
+ stopped at
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/overlays.cpp | 5 ++++-
+ host/profile.hpp  | 4 ++++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/host/overlays.cpp b/host/overlays.cpp
+index 4849a65..efd1b5f 100644
+--- a/host/overlays.cpp
++++ b/host/overlays.cpp
+@@ -348,7 +348,10 @@ bool missing_function_hook(Runtime &runtime, AllegrexContext &ctx, std::uint32_t
+ // Generated overlay code that no longer matches memory decodes as nonsense. If
+ // the slot really did change, drop the stale corpus and install the right one,
+ // then let the dispatch retry.
+-bool unsupported_instruction_hook(Runtime &runtime, AllegrexContext &, std::uint32_t pc, std::uint32_t) {
++bool unsupported_instruction_hook(Runtime &runtime, AllegrexContext &context, std::uint32_t pc,
++                                  std::uint32_t instruction) {
++    if (game().unsupported_instruction != nullptr && game().unsupported_instruction(runtime, context, pc, instruction))
++        return true;
+     const auto [slot_start, slot_end] = code_range_of(pc);
+     if (slot_start == 0u) return false;
+     (void)slot_end;
+diff --git a/host/profile.hpp b/host/profile.hpp
+index 7e9f848..a3e09f3 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -249,6 +249,10 @@ struct GameProfile {
+     // Called whenever the guest flushes the instruction cache, which is how it
+     // announces code it has just copied into memory. Null means no reaction.
+     void (*on_code_flushed)(psprecomp::Runtime &) = nullptr;
++    // Offered an instruction the recompiled code stopped at, before the overlay machinery looks at it. True:
++    // the game handled it (ran it itself and moved the program counter on). Null: nothing to offer.
++    bool (*unsupported_instruction)(psprecomp::Runtime &, psprecomp::AllegrexContext &, std::uint32_t pc,
++                                    std::uint32_t instruction) = nullptr;
+ 
+     // --- Window --------------------------------------------------------------
+     // Title shown on the window; null uses app_name.
+-- 
+2.54.0.windows.1
+

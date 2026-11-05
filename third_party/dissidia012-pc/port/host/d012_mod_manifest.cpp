@@ -8,6 +8,7 @@
 #include "d012_json.hpp"
 #include "d012_nintendo_stream.hpp"
 
+#include <cstdint>
 #include <algorithm>
 #include <array>
 #include <cctype>

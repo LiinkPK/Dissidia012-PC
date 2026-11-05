@@ -1,0 +1,93 @@
+From f6afbe9d71c7038582ed93362573f59513b98642 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Sat, 31 Oct 2026 17:51:34 +0100
+Subject: [PATCH 69/74] Keep what a game's own recompiled code needs:
+ force_import_stub, the direct-call target pc
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ include/psprecomp/corpus_abi.hpp |  3 +++
+ include/psprecomp/runtime.hpp    |  3 +++
+ src/runtime.cpp                  | 24 +++++++++++++++++++-----
+ 3 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/include/psprecomp/corpus_abi.hpp b/include/psprecomp/corpus_abi.hpp
+index 6cab8f9..0f7111a 100644
+--- a/include/psprecomp/corpus_abi.hpp
++++ b/include/psprecomp/corpus_abi.hpp
+@@ -350,6 +350,9 @@ public:
+             explicit DepthGuard(std::uint32_t &value) : depth(value) { ++depth; }
+             ~DepthGuard() { --depth; }
+         } guard(chain_depth_);
++        // Generated entry functions that dispatch on ctx.pc ignore the entry id, so
++        // ctx.pc must be the target or they exit at once.
++        if constexpr (DirectTargetPc != 0u) ctx.pc = DirectTargetPc;
+         if constexpr (DirectEntryId != 0u &&
+                       std::is_invocable_v<decltype(Function), CorpusRuntime &, AllegrexContext &, std::uint16_t,
+                                           AotFastView &>) {
+diff --git a/include/psprecomp/runtime.hpp b/include/psprecomp/runtime.hpp
+index 67a15ba..778b35c 100644
+--- a/include/psprecomp/runtime.hpp
++++ b/include/psprecomp/runtime.hpp
+@@ -72,6 +72,9 @@ public:
+     // interpreter. Returns false when the address already has a function, so
+     // an AOT build keeps the wrapper its own code registered.
+     bool register_import_stub(std::uint32_t address, std::string library, std::uint32_t nid);
++    // Like register_import_stub but overwrites any previously registered function.
++    // Used by game profiles to rebind nop AOT stubs to PortableKit's real HLE.
++    void force_import_stub(std::uint32_t address, std::string library, std::uint32_t nid);
+     [[nodiscard]] bool has_function(std::uint32_t address) const;
+     // The function registered at `address` now, or null: a port that puts a
+     // native replacement there can keep the recompiled function it replaces
+diff --git a/src/runtime.cpp b/src/runtime.cpp
+index 72c0ad7..a24b7e9 100644
+--- a/src/runtime.cpp
++++ b/src/runtime.cpp
+@@ -279,7 +279,15 @@ bool Runtime::invoke_chained_call(AllegrexContext &ctx, GuestMemory::AotFastView
+         const std::size_t index = static_cast<std::size_t>(delta) / 4u;
+         if (index >= direct_chainable_.size()) return false;
+         function = direct_chainable_[index];
+-        if (function == nullptr) return false;
++        if (function == nullptr) {
++            // HLE stub: registered in direct_functions_ but not direct_chainable_.
++            // Call it inline and return — it handles ctx.pc itself.
++            if (index < direct_functions_.size()) {
++                const RecompiledFunction hle_fn = direct_functions_[index];
++                if (hle_fn != nullptr) { hle_fn(*this, ctx); return !chain_context_invalidated_; }
++            }
++            return false;
++        }
+     }
+ 
+     const std::uint32_t target_pc = ctx.pc;
+@@ -571,6 +579,13 @@ bool Runtime::register_import_stub(std::uint32_t address, std::string library, s
+     return true;
+ }
+ 
++void Runtime::force_import_stub(std::uint32_t address, std::string library, std::uint32_t nid) {
++    if (address == 0u) return;
++    const std::string name = library + "::" + hex32(nid);
++    import_stubs()[address] = ImportStub{std::move(library), nid};
++    register_function(address, &call_import_stub, name);
++}
++
+ bool Runtime::has_function(std::uint32_t address) const { return lookup_function(address) != nullptr; }
+ 
+ Runtime::RecompiledFunction Runtime::registered_function(std::uint32_t address) const noexcept {
+@@ -1213,10 +1228,9 @@ const std::string &Runtime::stop_reason() const noexcept { return stop_reason_;
+ void Runtime::unsupported(std::uint32_t pc, std::uint32_t instruction, const std::string &reason) {
+     // Overlaid code can make a previously generated address invalid. Give the
+     // profile a chance to replace it and resume at the same guest PC.
+-    if (g_unsupported_hook != nullptr && g_unsupported_hook(*this, cpu_, pc, instruction)) {
+-        cpu_.pc = pc;
+-        return;
+-    }
++    // The hook may also run the instruction itself and move the program counter on.
++    cpu_.pc = pc;
++    if (g_unsupported_hook != nullptr && g_unsupported_hook(*this, cpu_, pc, instruction)) return;
+     stop("Unsupported Allegrex instruction " + hex32(instruction) + " at " + hex32(pc) + ": " + reason);
+ }
+ 
+-- 
+2.54.0.windows.1
+

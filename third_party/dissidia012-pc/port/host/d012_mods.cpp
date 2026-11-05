@@ -16,6 +16,7 @@
 #include "portablekit/hle_extension.hpp"
 #include "profile.hpp"
 
+#include <cstdint>
 #include <algorithm>
 #include <cctype>
 #include <charconv>

@@ -24,6 +24,7 @@
 
 #include "../decomp/pad_types.h"
 
+#include <cstdint>
 #include <array>
 #include <cmath>
 #include <cstdio>

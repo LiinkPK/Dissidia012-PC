@@ -5,6 +5,7 @@
 
 #include "d012_nintendo_stream.hpp"
 
+#include <cstdint>
 #include <algorithm>
 #include <cstring>
 #include <fstream>

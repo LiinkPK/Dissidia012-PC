@@ -25,7 +25,7 @@ namespace {
 
 // The version of this release, as its GitHub tag. Change it here for every release: the in-game update check
 // compares it with the newest release on https://github.com/LiinkPK/Dissidia012-PC/releases.
-constexpr const char *kReleaseVersion = "v1.0.1";
+constexpr const char *kReleaseVersion = "v1.0.2";
 
 // The game names its saves "ms0:/PSP/SAVEDATA/%s%s": the disc id followed by the slot.
 constexpr SaveFolder kSaveFolders[] = {

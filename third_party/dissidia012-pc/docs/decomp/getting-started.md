@@ -37,7 +37,7 @@ Windows tools are portable under `tools/local/`; Python packages are in `.venv/`
 | spimdisasm / rabbitizer | 1.42.4 / 1.16.2 |
 | Ghidra | 12.1.3, selected for Allegrex-extension compatibility |
 | ghidra-allegrex | v21.4 for Ghidra 12.1.3 |
-| Java | Eclipse Temurin JDK 21.0.12.1+1 |
+| Java | Eclipse Temurin JDK 21.0.22.1+1 |
 | PPSSPP | 1.20.4 Windows x64 |
 | Allegrex assembler / objcopy | Community Binutils 2.42 package from sotn-decomp |
 | MIPS linker | Ubuntu `binutils-mipsel-linux-gnu`, 2.42-2ubuntu1cross5 |

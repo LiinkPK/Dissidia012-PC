@@ -543,7 +543,7 @@ Housekeeping
 
 ---
 
-## Session 20 (01/11/2026)
+## Session 20 (01/11/2026), release v1.0.0
 
 **Result: the game is fully ported and playable (menus, battles, story mode, cutscenes, music, saves). The project is now a tweaking pass to make it a proper HD remaster: HUD downscaling, texture processing, better-looking menus, HD fonts and performance. Nothing below is a porting blocker.**
 
@@ -570,7 +570,7 @@ Other
 
 ---
 
-## Session 21 (02/11/2026 to 04/11/2026), release v1.0.1
+## Session 21-22 (02/11/2026 to 05/11/2026), release v1.0.2
 
 **Result: the HUD, the select screens, the text and the subtitles are now remastered; the next step is a 3D model on the select screen.**
 

@@ -31,6 +31,12 @@ namespace psprecomp
     extern std::uint64_t g_runtime_thread_switch_generation_fast;
 
 #if defined(_MSC_VER)
+#define PSPRECOMP_COMPILER_BARRIER() _ReadWriteBarrier()
+#else
+#define PSPRECOMP_COMPILER_BARRIER() asm volatile("" ::: "memory")
+#endif
+
+#if defined(_MSC_VER)
 #define PSPRECOMP_RUNTIME_FORCEINLINE __forceinline
 #define PSPRECOMP_RESTRICT __restrict
 #elif defined(__GNUC__) || defined(__clang__)
@@ -309,7 +315,7 @@ namespace psprecomp
             if constexpr (DirectTargetPc != 0u)
             {
                 ctx.pc = DirectTargetPc;
-                _ReadWriteBarrier();
+                PSPRECOMP_COMPILER_BARRIER();
             }
             if constexpr (DirectTargetPc != 0u)
             {
@@ -336,7 +342,7 @@ namespace psprecomp
                                 ctx.pc, static_cast<unsigned>(DirectTargetPc), static_cast<unsigned>(DirectEntryId));
                     std::fflush(stdout);
                 }
-                _ReadWriteBarrier(); // prevent LTCG from eliding ctx.gpr writes (ra, etc.) before the call
+                PSPRECOMP_COMPILER_BARRIER(); // prevent LTCG from eliding ctx.gpr writes (ra, etc.) before the call
                 if (shared_aot_mem != nullptr)
                 {
                     Function(*this, ctx, DirectEntryId, *shared_aot_mem);
@@ -350,12 +356,12 @@ namespace psprecomp
             else if constexpr (DirectEntryId != 0u &&
                                std::is_invocable_v<decltype(Function), Runtime &, AllegrexContext &, std::uint16_t>)
             {
-                _ReadWriteBarrier();
+                PSPRECOMP_COMPILER_BARRIER();
                 Function(*this, ctx, DirectEntryId);
             }
             else
             {
-                _ReadWriteBarrier();
+                PSPRECOMP_COMPILER_BARRIER();
                 Function(*this, ctx);
             }
 #if !defined(PSPRECOMP_AOT_PRODUCTION_FASTPATHS)

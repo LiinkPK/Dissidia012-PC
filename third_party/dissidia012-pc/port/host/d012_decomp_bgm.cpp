@@ -8,6 +8,7 @@
 
 #include "../decomp/bgm_types.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <vector>

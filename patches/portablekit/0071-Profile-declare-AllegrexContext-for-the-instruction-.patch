@@ -1,0 +1,26 @@
+From 34a9b7d87c7128bd7b54c91b4a182968f94a1d32 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Sat, 31 Oct 2026 18:09:17 +0100
+Subject: [PATCH 71/74] Profile: declare AllegrexContext for the instruction
+ hook
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/profile.hpp | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/host/profile.hpp b/host/profile.hpp
+index a3e09f3..a67ba31 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -20,6 +20,7 @@
+ #include <string_view>
+ 
+ namespace psprecomp {
++struct AllegrexContext;
+ class Elf32Image;
+ class Runtime;
+ } // namespace psprecomp
+-- 
+2.54.0.windows.1
+

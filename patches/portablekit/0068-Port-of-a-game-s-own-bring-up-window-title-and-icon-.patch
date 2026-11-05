@@ -1,0 +1,543 @@
+From b609810d88774bf74ec6fcc7ef500166d61b163f Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Sat, 31 Oct 2026 17:50:23 +0100
+Subject: [PATCH 68/74] Port of a game's own bring-up: window title and icon,
+ working directory, hooks
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/gpu/host_inflate.hpp         | 223 ++++++++++++++++++++++++++++++
+ host/gpu/png_decode.hpp           | 130 +++++++++++++++++
+ host/gpu/vulkan_renderer.cpp      |  17 ++-
+ host/hle/hle_common.hpp           |   1 +
+ host/hle/hle_io.cpp               |   3 +
+ host/hle/hle_system.cpp           |   1 +
+ host/profile.hpp                  |  17 +++
+ host/save_data/savedata_store.cpp |  26 +++-
+ 8 files changed, 415 insertions(+), 3 deletions(-)
+ create mode 100644 host/gpu/host_inflate.hpp
+ create mode 100644 host/gpu/png_decode.hpp
+
+diff --git a/host/gpu/host_inflate.hpp b/host/gpu/host_inflate.hpp
+new file mode 100644
+index 0000000..a21a45d
+--- /dev/null
++++ b/host/gpu/host_inflate.hpp
+@@ -0,0 +1,223 @@
++#pragma once
++
++// Minimal RFC 1950/1951 inflate for host buffers (used to decode replacement PNGs).
++// No external dependency; identical on every platform. Codes of up to kFastBits bits are decoded
++// with one table lookup from a 64-bit bit buffer; longer ones fall back to a canonical walk.
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <vector>
++
++namespace portablekit::gpu {
++
++class HostInflate {
++public:
++    // Inflates a zlib stream (2-byte header, adler ignored). False on malformed data.
++    static bool zlib(const std::uint8_t *in, std::size_t size, std::vector<std::uint8_t> &out) {
++        if (size < 2u) return false;
++        HostInflate s{in + 2u, size - 2u, out};
++        return s.run();
++    }
++
++private:
++    static constexpr int kFastBits = 10;
++
++    struct Huff {
++        std::array<std::uint16_t, 16> count{};
++        std::array<std::uint16_t, 288> symbol{};
++        // Indexed by the next kFastBits input bits: symbol | length << 9, 0 when the code is longer.
++        std::array<std::uint16_t, 1u << kFastBits> fast{};
++    };
++
++    HostInflate(const std::uint8_t *in, std::size_t size, std::vector<std::uint8_t> &out)
++        : in_(in), size_(size), out_(out) {}
++
++    const std::uint8_t *in_;
++    std::size_t size_;
++    std::vector<std::uint8_t> &out_;
++    std::size_t pos_{};
++    std::uint64_t buf_{};
++    int nbits_{};
++    bool error_{};
++
++    void refill() {
++        while (nbits_ <= 56 && pos_ < size_) {
++            buf_ |= static_cast<std::uint64_t>(in_[pos_++]) << nbits_;
++            nbits_ += 8;
++        }
++    }
++    std::uint32_t read(int n) {
++        if (n == 0) return 0u;
++        if (nbits_ < n) {
++            refill();
++            if (nbits_ < n) { error_ = true; return 0u; }
++        }
++        const auto v = static_cast<std::uint32_t>(buf_ & ((std::uint64_t{1} << n) - 1u));
++        buf_ >>= n;
++        nbits_ -= n;
++        return v;
++    }
++    int bit() { return static_cast<int>(read(1)); }
++
++    static void build(Huff &h, const std::uint8_t *lengths, int n) {
++        h.count.fill(0);
++        h.fast.fill(0);
++        for (int i = 0; i < n; ++i) ++h.count[lengths[i]];
++        h.count[0] = 0;
++        std::array<std::uint16_t, 16> offs{};
++        for (int l = 1; l < 15; ++l) offs[l + 1] = static_cast<std::uint16_t>(offs[l] + h.count[l]);
++        for (int i = 0; i < n; ++i)
++            if (lengths[i] != 0) h.symbol[offs[lengths[i]]++] = static_cast<std::uint16_t>(i);
++
++        // Canonical codes, MSB first; the stream delivers them bit-reversed.
++        std::array<std::uint32_t, 16> next{};
++        std::uint32_t code = 0;
++        for (int l = 1; l <= 15; ++l) {
++            code = (code + h.count[l - 1]) << 1;
++            next[l] = code;
++        }
++        for (int i = 0; i < n; ++i) {
++            const int len = lengths[i];
++            if (len == 0) continue;
++            const std::uint32_t c = next[len]++;
++            if (len > kFastBits) continue;
++            std::uint32_t reversed = 0;
++            for (int b = 0; b < len; ++b) reversed |= ((c >> b) & 1u) << (len - 1 - b);
++            for (std::uint32_t k = reversed; k < (1u << kFastBits); k += 1u << len)
++                h.fast[k] = static_cast<std::uint16_t>(i | (len << 9));
++        }
++    }
++
++    int decode_slow(const Huff &h) {
++        int code = 0, first = 0, index = 0;
++        for (int len = 1; len <= 15; ++len) {
++            code |= bit();
++            if (error_) return -1;
++            const int count = h.count[len];
++            if (code - count < first) return h.symbol[index + (code - first)];
++            index += count;
++            first = (first + count) << 1;
++            code <<= 1;
++        }
++        return -1;
++    }
++
++    int decode(const Huff &h) {
++        if (nbits_ < 15) refill();
++        const std::uint16_t entry = h.fast[buf_ & ((1u << kFastBits) - 1u)];
++        if (entry != 0u) {
++            const int len = entry >> 9;
++            if (len <= nbits_) {
++                buf_ >>= len;
++                nbits_ -= len;
++                return entry & 511;
++            }
++        }
++        return decode_slow(h);
++    }
++
++    bool codes(const Huff &lit, const Huff &dist) {
++        static const std::uint16_t lbase[] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
++                                              35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
++        static const std::uint8_t lext[] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
++                                            3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
++        static const std::uint16_t dbase[] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129,
++                                              193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097,
++                                              6145, 8193, 12289, 16385, 24577};
++        static const std::uint8_t dext[] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6,
++                                            6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
++        for (;;) {
++            const int sym = decode(lit);
++            if (sym < 0 || error_) return false;
++            if (sym < 256) { out_.push_back(static_cast<std::uint8_t>(sym)); continue; }
++            if (sym == 256) return true;
++            const int li = sym - 257;
++            if (li >= 29) return false;
++            const std::size_t len = lbase[li] + read(lext[li]);
++            const int ds = decode(dist);
++            if (ds < 0 || ds >= 30) return false;
++            const std::size_t d = dbase[ds] + read(dext[ds]);
++            if (error_ || d > out_.size()) return false;
++            const std::size_t old = out_.size();
++            out_.resize(old + len);
++            std::uint8_t *dst = out_.data() + old;
++            const std::uint8_t *src = dst - d;
++            if (d >= len) std::memcpy(dst, src, len);
++            else for (std::size_t i = 0; i < len; ++i) dst[i] = src[i];   // overlapping run
++        }
++    }
++
++    bool stored() {
++        // Drop the bits left in the current byte, then give the whole bytes still buffered back.
++        buf_ >>= nbits_ % 8;
++        nbits_ -= nbits_ % 8;
++        pos_ -= static_cast<std::size_t>(nbits_ / 8);
++        buf_ = 0;
++        nbits_ = 0;
++        if (pos_ + 4u > size_) return false;
++        const std::size_t len = in_[pos_] | (in_[pos_ + 1] << 8);
++        pos_ += 4u;
++        if (pos_ + len > size_) return false;
++        out_.insert(out_.end(), in_ + pos_, in_ + pos_ + len);
++        pos_ += len;
++        return true;
++    }
++
++    bool fixed() {
++        std::uint8_t l[288];
++        for (int i = 0; i < 144; ++i) l[i] = 8;
++        for (int i = 144; i < 256; ++i) l[i] = 9;
++        for (int i = 256; i < 280; ++i) l[i] = 7;
++        for (int i = 280; i < 288; ++i) l[i] = 8;
++        Huff lit, dist;
++        build(lit, l, 288);
++        std::uint8_t d[30];
++        for (auto &x : d) x = 5;
++        build(dist, d, 30);
++        return codes(lit, dist);
++    }
++
++    bool dynamic() {
++        static const std::uint8_t order[19] = {16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15};
++        const int nlen = static_cast<int>(read(5)) + 257, ndist = static_cast<int>(read(5)) + 1,
++                  ncode = static_cast<int>(read(4)) + 4;
++        if (nlen > 286 || ndist > 30) return false;
++        std::uint8_t lengths[320] = {};
++        for (int i = 0; i < ncode; ++i) lengths[order[i]] = static_cast<std::uint8_t>(read(3));
++        Huff cl;
++        build(cl, lengths, 19);
++        std::uint8_t all[320] = {};
++        int i = 0;
++        while (i < nlen + ndist) {
++            const int sym = decode(cl);
++            if (sym < 0) return false;
++            if (sym < 16) { all[i++] = static_cast<std::uint8_t>(sym); continue; }
++            int rep, val = 0;
++            if (sym == 16) { if (i == 0) return false; val = all[i - 1]; rep = 3 + static_cast<int>(read(2)); }
++            else if (sym == 17) rep = 3 + static_cast<int>(read(3));
++            else rep = 11 + static_cast<int>(read(7));
++            if (i + rep > nlen + ndist) return false;
++            while (rep-- > 0) all[i++] = static_cast<std::uint8_t>(val);
++        }
++        Huff lit, dist;
++        build(lit, all, nlen);
++        build(dist, all + nlen, ndist);
++        return codes(lit, dist);
++    }
++
++    bool run() {
++        int last;
++        do {
++            last = bit();
++            const std::uint32_t type = read(2);
++            if (error_) return false;
++            const bool ok = type == 0u ? stored() : type == 1u ? fixed() : type == 2u ? dynamic() : false;
++            if (!ok) return false;
++        } while (last == 0);
++        return true;
++    }
++};
++
++} // namespace portablekit::gpu
+diff --git a/host/gpu/png_decode.hpp b/host/gpu/png_decode.hpp
+new file mode 100644
+index 0000000..895d36e
+--- /dev/null
++++ b/host/gpu/png_decode.hpp
+@@ -0,0 +1,130 @@
++#pragma once
++
++#include "host_inflate.hpp"
++
++#include <algorithm>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <string>
++#include <vector>
++
++namespace portablekit::gpu {
++
++// Decodes a non-interlaced PNG file into RGBA8888 (one std::uint32_t per texel, red in
++// the low byte, matching decode_texture). Returns false on anything it does not handle.
++inline bool decode_png_bytes(const std::uint8_t *f, std::size_t fs, std::uint32_t &width, std::uint32_t &height,
++                             std::vector<std::uint32_t> &pixels) {
++    static const std::uint8_t sig[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
++    if (fs < 33u || std::memcmp(f, sig, 8) != 0) return false;
++
++    auto be32 = [&](std::size_t p) {
++        return (static_cast<std::uint32_t>(f[p]) << 24) | (static_cast<std::uint32_t>(f[p + 1]) << 16) |
++               (static_cast<std::uint32_t>(f[p + 2]) << 8) | f[p + 3];
++    };
++    std::uint32_t w = 0, h = 0;
++    int depth = 0, ctype = 0;
++    std::vector<std::uint8_t> plte, trns, idat;
++    for (std::size_t p = 8; p + 12u <= fs;) {
++        const std::uint32_t len = be32(p);
++        const char *type = reinterpret_cast<const char *>(&f[p + 4]);
++        const std::size_t data = p + 8u;
++        if (data + len + 4u > fs) return false;
++        if (!std::memcmp(type, "IHDR", 4)) {
++            w = be32(data); h = be32(data + 4);
++            depth = f[data + 8]; ctype = f[data + 9];
++            if (f[data + 12] != 0) return false;   // interlaced
++        } else if (!std::memcmp(type, "PLTE", 4)) plte.assign(&f[data], &f[data] + len);
++        else if (!std::memcmp(type, "tRNS", 4)) trns.assign(&f[data], &f[data] + len);
++        else if (!std::memcmp(type, "IDAT", 4)) idat.insert(idat.end(), &f[data], &f[data] + len);
++        else if (!std::memcmp(type, "IEND", 4)) break;
++        p = data + len + 4u;
++    }
++    if (w == 0 || h == 0 || w > 16384u || h > 16384u) return false;
++    int channels = 0;
++    switch (ctype) { case 0: channels = 1; break; case 2: channels = 3; break; case 3: channels = 1; break;
++                     case 4: channels = 2; break; case 6: channels = 4; break; default: return false; }
++    if (depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16) return false;
++    if (ctype == 3 && plte.empty()) return false;
++
++    std::vector<std::uint8_t> raw;
++    raw.reserve(static_cast<std::size_t>(w) * h * channels * (depth == 16 ? 2 : 1) + h);
++    if (!HostInflate::zlib(idat.data(), idat.size(), raw)) return false;
++
++    const std::size_t bpp = std::max<std::size_t>(1u, static_cast<std::size_t>(channels * depth) / 8u);
++    const std::size_t stride = (static_cast<std::size_t>(w) * channels * depth + 7u) / 8u;
++    if (raw.size() < (stride + 1u) * h) return false;
++
++    std::vector<std::uint8_t> img(stride * h);
++    for (std::uint32_t y = 0; y < h; ++y) {
++        const std::uint8_t ft = raw[y * (stride + 1u)];
++        const std::uint8_t *src = &raw[y * (stride + 1u) + 1u];
++        std::uint8_t *cur = &img[y * stride];
++        const std::uint8_t *up = y ? &img[(y - 1u) * stride] : nullptr;
++        for (std::size_t x = 0; x < stride; ++x) {
++            const int a = x >= bpp ? cur[x - bpp] : 0;
++            const int b = up ? up[x] : 0;
++            const int c = (up && x >= bpp) ? up[x - bpp] : 0;
++            int v = src[x];
++            switch (ft) {
++            case 1: v += a; break;
++            case 2: v += b; break;
++            case 3: v += (a + b) / 2; break;
++            case 4: {
++                const int pp = a + b - c, pa = std::abs(pp - a), pb = std::abs(pp - b), pc = std::abs(pp - c);
++                v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
++                break;
++            }
++            default: break;
++            }
++            cur[x] = static_cast<std::uint8_t>(v);
++        }
++    }
++
++    pixels.assign(static_cast<std::size_t>(w) * h, 0u);
++    auto sample = [&](const std::uint8_t *row, std::size_t i) -> int {   // i-th sample of the row, scaled to 8 bits
++        if (depth == 8) return row[i];
++        if (depth == 16) return row[i * 2];
++        const int per = 8 / depth, shift = 8 - depth * (static_cast<int>(i % per) + 1), mask = (1 << depth) - 1;
++        return (row[i / per] >> shift) & mask;
++    };
++    for (std::uint32_t y = 0; y < h; ++y) {
++        const std::uint8_t *row = &img[y * stride];
++        for (std::uint32_t x = 0; x < w; ++x) {
++            int r, g, b, a = 255;
++            const std::size_t i = static_cast<std::size_t>(x) * channels;
++            if (ctype == 3) {
++                const int idx = sample(row, x);
++                if (static_cast<std::size_t>(idx) * 3u + 2u >= plte.size()) return false;
++                r = plte[idx * 3]; g = plte[idx * 3 + 1]; b = plte[idx * 3 + 2];
++                if (static_cast<std::size_t>(idx) < trns.size()) a = trns[idx];
++            } else if (ctype == 0 || ctype == 4) {
++                int v = sample(row, i);
++                if (depth < 8) v = v * 255 / ((1 << depth) - 1);
++                r = g = b = v;
++                if (ctype == 4) a = sample(row, i + 1);
++            } else {
++                r = sample(row, i); g = sample(row, i + 1); b = sample(row, i + 2);
++                if (ctype == 6) a = sample(row, i + 3);
++            }
++            pixels[static_cast<std::size_t>(y) * w + x] = static_cast<std::uint32_t>(r) |
++                static_cast<std::uint32_t>(g) << 8 | static_cast<std::uint32_t>(b) << 16 |
++                static_cast<std::uint32_t>(a) << 24;
++        }
++    }
++    width = w;
++    height = h;
++    return true;
++}
++
++inline bool decode_png_file(const std::string &path, std::uint32_t &width, std::uint32_t &height,
++                            std::vector<std::uint32_t> &pixels) {
++    std::ifstream file(path, std::ios::binary);
++    if (!file) return false;
++    const std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(file)), {});
++    return decode_png_bytes(bytes.data(), bytes.size(), width, height, pixels);
++}
++
++} // namespace portablekit::gpu
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index e4d7e11..a17b6cb 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -11,6 +11,7 @@
+ #include "replacement_textures.hpp"
+ #include "texture_decode.hpp"
+ #include "triangle_indices.hpp"
++#include "png_decode.hpp"
+ #include "texture_pack.hpp"
+ #include "texture_pack_import.hpp"
+ 
+@@ -73,7 +74,8 @@ std::atomic<VulkanRenderer *> g_presenting{};
+ } // namespace
+ 
+ std::string default_window_title() {
+-    std::string title = portablekit::game().app_name;
++    std::string title = portablekit::game().window_title != nullptr ? portablekit::game().window_title
++                                                                    : portablekit::game().app_name;
+     if (*kBuildLabel != '\0') title += std::string(" (") + kBuildLabel + ")";
+     return title;
+ }
+@@ -2874,6 +2876,19 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+         error = std::string("SDL_CreateWindow failed: ") + SDL_GetError();
+         return false;
+     }
++    if (portablekit::game().window_icon_png != nullptr) {
++        std::uint32_t icon_width = 0, icon_height = 0;
++        std::vector<std::uint32_t> icon_pixels;
++        if (decode_png_bytes(portablekit::game().window_icon_png, portablekit::game().window_icon_png_size,
++                             icon_width, icon_height, icon_pixels)) {
++            if (SDL_Surface *icon = SDL_CreateSurfaceFrom(static_cast<int>(icon_width), static_cast<int>(icon_height),
++                                                          SDL_PIXELFORMAT_RGBA32, icon_pixels.data(),
++                                                          static_cast<int>(icon_width * 4u))) {
++                SDL_SetWindowIcon(impl.window, icon);
++                SDL_DestroySurface(icon);
++            }
++        }
++    }
+ 
+     std::uint32_t extension_count = 0u;
+     const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&extension_count);
+diff --git a/host/hle/hle_common.hpp b/host/hle/hle_common.hpp
+index d3c82a6..db62ae0 100644
+--- a/host/hle/hle_common.hpp
++++ b/host/hle/hle_common.hpp
+@@ -110,6 +110,7 @@ void log_once(const std::string &key, const std::string &message);
+ void register_threadman(HleRegistrar &hle);
+ void register_sysmem(HleRegistrar &hle);
+ void register_io(HleRegistrar &hle, const std::filesystem::path &disc_image, const std::filesystem::path &memory_stick);
++void set_io_working_directory(const std::string &path);
+ void register_system(HleRegistrar &hle);
+ void register_media(HleRegistrar &hle);
+ void register_atrac(HleRegistrar &hle);
+diff --git a/host/hle/hle_io.cpp b/host/hle/hle_io.cpp
+index bbd0c35..9594373 100644
+--- a/host/hle/hle_io.cpp
++++ b/host/hle/hle_io.cpp
+@@ -806,6 +806,9 @@ void register_async_io(HleRegistrar &hle) {
+ 
+ } // namespace
+ 
++// The directory a path without a device is relative to, as if the game had called sceIoChdir.
++void set_io_working_directory(const std::string &path) { io().current_directory = path; }
++
+ void register_io(HleRegistrar &hle, const std::filesystem::path &disc_image, const std::filesystem::path &memory_stick) {
+     if (!disc_image.empty()) io().disc = std::make_unique<IsoImage>(disc_image);
+     // The image into the file cache while the game boots
+diff --git a/host/hle/hle_system.cpp b/host/hle/hle_system.cpp
+index cf09b75..823fd37 100644
+--- a/host/hle/hle_system.cpp
++++ b/host/hle/hle_system.cpp
+@@ -53,6 +53,7 @@ void register_utils(HleRegistrar &hle) {
+     const auto flush_icache = [](Runtime &rt, AllegrexContext &ctx) {
+         forget_unmatched_overlays();
+         revalidate_overlays(rt);
++        if (game().on_code_flushed != nullptr) game().on_code_flushed(rt);
+         kernel().finish(ctx, 0u);
+     };
+     hle.add("UtilsForUser", "sceKernelIcacheInvalidateAll", flush_icache);
+diff --git a/host/profile.hpp b/host/profile.hpp
+index ddcf7eb..7e9f848 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -246,6 +246,23 @@ struct GameProfile {
+     // Called once the executable is in memory and before it runs, for the
+     // per-game patches that have no better home. Null means there are none.
+     void (*patch_loaded_image)(psprecomp::Runtime &, const psprecomp::Elf32Image &) = nullptr;
++    // Called whenever the guest flushes the instruction cache, which is how it
++    // announces code it has just copied into memory. Null means no reaction.
++    void (*on_code_flushed)(psprecomp::Runtime &) = nullptr;
++
++    // --- Window --------------------------------------------------------------
++    // Title shown on the window; null uses app_name.
++    const char *window_title = nullptr;
++    // A PNG (any size, square is best) embedded in the program and used as the window icon.
++    const unsigned char *window_icon_png = nullptr;
++    std::size_t window_icon_png_size = 0;
++
++    // --- Renderer ------------------------------------------------------------
++    // The game draws one frame's layers into both of its display buffers (one pass keeps the
++    // buffer it was first given while the others follow the flip), so only half of each frame's
++    // layers reach the screen. With this set, a frame's draws into either display buffer, and
++    // reads from it, all go to the buffer the frame's first draw used.
++    bool alias_display_buffers = false;
+ 
+     // --- The game's camera and view ----------------------------------------
+     // Drives the game's own camera from what the player asks of it
+diff --git a/host/save_data/savedata_store.cpp b/host/save_data/savedata_store.cpp
+index f09c4fa..1856fde 100644
+--- a/host/save_data/savedata_store.cpp
++++ b/host/save_data/savedata_store.cpp
+@@ -3,9 +3,11 @@
+ #include "save_data/param_sfo.hpp"
+ #include "crypto_keys.hpp"
+ #include "save_data/savedata_crypto.hpp"
++#include "profile.hpp"
+ 
+ #include <algorithm>
+ #include <chrono>
++#include <cstdio>
+ #include <cstring>
+ #include <fstream>
+ #include <random>
+@@ -117,8 +119,28 @@ LoadResult load_save(const std::filesystem::path &memory_stick, const SaveFiles
+         }
+         if (const auto expected = listed_hash(*sfo, files.file_name);
+             expected && *expected != data_file_hash(*file, *mode, key)) {
+-            result.reason = files.file_name + " does not match its hash in PARAM.SFO";
+-            return result;
++            // A file saved by an emulator can be stored at its real length. The utility hashes the
++            // buffer padded to 16 bytes, where the padding is the encryption of zero bytes: the
++            // keystream, which is what decrypting zero padding yields.
++            bool padded_match = false;
++            if (file->size() % 16u != 0u && file->size() > kEncryptedHeaderSize) {
++                std::vector<std::uint8_t> padded(*file);
++                padded.resize((file->size() + 15u) & ~std::size_t{15u}, 0u);
++                if (const auto stream = decrypt_data(padded, *mode, key)) {
++                    for (std::size_t i = file->size(); i < padded.size(); ++i)
++                        padded[i] = (*stream)[i - kEncryptedHeaderSize];
++                    padded_match = *expected == data_file_hash(padded, *mode, key);
++                }
++            }
++            if (!padded_match) {
++                // <prefix>_SAVE_IGNORE_HASH=1 loads the file anyway, for saves made elsewhere.
++                if (portablekit::env("SAVE_IGNORE_HASH") == nullptr) {
++                    result.reason = files.file_name + " does not match its hash in PARAM.SFO";
++                    return result;
++                }
++                std::fprintf(stderr, "[savedata] %s does not match its hash in PARAM.SFO; loading it anyway\n",
++                             files.file_name.c_str());
++            }
+         }
+         auto plain = decrypt_data(*file, *mode, key);
+         if (!plain) {
+-- 
+2.54.0.windows.1
+

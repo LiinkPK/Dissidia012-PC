@@ -4,6 +4,7 @@
 
 #include "d012_json.hpp"
 
+#include <cstdint>
 #include <charconv>
 #include <cmath>
 #include <cstdio>

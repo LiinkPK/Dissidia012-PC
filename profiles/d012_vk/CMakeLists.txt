@@ -6,12 +6,15 @@ cmake_minimum_required(VERSION 3.20)
 # built from that port's host code, which is credited and MIT-licensed (third_party/dissidia012-pc/LICENSE).
 # The game's generated code and overlay libraries are made from the player's own disc and never committed; they
 # live in work/ (generated/ and overlays/).
-project(Dissidia012 VERSION 0.2.0 LANGUAGES C CXX RC)
+project(Dissidia012 VERSION 0.2.0 LANGUAGES C CXX)
+if(WIN32)
+    enable_language(RC)
+endif()
 
-set(PORTABLEKIT_ROOT "" CACHE PATH
+set(PORTABLEKIT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../third_party/PortableKit-d012" CACHE PATH
     "PortableKit source directory (the d012 branch: PortableKit plus the dissidia012-pc patches)")
 if(NOT PORTABLEKIT_ROOT OR NOT EXISTS "${PORTABLEKIT_ROOT}/cmake/PortableKit.cmake")
-    message(FATAL_ERROR "Set PORTABLEKIT_ROOT to the PortableKit source directory")
+    message(FATAL_ERROR "third_party/PortableKit-d012 is missing: run scripts/setup_portablekit.ps1 (Windows) or scripts/setup_portablekit.sh (Linux, macOS) first, or set PORTABLEKIT_ROOT")
 endif()
 
 get_filename_component(D012_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
@@ -31,10 +34,22 @@ add_subdirectory("${PORTABLEKIT_ROOT}" portablekit)
 # portablekit_add_game() reads <profile>/config/nids.csv for NIDs the framework does not name.
 configure_file("${D012_PORT_DIR}/config/nids.csv" "${D012_WORK_DIR}/config/nids.csv" COPYONLY)
 
+# Local versus and split screen (the open-source port's own work) are left out of the release build. Configure a
+# separate build folder with -DD012_SPLITSCREEN=ON to build them in; the normal build is not touched.
+option(D012_SPLITSCREEN "Build local versus and split screen in" OFF)
+if(D012_SPLITSCREEN)
+    set(D012_VERSUS_SOURCES
+        "${D012_PORT_DIR}/host/d012_split_view.cpp"
+        "${D012_PORT_DIR}/host/d012_versus.cpp"
+        "${D012_PORT_DIR}/host/d012_versus_menu.cpp")
+else()
+    set(D012_VERSUS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_versus.cpp")
+endif()
+
 portablekit_add_game(d012_native
     PROFILE_DIR "${D012_WORK_DIR}"
     SOURCES "${D012_PROFILE_HOST}/d012_profile.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_versus.cpp"
+            ${D012_VERSUS_SOURCES}
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_hud_layout.cpp"
             "${D012_PORT_DIR}/host/d012_hle.cpp"
             "${D012_PORT_DIR}/host/d012_prx.cpp"
@@ -46,6 +61,7 @@ portablekit_add_game(d012_native
             "${D012_PORT_DIR}/host/d012_decomp_harness.cpp"
             "${D012_PORT_DIR}/host/d012_decomp_bgm.cpp"
             "${D012_PORT_DIR}/host/d012_decomp_pad.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_bloom.cpp"
             "${D012_PORT_DIR}/host/d012_bgm_playlist.cpp"
             "${D012_PORT_DIR}/host/d012_camera.cpp"
             "${D012_PORT_DIR}/host/d012_loading_layout.cpp"
@@ -84,7 +100,10 @@ foreach(meta IN LISTS D012_OVERLAY_META)
         list(APPEND D012_OVERLAY_TARGETS overlay_${overlay_name})
     endif()
 endforeach()
-if(D012_OVERLAY_TARGETS)
+# Only for multi-config generators (Visual Studio, Xcode), which write overlays to bin/overlays/<config>.
+# Single-config generators (Ninja, Makefiles) already write them to bin/overlays.
+get_property(D012_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(D012_OVERLAY_TARGETS AND D012_MULTI_CONFIG)
     add_custom_target(d012_copy_overlays ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:d012_native>/overlays"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/bin/overlays/$<CONFIG>" "$<TARGET_FILE_DIR:d012_native>/overlays"

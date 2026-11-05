@@ -47,7 +47,7 @@ third_party/dissidia012-pc/  The open-source port by VCKing101 (MIT), kept as a 
 ## Requirements
 
 - CMake 3.20+ and a C++20 compiler (MSVC on Windows), the Vulkan SDK and SDL3 3.2
-- The `d012` branch of PortableKit with this project's changes (branch `tenkawa-merge`); pass its folder as `-DPORTABLEKIT_ROOT=<path>`
+- PortableKit (TeamGDB, MIT): not stored here. `scripts/setup_portablekit.ps1` (Windows) or `.sh` (Linux, macOS) clones it and applies the patches of the upstream port (`third_party/dissidia012-pc/port/portablekit-patches`) and this project's (`patches/portablekit`)
 - Your own ISO: `ULES01505` (European) or `ULUS10566` (North American)
 
 ---
@@ -55,7 +55,8 @@ third_party/dissidia012-pc/  The open-source port by VCKing101 (MIT), kept as a 
 ## Build and run
 
 ```powershell
-cmake -S profiles/d012_vk -B out/d012_vk -DPORTABLEKIT_ROOT=<PortableKit folder> -DSDL3_DIR=<SDL3 folder>/cmake
+.\scripts\setup_portablekit.ps1      # once: fetches and patches PortableKit
+cmake -S profiles/d012_vk -B out/d012_vk -DSDL3_DIR=<SDL3 folder>/cmake
 cmake --build out/d012_vk --config Release
 ```
 
@@ -67,7 +68,7 @@ To make the release zip from a finished build: `.\scripts\make_release.ps1 -Vers
 
 ## How it works
 
-The executable is recompiled **unmodified**: the code in `profiles/d012_pk/work/generated/` comes straight from the decrypted `EBOOT.BIN` and carries no hand patches or forged game state. The three code overlays (menu, battle, extra) and the font and anti-cheat modules are recompiled into libraries in `profiles/d012_pk/work/overlays/`, loaded when the game loads them. Every PSP import is bound to PortableKit's HLE. `profiles/d012/host/d012_profile.cpp` holds the game's identity, saves, overlay window, window title and icon, and the autosave-notice skip; the port's host code in `third_party/dissidia012-pc/port/host` supplies the rest, without its local versus.
+The executable is recompiled **unmodified**: the code in `profiles/d012_pk/work/generated/` comes straight from the decrypted `EBOOT.BIN` and carries no hand patches or forged game state. The three code overlays (menu, battle, extra) and the font and anti-cheat modules are recompiled into libraries in `profiles/d012_pk/work/overlays/`, loaded when the game loads them. Every PSP import is bound to PortableKit's HLE. `profiles/d012/host/d012_profile.cpp` holds the game's identity, saves, overlay window, window title and icon, and the autosave-notice skip; the port's host code in `third_party/dissidia012-pc/port/host` supplies the rest.
 
 ---
 
@@ -83,7 +84,7 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 
 ## Status
 
-**Version v1.0.1.** **The game is fully ported and playable**: menus, battles with shadows and effects, story mode, cutscenes, music, saves and the HD texture pack all work in the native build. What is left is not porting but tweaking it into a proper HD remaster:
+**Version v1.0.2.** **The game is fully ported and playable**: menus, battles with shadows and effects, story mode, cutscenes, music, saves and the HD texture pack all work in the native build. What is left is not porting but tweaking it into a proper HD remaster:
 - **HUD downscaling and placement:** done in the game's own layout data (`profiles/d012_vk/d012_hud_layout.cpp`; Video menu: HUD size, lift, side space). The shrink still reaches some story mode screens (dialogue boxes, the "Skip cutscene?" prompt, cutscene images); that is being fixed.
 - **HD text:** done. Each line of text is drawn again from the TrueType font at 3 times its size, so menus, descriptions and dialogue are sharp; Text > Size sets the letter size. Subtitles are crisp, raised and smaller (Subtitle size and Subtitle height).
 - **Select screens:** the roster is two rows of 16 with the Party roster and descriptions working. Next: a 3D model of the hovered character (a placeholder exists; reading the models from the disc is in progress).
@@ -106,7 +107,7 @@ The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
 
 ## Special thanks
 
-- **VCKing101**, author of [Dissidia 012 Duodecim Final Fantasy: native PC port and decompilation](https://github.com/VCKing101/Dissidia012-pc) (MIT licence, kept in `third_party/dissidia012-pc/LICENSE`). Its documentation named the cause of the battle shadows, and its renderer, audio and frame-pacing work for PortableKit is what the current build runs on. This project does not use its base, but it got past its Session 19 problems thanks to it. Its local versus and split screen are the port's own work and are not part of this build.
+- **VCKing101**, author of [Dissidia 012 Duodecim Final Fantasy: native PC port and decompilation](https://github.com/VCKing101/Dissidia012-pc) (MIT licence, kept in `third_party/dissidia012-pc/LICENSE`). Its documentation named the cause of the battle shadows, and its renderer, audio and frame-pacing work for PortableKit is what the current build runs on. This project does not use its base, but it got past its Session 19 problems thanks to it.
 - ZodiarkAmano
 - Rocher
 - Neo

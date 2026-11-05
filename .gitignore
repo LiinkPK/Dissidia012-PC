@@ -1,13 +1,12 @@
-# Build output
+# --- Build output --------------------------------------------------------------------------------------------------
 /out/
 /build/
+/dist/
+cmake-build-*/
+b*_perf/
 CMakeUserPresets.json
 
-# Build directories created outside /out/ (per-stage trees use names like b457_perf)
-b*_perf/
-cmake-build-*/
-
-# Binary build artifacts, wherever they land
+# Compiled files, wherever they land
 *.exe
 *.dll
 *.lib
@@ -17,9 +16,15 @@ cmake-build-*/
 *.ipdb
 *.res
 *.tlog
+*.pdb
+*.ilk
+*.so
+*.so.*
+*.dylib
+*.pyc
+__pycache__/
 
-# Copyrighted game data.  Never publish: the PSP executable, its decrypted ELF
-# and save data are the user's own dumped media, not part of this source tree.
+# --- The user's own game data: never published ---------------------------------------------------------------------
 PSP_DATA/
 SAVEDATA/
 *.ELF
@@ -27,47 +32,47 @@ SAVEDATA/
 *.iso
 *.cso
 *.bin
-
-# User-owned game data and reverse-engineering workspace
+/original/
 /profiles/*/game/
 /profiles/*/analysis/
 /profiles/*/progress/
 /profiles/*/captures/
-/original
 /tools/textures/*
 
-# Generated scratch output (the checked-in profile corpus is not ignored)
-*.generated
-*.tmp
+# --- Local work files, logs and editor settings --------------------------------------------------------------------
 *.log
-*.pdb
-*.ilk
-
-# IDE files
+*.tmp
+*.generated
+*.psd
+.venv/
+pyvenv.cfg
+*.py
 .vs/
 .vscode/
 .idea/
 *.user
 *.suo
-
-# Python
-__pycache__/
-*.pyc
-*.py
-pyvenv.cfg
-.venv/
-
-# Other Files
-Roadmap.*
 .aider*
 .claude*
 .continue*
 PROGRESS.json
 reasoning_trace.json
-run*.*
-/Roadmap.html
 discord.md
-*.psd
-make_release.ps1
-# release zips built by scripts/make_release.ps1
-dist/
+Roadmap.*
+
+# --- Dependencies fetched at setup, never stored here --------------------------------------------------------------
+# PortableKit (TeamGDB, MIT) is cloned and patched by scripts/setup_portablekit.ps1 / .sh; only the patches live in
+# patches/portablekit/.
+/third_party/PortableKit-d012/
+
+# The upstream port (VCKing101/Dissidia012-pc, MIT): only what the build uses is kept (port/host, port/decomp, port/config,
+# the PortableKit patches, and its licence and notices); its docs, tools, BGM maker, examples and tests are not shipped here.
+/third_party/dissidia012-pc/docs/
+/third_party/dissidia012-pc/tools/
+/third_party/dissidia012-pc/setup.*
+/third_party/dissidia012-pc/requirements-*.txt
+/third_party/dissidia012-pc/CONTRIBUTING.md
+/third_party/dissidia012-pc/port/bgm_maker/
+/third_party/dissidia012-pc/port/examples/
+/third_party/dissidia012-pc/port/tests/
+/third_party/dissidia012-pc/port/tools/
