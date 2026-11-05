@@ -3,11 +3,12 @@
 </p>
 
 [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
+[![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=F0F0F0)](#)
 [![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
 
-</div>
+**_v1.0.2 — Early BETA_**
 
-<hr>
+</div>
 
 # PSPRecomp — Dissidia 012 PC Port
 
@@ -15,10 +16,14 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 
 > **Game files not included.** You need your own copy of the game (the ISO). Nothing copyrighted is in this repository.
 
+# System Support
+
+- Windows 10 or 11, 64-bit
+- macOS `(both Apple Silicon and Intel chips)`
+- Linux distros `(tested on Ubuntu, Mint, Kali and SteamOS)`
+
 >[!IMPORTANT]
 >**Just want to play?** Download the zip from the [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases/latest) page (see [`RELEASE_NOTES.md`](https://github.com/LiinkPK/Dissidia012-PC/releases/latest)): run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
-
----
 
 ## Repository layout
 
@@ -42,15 +47,11 @@ scripts/                  make_release.ps1 builds the release zip from a finishe
 third_party/dissidia012-pc/  The open-source port by VCKing101 (MIT), kept as a reference and for its host code
 ```
 
----
-
 ## Requirements
 
 - CMake 3.20+ and a C++20 compiler (MSVC on Windows), the Vulkan SDK and SDL3 3.2
 - PortableKit (TeamGDB, MIT): not stored here. `scripts/setup_portablekit.ps1` (Windows) or `.sh` (Linux, macOS) clones it and applies the patches of the upstream port (`third_party/dissidia012-pc/port/portablekit-patches`) and this project's (`patches/portablekit`)
 - Your own ISO: `ULES01505` (European) or `ULUS10566` (North American)
-
----
 
 ## Build and run
 
@@ -64,13 +65,9 @@ Copy the DLLs from `out/d012_vk/bin` and `SDL3.dll` next to `out/d012_vk/bin/Rel
 
 To make the release zip from a finished build: `.\scripts\make_release.ps1 -Version <number>` (writes `dist\`, which git ignores).
 
----
-
 ## How it works
 
 The executable is recompiled **unmodified**: the code in `profiles/d012_pk/work/generated/` comes straight from the decrypted `EBOOT.BIN` and carries no hand patches or forged game state. The three code overlays (menu, battle, extra) and the font and anti-cheat modules are recompiled into libraries in `profiles/d012_pk/work/overlays/`, loaded when the game loads them. Every PSP import is bound to PortableKit's HLE. `profiles/d012/host/d012_profile.cpp` holds the game's identity, saves, overlay window, window title and icon, and the autosave-notice skip; the port's host code in `third_party/dissidia012-pc/port/host` supplies the rest.
-
----
 
 ## Texture replacement
 
@@ -79,8 +76,6 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 > [!NOTE]
 > Even if you're running the US version, there is no need to change the texture folder's name from `ULES01505` to `ULUS10566`.
 > Simply find the folder in the **Menu** -> **Import texture pack...** -> And then confirm changes/replacement.
-
----
 
 ## Status
 
@@ -97,8 +92,6 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 
 See `updates.md` for the session-by-session log (Session 21 is the latest).
 
----
-
 ## Source provenance & license
 
 No commercial game executable or asset is included. PPSSPP source is used for **reference only**; no GPL code is copied into this repository.
@@ -111,6 +104,7 @@ The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
 - ZodiarkAmano
 - Rocher
 - Neo
+- Yokai
 - Henrik Rydgård ([PPSSPP](https://github.com/hrydgard/PPSSPP))
 - [TeamGDB](https://github.com/TeamGDB)
 - [BasedYuki](https://github.com/BasedYuki/the-3rd-birthday-recomp)
