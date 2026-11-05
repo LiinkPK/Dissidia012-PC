@@ -16,7 +16,7 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 > **Game files not included.** You need your own copy of the game (the ISO). Nothing copyrighted is in this repository.
 
 >[!IMPORTANT]
->**Just want to play?** Download the zip from the Releases page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)): run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
+>**Just want to play?** Download the zip from the [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases/latest) page (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)): run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
 
 ---
 
