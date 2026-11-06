@@ -1,4 +1,7 @@
 *.sh text eol=lf
 *.patch text eol=lf
-app/* linguist-documentation=false
-app/* linguist-vendored
+*.html linguist-vendored
+*.sh linguist-vendored
+*.ps1 linguist-vendored
+CMakeLists.txt linguist-vendored
+*.cmake linguist-vendored
