@@ -2,9 +2,8 @@
 <img width="1366" height="200" alt="GitHub Banner" src="https://github.com/user-attachments/assets/6512d139-da17-4b6a-b6fd-c5078f5600c9" />
 </p>
 
-[![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?logo=windows11&logoColor=white)](#)
-[![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=F0F0F0)](#)
-[![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
+![microsoft](https://www.readmecodegen.com/api/social-icon?name=microsoft&size=32&reverseBackground=true&showText=true&text=Windows)![apple](https://www.readmecodegen.com/api/social-icon?name=apple&size=32&reverseBackground=true&showText=true&text=macOS)![linux](https://www.readmecodegen.com/api/social-icon?name=linux&size=32&background=%23f59e0b&theme=dark&color=%23ffffff&showText=true)![android](https://www.readmecodegen.com/api/social-icon?name=android&size=32&reverseBackground=true&showText=true)
+
 
 **_Early BETA_**
 
@@ -22,6 +21,7 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 - Windows 10 or 11, 64-bit
 - macOS `(both Apple Silicon and Intel chips)`
 - Linux distros `(tested on Ubuntu, Mint, Kali and SteamOS)`
+- Android
 
 >[!IMPORTANT]
 >**Just want to play?** Download the zip from the [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases/latest) page, run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
