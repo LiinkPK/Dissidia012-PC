@@ -104,6 +104,7 @@ The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
 - ZodiarkAmano
 - Rocher
 - Neo
+- Eskie
 - Yokai
 - Henrik Rydgård ([PPSSPP](https://github.com/hrydgard/PPSSPP))
 - [TeamGDB](https://github.com/TeamGDB)
