@@ -6,7 +6,7 @@
 [![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=F0F0F0)](#)
 [![Linux](https://img.shields.io/badge/Linux-%23FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](#)
 
-**_v1.0.2 — Early BETA_**
+**_Early BETA_**
 
 </div>
 
