@@ -1,0 +1,30 @@
+From 34c4bef67d99e472976057e28d9e8746eeeff71d Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 16:01:49 +0100
+Subject: [PATCH] Updater: read each asset's own download URL (the loop skipped
+ to the next asset's, so a release with two assets, or one, found no package)
+
+---
+ host/ui/updater.cpp | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 24f7931..29d3e65 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -228,8 +228,10 @@ void check_thread() {
+     // The first attached zip is the release's package.
+     std::string zip;
+     std::uint64_t package_size = 0;
+-    for (std::size_t at = body.find("browser_download_url"); at != std::string::npos;
+-         at = body.find("browser_download_url", at + 1u)) {
++    // `at` is the opening quote of the key: json_string looks for the quoted key from there, so it reads this asset's own URL
++    // (searching from the first letter of the key skipped it and read the next asset's, and none for the last one).
++    for (std::size_t at = body.find("\"browser_download_url\""); at != std::string::npos;
++         at = body.find("\"browser_download_url\"", at + 1u)) {
+         const std::string url = json_string(body, "browser_download_url", at);
+ #if defined(_WIN32)
+         const bool package = url.size() > 4u && url.compare(url.size() - 4u, 4u, ".zip") == 0;
+-- 
+2.54.0.windows.1
+

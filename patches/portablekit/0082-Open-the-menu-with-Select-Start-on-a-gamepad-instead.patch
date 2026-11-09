@@ -1,0 +1,1333 @@
+From 150c8c027c51068cb6422b5e6799e6472894670f Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Mon, 9 Nov 2026 02:04:40 +0100
+Subject: [PATCH] Open the menu with Select+Start on a gamepad instead of both
+ stick clicks (L3 and R3 are the game's buttons now)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/gpu/vulkan_renderer.cpp |   2 +-
+ host/install/user_data.cpp   |   2 +-
+ host/settings/settings.hpp   |   2 +-
+ host/ui/layer.cpp            |   7 +-
+ host/ui/layer.hpp            | 220 ++++----
+ host/ui/menu.cpp             |   4 +-
+ host/ui/setup_screens.cpp    | 976 +++++++++++++++++------------------
+ host/ui/ui.hpp               |   2 +-
+ host/ui/widgets.cpp          |   4 +-
+ 9 files changed, 610 insertions(+), 609 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 7ec2f75..ea72568 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -7042,7 +7042,7 @@ bool VulkanRenderer::pump_events() {
+         // every other event while the on-screen keyboard is up.
+         if (event.type == SDL_EVENT_GAMEPAD_ADDED) impl_->open_gamepad(event.gdevice.which);
+         if (event.type == SDL_EVENT_GAMEPAD_REMOVED) impl_->close_gamepad(event.gdevice.which);
+-        // F3 toggles the performance overlay. No pad combination: L3+R3 is
++        // F3 toggles the performance overlay. No pad combination: Select+Start is
+         // reserved for the in-game menu.
+         if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) impl_->update_display_info();
+         if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) impl_->swapchain_dirty = true;
+diff --git a/host/install/user_data.cpp b/host/install/user_data.cpp
+index 8aefea2..3c48e21 100644
+--- a/host/install/user_data.cpp
++++ b/host/install/user_data.cpp
+@@ -140,7 +140,7 @@ void write_settings_file(const std::filesystem::path &data_dir, const SettingsEn
+     {
+         std::ofstream out(partial, std::ios::trunc);
+         out << "# Written by " << portablekit::game().app_name
+-            << ": the installer and the in-game menu (Esc, or L3+R3 on a gamepad).\n"
++            << ": the installer and the in-game menu (Esc, or Select+Start on a gamepad).\n"
+             << "# disc_image: the disc image to play from; a relative path is inside this directory.\n";
+         for (const auto &[key, value] : entries) out << key << "=" << value << "\n";
+         if (!out) throw psprecomp::Error("Cannot write " + path_to_utf8(partial));
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index f4b2f3c..5a8f1d6 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -143,7 +143,7 @@ struct Settings {
+     bool menu_pause{true};             // opening the menu pauses the game
+     bool menu_pause_multiplayer{};     // ...also during ad hoc play, where a paused game stops answering its peers
+     bool update_notice{true};          // tell at start when a newer release is out ("Don't show again" clears it)
+-    bool menu_hint_seen{};             // the "Esc / L3+R3 opens the menu" hint was shown
++    bool menu_hint_seen{};             // the "Esc / Select+Start opens the menu" hint was shown
+     std::string last_folder;           // where the setup's file browser was last used
+ 
+     // Saves
+diff --git a/host/ui/layer.cpp b/host/ui/layer.cpp
+index cc809d9..f3bd91f 100644
+--- a/host/ui/layer.cpp
++++ b/host/ui/layer.cpp
+@@ -269,10 +269,11 @@ bool Layer::handle_event(const SDL_Event &event) {
+         // A Steam Esc that came first is dropped here.
+         if (escape_pending_ && now - *escape_pending_ < kEscapeWindow) escape_pending_.reset();
+         const auto button = static_cast<SDL_GamepadButton>(event.gbutton.button);
+-        if (button == SDL_GAMEPAD_BUTTON_LEFT_STICK || button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) {
++        // Select and Start together (Back and Start): the stick clicks are the game's own buttons (L3, R3).
++        if (button == SDL_GAMEPAD_BUTTON_BACK || button == SDL_GAMEPAD_BUTTON_START) {
+             SDL_Gamepad *pad = SDL_GetGamepadFromID(event.gbutton.which);
+-            const SDL_GamepadButton other = button == SDL_GAMEPAD_BUTTON_LEFT_STICK ? SDL_GAMEPAD_BUTTON_RIGHT_STICK
+-                                                                                     : SDL_GAMEPAD_BUTTON_LEFT_STICK;
++            const SDL_GamepadButton other = button == SDL_GAMEPAD_BUTTON_BACK ? SDL_GAMEPAD_BUTTON_START
++                                                                              : SDL_GAMEPAD_BUTTON_BACK;
+             if (pad != nullptr && SDL_GetGamepadButton(pad, other)) menu_toggle_ = true;
+         }
+         break;
+diff --git a/host/ui/layer.hpp b/host/ui/layer.hpp
+index 30ef180..be264c2 100644
+--- a/host/ui/layer.hpp
++++ b/host/ui/layer.hpp
+@@ -1,110 +1,110 @@
+-#pragma once
+-
+-#include <chrono>
+-#include <cstdint>
+-#include <filesystem>
+-#include <functional>
+-#include <optional>
+-#include <string>
+-
+-union SDL_Event;
+-struct ImFont;
+-
+-namespace portablekit::gpu {
+-class VulkanRenderer;
+-}
+-
+-// Shared machinery of the interface screens: the Dear ImGui context on the
+-// renderer's window, the theme and fonts scaled to the window, and input.
+-//
+-// Input. While a screen runs (the menu, the setup) it is "interactive": window
+-// events go to ImGui and none reach the game. While the game runs, events are
+-// only watched for the menu buttons.
+-//
+-// Esc is special. Steam's desktop controller layout on a Steam Deck sends Esc
+-// together with the B button, and B is a button the game and the menu use. An
+-// Esc that arrives within a moment of a gamepad button press is therefore
+-// dropped; a real key press is acted on a few frames late, which nobody notices.
+-namespace portablekit::ui {
+-
+-enum class InputDevice { Keyboard, Gamepad };
+-
+-class Layer {
+-public:
+-    static Layer &get();
+-
+-    bool attach(gpu::VulkanRenderer &renderer);
+-    [[nodiscard]] bool attached() const noexcept { return renderer_ != nullptr; }
+-    [[nodiscard]] gpu::VulkanRenderer &renderer() noexcept { return *renderer_; }
+-
+-    void set_interactive(bool interactive);
+-
+-    // Runs interface frames until `frame` returns false: pumps events, starts
+-    // an ImGui frame, calls `frame` to build it and presents it over the last
+-    // game frame (show_game) or a plain background. False if the window was
+-    // closed meanwhile.
+-    bool run(const std::function<bool()> &frame, bool show_game);
+-
+-    // One frame drawn over the running game, outside run().
+-    void begin_frame();
+-    void end_frame();
+-
+-    // Requests from the player, each reported once.
+-    bool take_menu_toggle();  // L3+R3; Esc while the game runs
+-    bool take_back();         // Esc while a screen runs
+-    std::optional<std::filesystem::path> take_dropped_file();
+-    [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
+-
+-    // Binding a control (the menu's keyboard and mouse rows): the next key or
+-    // mouse button pressed is kept for the caller instead of reaching the
+-    // interface. Esc or a gamepad button cancels.
+-    void begin_binding_capture();
+-    [[nodiscard]] bool capturing_binding() const noexcept { return capturing_binding_; }
+-    // Once capture has ended: what was pressed, or input::kNone if cancelled.
+-    std::optional<std::uint16_t> take_captured_binding();
+-
+-    // False while a face button held since the screen opened is still down;
+-    // gamepad presses count only once it is released.
+-    [[nodiscard]] bool gamepad_armed() const noexcept { return gamepad_armed_; }
+-
+-    // What the player last used, for the button hints.
+-    [[nodiscard]] InputDevice input_device() const noexcept { return device_; }
+-    // Whether confirm is the south face button (the pad setting); the menu
+-    // follows the game's convention.
+-    [[nodiscard]] bool confirm_south() const;
+-
+-    // Text size in pixels for the current window, and the matching factor
+-    // for spacing (1 at 20 px).
+-    [[nodiscard]] float font_size() const noexcept { return font_size_; }
+-    [[nodiscard]] float scale() const noexcept { return font_size_ / 20.0f; }
+-
+-    // Explanation of the focused row, shown above the button hints.
+-    void set_description(const std::string &text) { description_ = text; }
+-    [[nodiscard]] const std::string &description() const noexcept { return description_; }
+-
+-private:
+-    bool handle_event(const SDL_Event &event);
+-    void resolve_escape();
+-    void apply_theme();
+-
+-    gpu::VulkanRenderer *renderer_{};
+-    bool interactive_{};
+-    bool window_closed_{};
+-    InputDevice device_{InputDevice::Keyboard};
+-    float font_size_{};
+-    std::string description_;
+-
+-    using Clock = std::chrono::steady_clock;
+-    std::optional<Clock::time_point> escape_pending_;
+-    Clock::time_point last_pad_button_{};
+-    // Gamepad navigation waits until no face button is held, so a button held
+-    // while a screen opens does not activate its first row.
+-    bool gamepad_armed_{};
+-    bool menu_toggle_{};
+-    bool back_{};
+-    bool capturing_binding_{};
+-    std::optional<std::uint16_t> captured_binding_;
+-    std::optional<std::filesystem::path> dropped_;
+-};
+-
+-} // namespace portablekit::ui
++#pragma once
++
++#include <chrono>
++#include <cstdint>
++#include <filesystem>
++#include <functional>
++#include <optional>
++#include <string>
++
++union SDL_Event;
++struct ImFont;
++
++namespace portablekit::gpu {
++class VulkanRenderer;
++}
++
++// Shared machinery of the interface screens: the Dear ImGui context on the
++// renderer's window, the theme and fonts scaled to the window, and input.
++//
++// Input. While a screen runs (the menu, the setup) it is "interactive": window
++// events go to ImGui and none reach the game. While the game runs, events are
++// only watched for the menu buttons.
++//
++// Esc is special. Steam's desktop controller layout on a Steam Deck sends Esc
++// together with the B button, and B is a button the game and the menu use. An
++// Esc that arrives within a moment of a gamepad button press is therefore
++// dropped; a real key press is acted on a few frames late, which nobody notices.
++namespace portablekit::ui {
++
++enum class InputDevice { Keyboard, Gamepad };
++
++class Layer {
++public:
++    static Layer &get();
++
++    bool attach(gpu::VulkanRenderer &renderer);
++    [[nodiscard]] bool attached() const noexcept { return renderer_ != nullptr; }
++    [[nodiscard]] gpu::VulkanRenderer &renderer() noexcept { return *renderer_; }
++
++    void set_interactive(bool interactive);
++
++    // Runs interface frames until `frame` returns false: pumps events, starts
++    // an ImGui frame, calls `frame` to build it and presents it over the last
++    // game frame (show_game) or a plain background. False if the window was
++    // closed meanwhile.
++    bool run(const std::function<bool()> &frame, bool show_game);
++
++    // One frame drawn over the running game, outside run().
++    void begin_frame();
++    void end_frame();
++
++    // Requests from the player, each reported once.
++    bool take_menu_toggle();  // Select+Start; Esc while the game runs
++    bool take_back();         // Esc while a screen runs
++    std::optional<std::filesystem::path> take_dropped_file();
++    [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
++
++    // Binding a control (the menu's keyboard and mouse rows): the next key or
++    // mouse button pressed is kept for the caller instead of reaching the
++    // interface. Esc or a gamepad button cancels.
++    void begin_binding_capture();
++    [[nodiscard]] bool capturing_binding() const noexcept { return capturing_binding_; }
++    // Once capture has ended: what was pressed, or input::kNone if cancelled.
++    std::optional<std::uint16_t> take_captured_binding();
++
++    // False while a face button held since the screen opened is still down;
++    // gamepad presses count only once it is released.
++    [[nodiscard]] bool gamepad_armed() const noexcept { return gamepad_armed_; }
++
++    // What the player last used, for the button hints.
++    [[nodiscard]] InputDevice input_device() const noexcept { return device_; }
++    // Whether confirm is the south face button (the pad setting); the menu
++    // follows the game's convention.
++    [[nodiscard]] bool confirm_south() const;
++
++    // Text size in pixels for the current window, and the matching factor
++    // for spacing (1 at 20 px).
++    [[nodiscard]] float font_size() const noexcept { return font_size_; }
++    [[nodiscard]] float scale() const noexcept { return font_size_ / 20.0f; }
++
++    // Explanation of the focused row, shown above the button hints.
++    void set_description(const std::string &text) { description_ = text; }
++    [[nodiscard]] const std::string &description() const noexcept { return description_; }
++
++private:
++    bool handle_event(const SDL_Event &event);
++    void resolve_escape();
++    void apply_theme();
++
++    gpu::VulkanRenderer *renderer_{};
++    bool interactive_{};
++    bool window_closed_{};
++    InputDevice device_{InputDevice::Keyboard};
++    float font_size_{};
++    std::string description_;
++
++    using Clock = std::chrono::steady_clock;
++    std::optional<Clock::time_point> escape_pending_;
++    Clock::time_point last_pad_button_{};
++    // Gamepad navigation waits until no face button is held, so a button held
++    // while a screen opens does not activate its first row.
++    bool gamepad_armed_{};
++    bool menu_toggle_{};
++    bool back_{};
++    bool capturing_binding_{};
++    std::optional<std::uint16_t> captured_binding_;
++    std::optional<std::filesystem::path> dropped_;
++};
++
++} // namespace portablekit::ui
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index df24eb5..222e430 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -1,4 +1,4 @@
+-// The in-game menu: Esc, or L3+R3 on a gamepad. It holds every player setting;
++// The in-game menu: Esc, or Select+Start on a gamepad. It holds every player setting;
+ // each change applies at once and is saved to settings.ini straight away. It
+ // pauses the game, or, as the settings say, stays over the running game.
+ 
+@@ -2101,7 +2101,7 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+ bool menu_requested() {
+     Layer &layer = Layer::get();
+     if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
+-    // The on-screen menu button, then Esc or L3+R3.
++    // The on-screen menu button, then Esc or Select+Start.
+     const bool touched = layer.renderer().take_touch_menu();
+     const bool asked = layer.take_menu_toggle() || touched;
+     if (update_prompt_pending()) {
+diff --git a/host/ui/setup_screens.cpp b/host/ui/setup_screens.cpp
+index d440b66..a4a3b1e 100644
+--- a/host/ui/setup_screens.cpp
++++ b/host/ui/setup_screens.cpp
+@@ -1,488 +1,488 @@
+-// The first-run setup as screens in the game's window: a welcome, the file
+-// browser, the choice between copying the image and using it in place,
+-// progress, and plain errors. It implements install::InstallerUi, so the
+-// installer's own logic decides the order.
+-
+-#include "ui/ui.hpp"
+-
+-#include "ui/file_browser.hpp"
+-#include "ui/layer.hpp"
+-#include "ui/widgets.hpp"
+-
+-#include "hle/hle_common.hpp"
+-#include "profile.hpp"
+-#include "install/installer.hpp"
+-#include "install/user_data.hpp"
+-#include "settings/settings.hpp"
+-#if defined(PORTABLEKIT_ANDROID_APP)
+-#include "platform/android_jni.hpp"
+-#endif
+-
+-#include "imgui.h"
+-
+-#include <atomic>
+-#include <chrono>
+-#include <cmath>
+-#include <cstdio>
+-#include <exception>
+-#include <iostream>
+-#include <mutex>
+-#include <thread>
+-
+-namespace portablekit::ui {
+-namespace {
+-
+-namespace fs = std::filesystem;
+-using Clock = std::chrono::steady_clock;
+-
+-const char *const kSubtitle = "Setup";
+-
+-float font() { return Layer::get().font_size(); }
+-
+-// Two buttons side by side, the first one primary. Returns 1 or 2 when one
+-// was activated. The first is focused when the screen appears.
+-int button_pair(const char *first, const char *second, bool focus_first, bool first_disabled = false) {
+-    const float gap = font() * 0.6f;
+-    const float width = std::min(font() * 13.0f, (ImGui::GetContentRegionAvail().x - gap) * 0.5f);
+-    ImGui::Dummy({0.0f, font() * 0.4f});
+-    if (focus_first) focus_next_row();
+-    int pressed = 0;
+-    if (big_button(first, width, true, first_disabled)) pressed = 1;
+-    ImGui::SameLine(0.0f, gap);
+-    if (big_button(second, width)) pressed = 2;
+-    return pressed;
+-}
+-
+-std::string megabytes(std::uint64_t bytes) {
+-    char text[32];
+-    std::snprintf(text, sizeof(text), "%.0f MB", static_cast<double>(bytes) / 1e6);
+-    return text;
+-}
+-
+-class SetupScreens final : public install::InstallerUi {
+-public:
+-    bool introduce(const fs::path &data_dir) override;
+-    std::optional<fs::path> choose_image() override;
+-    std::optional<install::ImageStorage> choose_storage(const fs::path &image, const install::ImageInfo &info,
+-                                                        const fs::path &data_dir) override;
+-    void run_task(const std::string &title, const std::function<void()> &work) override;
+-    void progress(const std::string &stage, std::uint64_t done, std::uint64_t total) override;
+-    bool offer_retry(const std::string &message) override;
+-    void finished(const fs::path &data_dir) override;
+-
+-private:
+-    // A file dropped onto the welcome screen skips the browser.
+-    std::optional<fs::path> dropped_;
+-    fs::path data_dir_;
+-
+-    // Progress, written by the worker thread in progress().
+-    std::mutex mutex_;
+-    std::string stage_;
+-    std::uint64_t done_{};
+-    std::uint64_t total_{};
+-    Clock::time_point stage_started_{};
+-    std::atomic<bool> cancel_{false};
+-};
+-
+-bool SetupScreens::introduce(const fs::path &data_dir) {
+-    data_dir_ = data_dir;
+-    Layer &layer = Layer::get();
+-    layer.set_interactive(true);
+-    bool first = true;
+-    int answer = 0;
+-    const bool window_open = layer.run(
+-        [&] {
+-            if (auto dropped = layer.take_dropped_file()) {
+-                dropped_ = std::move(dropped);
+-                answer = 1;
+-                return false;
+-            }
+-            if (layer.take_back()) {
+-                answer = 2;
+-                return false;
+-            }
+-            begin_panel("##welcome", std::string("Welcome to ") + portablekit::game().project_name, kSubtitle, false);
+-            begin_content();
+-            ImGui::Dummy({0.0f, font() * 0.3f});
+-            paragraph(std::string(portablekit::game().project_name) + " plays " + portablekit::game().game_title +
+-                      " from your own copy of the game. It needs the disc image of the game's PSP disc, " +
+-                      portablekit::game().disc_id_display + ", as an .iso file: the PlayStation 3 release carries it.");
+-            ImGui::Dummy({0.0f, font() * 0.4f});
+-#if defined(PORTABLEKIT_ANDROID_APP)
+-            paragraph(std::string("Choose the image next, in Android's file picker. ") + portablekit::game().project_name + " copies it into its own storage (an "
+-                      "app cannot keep reading a file elsewhere), checks that it is the right release and prepares "
+-                      "the game from it. The copy needs as much free space as the image takes; once it is made, the "
+-                      "original can be deleted. Nothing is downloaded.",
+-                      colors::kTextDim);
+-#else
+-            paragraph(std::string("Choose the image next. ") + portablekit::game().project_name + " checks that it is the right release, prepares the game from it "
+-                      "and, unless you choose otherwise, copies it into its data folder so the game keeps working if "
+-                      "the original is moved or deleted. Nothing is downloaded.",
+-                      colors::kTextDim);
+-#endif
+-            ImGui::Dummy({0.0f, font() * 0.4f});
+-            section("Data folder");
+-            ImGui::Indent(std::round(16.0f * layer.scale()));
+-            paragraph(install::path_to_utf8(data_dir), colors::kTextDim);
+-            ImGui::Unindent(std::round(16.0f * layer.scale()));
+-            ImGui::Dummy({0.0f, font() * 0.6f});
+-            answer = button_pair("Choose disc image", "Quit", first);
+-            first = false;
+-#if !defined(PORTABLEKIT_ANDROID_APP)
+-            ImGui::Dummy({0.0f, font() * 0.4f});
+-            paragraph("You can also drop the .iso file onto this window.", colors::kTextDim);
+-#endif
+-            layer.set_description(std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display +
+-                                  ") is the only release supported.");
+-            begin_footer();
+-            hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
+-            end_panel();
+-            return answer == 0;
+-        },
+-        false);
+-    return window_open && answer == 1;
+-}
+-
+-#if defined(PORTABLEKIT_ANDROID_APP)
+-std::optional<fs::path> SetupScreens::choose_image() {
+-    for (;;) {
+-        const std::optional<std::string> uri = android::pick_document();
+-        if (!uri) return std::nullopt;
+-        std::cout << "[setup] picked " << *uri << std::endl;
+-        // The picked image is a content:// document, readable only through a
+-        // file descriptor, so it is copied into the data folder, with
+-        // progress, before it is checked. It cannot be used where it is.
+-        try {
+-            fs::path copied;
+-            run_task("Copying the disc image", [&] {
+-                copied = install::copy_image_document(*uri, data_dir_,
+-                                                      [this](const std::string &stage, std::uint64_t done,
+-                                                             std::uint64_t total) { progress(stage, done, total); });
+-            });
+-            return copied;
+-        } catch (const install::InstallCancelled &) {
+-            return std::nullopt;
+-        } catch (const install::InstallError &e) {
+-            std::cerr << "Setup: " << e.what() << "\n";
+-            if (!offer_retry(e.what())) return std::nullopt;
+-        }
+-    }
+-}
+-#else
+-std::optional<fs::path> SetupScreens::choose_image() {
+-    if (dropped_) return std::exchange(dropped_, std::nullopt);
+-    Layer &layer = Layer::get();
+-    layer.set_interactive(true);
+-    FileBrowser browser(settings::current().last_folder.empty()
+-                            ? FileBrowser::home()
+-                            : install::path_from_utf8(settings::current().last_folder));
+-    std::optional<fs::path> chosen;
+-    layer.run(
+-        [&] {
+-            if (auto dropped = layer.take_dropped_file()) {
+-                chosen = std::move(dropped);
+-                return false;
+-            }
+-            const bool back = layer.take_back();
+-            const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
+-            const bool pad_back = ImGui::IsKeyPressed(cancel, false);
+-            begin_panel("##browser", "Choose the disc image", kSubtitle, false);
+-            begin_content();
+-            const FileBrowser::Result result = browser.frame(back || pad_back);
+-            layer.set_description(std::string("Look for the .iso image of ") + portablekit::game().disc_id_display +
+-                                  ". Removable drives and SD cards are listed next to Home.");
+-            begin_footer();
+-            if (layer.input_device() == InputDevice::Gamepad)
+-                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}, {Control::Toggle, "All files"}});
+-            else
+-                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}});
+-            end_panel();
+-            if (result == FileBrowser::Result::Chosen) chosen = browser.chosen();
+-            return result == FileBrowser::Result::Browsing;
+-        },
+-        false);
+-    if (chosen) {
+-        // The browser opens where the player found the image next time.
+-        settings::current().last_folder = install::path_to_utf8(chosen->parent_path());
+-        settings::save();
+-    }
+-    return chosen;
+-}
+-#endif
+-
+-std::optional<install::ImageStorage> SetupScreens::choose_storage(const fs::path &image,
+-                                                                  const install::ImageInfo &info,
+-                                                                  const fs::path &data_dir) {
+-#if defined(PORTABLEKIT_ANDROID_APP)
+-    // Already copied into the data folder by choose_image().
+-    (void)image;
+-    (void)info;
+-    (void)data_dir;
+-    return install::ImageStorage::Copy;
+-#endif
+-    Layer &layer = Layer::get();
+-    const std::uint64_t needed = install::space_needed_to_copy(info);
+-    const std::optional<std::uint64_t> space = install::available_space(data_dir);
+-    const bool room = !space || *space >= needed;
+-    std::optional<install::ImageStorage> choice;
+-    bool first = true;
+-    layer.run(
+-        [&] {
+-            if (layer.take_back()) return false;
+-            const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
+-            if (ImGui::IsKeyPressed(cancel, false)) return false;
+-            begin_panel("##storage", "Disc image found", kSubtitle, false);
+-            begin_content();
+-            paragraph(std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + "), " +
+-                          human_size(info.size_bytes) + ". It passed its checks.",
+-                      colors::kGood);
+-            ImGui::Dummy({0.0f, font() * 0.2f});
+-            paragraph(install::path_to_utf8(image), colors::kTextDim);
+-            ImGui::Dummy({0.0f, font() * 0.6f});
+-            heading("Keep a copy, or use the image where it is?");
+-
+-            std::string copy_note = "Recommended. The game keeps working if the original is moved or deleted. Needs " +
+-                                    human_size(needed);
+-            if (space) copy_note += "; " + human_size(*space) + " free";
+-            copy_note += ".";
+-            if (!room) copy_note = "Not enough free space: the copy needs " + human_size(needed) + " and " +
+-                                   human_size(*space) + " is free in the data folder.";
+-            RowOptions copy_options{!room, {}, {}};
+-            if (first && room) focus_next_row();
+-            if (button_row((std::string("Copy it into ") + portablekit::game().project_name + "'s data folder").c_str(), copy_options)) choice = install::ImageStorage::Copy;
+-            ImGui::Indent(std::round(16.0f * layer.scale()));
+-            paragraph(copy_note, room ? colors::kTextDim : colors::kDanger);
+-            ImGui::Unindent(std::round(16.0f * layer.scale()));
+-            ImGui::Dummy({0.0f, font() * 0.4f});
+-            const std::string place_note =
+-                "Saves " + human_size(info.size_bytes) + ". The image must then stay where it is; if it moves, " +
+-                std::string(portablekit::game().project_name) + " asks you to set up again.";
+-            if (first && !room) focus_next_row();
+-            if (button_row("Use it where it is")) choice = install::ImageStorage::InPlace;
+-            ImGui::Indent(std::round(16.0f * layer.scale()));
+-            paragraph(place_note, colors::kTextDim);
+-            ImGui::Unindent(std::round(16.0f * layer.scale()));
+-            first = false;
+-            layer.set_description(std::string("Either way, the game's executable is prepared from the image into ") + portablekit::game().project_name + "'s data "
+-                                  "folder.");
+-            begin_footer();
+-            hints({{Control::Confirm, "Continue"}, {Control::Back, "Choose another file"}});
+-            end_panel();
+-            return !choice;
+-        },
+-        false);
+-    return choice;
+-}
+-
+-void SetupScreens::run_task(const std::string &title, const std::function<void()> &work) {
+-    Layer &layer = Layer::get();
+-    {
+-        std::lock_guard lock(mutex_);
+-        stage_.clear();
+-        done_ = total_ = 0u;
+-        stage_started_ = Clock::now();
+-    }
+-    cancel_ = false;
+-    std::atomic<bool> finished{false};
+-    std::exception_ptr failure;
+-    std::thread worker([&] {
+-        try {
+-            work();
+-        } catch (...) {
+-            failure = std::current_exception();
+-        }
+-        finished = true;
+-    });
+-    bool first = true;
+-    const Clock::time_point started = Clock::now();
+-    const bool window_open = layer.run(
+-        [&] {
+-            if (finished) return false;
+-            const ImGuiKey cancel_key = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
+-            if (layer.take_back() || ImGui::IsKeyPressed(cancel_key, false)) cancel_ = true;
+-            std::string stage;
+-            std::uint64_t done = 0;
+-            std::uint64_t total = 0;
+-            Clock::time_point stage_started;
+-            {
+-                std::lock_guard lock(mutex_);
+-                stage = stage_;
+-                done = done_;
+-                total = total_;
+-                stage_started = stage_started_;
+-            }
+-            begin_panel("##progress", title, kSubtitle, false);
+-            begin_content();
+-            ImGui::Dummy({0.0f, font() * 1.5f});
+-            heading(stage.empty() ? title + "…" : stage);
+-            ImGui::Dummy({0.0f, font() * 0.3f});
+-            if (total > 1u) {
+-                const float fraction = static_cast<float>(static_cast<double>(done) / static_cast<double>(total));
+-                char text[96];
+-                if (total >= 1'000'000u)
+-                    std::snprintf(text, sizeof(text), "%d%%   %s of %s", static_cast<int>(fraction * 100.0f),
+-                                  megabytes(done).c_str(), megabytes(total).c_str());
+-                else std::snprintf(text, sizeof(text), "%d%%", static_cast<int>(fraction * 100.0f));
+-                progress_bar(fraction, text);
+-                const double seconds = std::chrono::duration<double>(Clock::now() - stage_started).count();
+-                if (fraction > 0.02f && seconds > 2.0) {
+-                    const double left = seconds * (1.0 - fraction) / fraction;
+-                    char eta[64];
+-                    std::snprintf(eta, sizeof(eta), "About %d s left", static_cast<int>(std::ceil(left)));
+-                    paragraph(eta, colors::kTextDim);
+-                }
+-            } else {
+-                // No size to measure against (the checks): a moving bar.
+-                const double t = std::chrono::duration<double>(Clock::now() - started).count();
+-                progress_bar(static_cast<float>(0.5 + 0.5 * std::sin(t * 3.0)), "");
+-            }
+-            ImGui::Dummy({0.0f, font() * 1.0f});
+-            const float width = std::min(font() * 13.0f, ImGui::GetContentRegionAvail().x);
+-            if (first) focus_next_row();
+-            first = false;
+-            if (big_button(cancel_ ? "Cancelling…" : "Cancel", width, false, cancel_)) cancel_ = true;
+-            layer.set_description("Cancelling removes everything this step has written so far.");
+-            begin_footer();
+-            hints({{Control::Back, "Cancel"}});
+-            end_panel();
+-            return true;
+-        },
+-        false);
+-    if (!window_open) cancel_ = true;
+-    worker.join();
+-    if (failure) std::rethrow_exception(failure);
+-}
+-
+-void SetupScreens::progress(const std::string &stage, std::uint64_t done, std::uint64_t total) {
+-    install::print_progress(stage, done, total);
+-    {
+-        std::lock_guard lock(mutex_);
+-        if (stage != stage_) stage_started_ = Clock::now();
+-        stage_ = stage;
+-        done_ = done;
+-        total_ = total;
+-    }
+-    if (cancel_) throw install::InstallCancelled();
+-}
+-
+-bool SetupScreens::offer_retry(const std::string &message) {
+-    Layer &layer = Layer::get();
+-    const bool space = message.find("free space") != std::string::npos;
+-    int answer = 0;
+-    bool first = true;
+-    const bool window_open = layer.run(
+-        [&] {
+-            if (auto dropped = layer.take_dropped_file()) {
+-                dropped_ = std::move(dropped);
+-                answer = 1;
+-                return false;
+-            }
+-            if (layer.take_back()) {
+-                answer = 2;
+-                return false;
+-            }
+-            begin_panel("##error", space ? "Not enough free space" : "This file can't be used", kSubtitle, false);
+-            begin_content();
+-            ImGui::Dummy({0.0f, font() * 0.5f});
+-            paragraph(message);
+-            ImGui::Dummy({0.0f, font() * 0.8f});
+-            answer = button_pair("Choose another file", "Quit", first);
+-            first = false;
+-            layer.set_description(std::string(portablekit::game().project_name) + " supports only " + portablekit::game().game_title + ", " +
+-                                  portablekit::game().disc_id_display + ", as an unmodified, uncompressed .iso image.");
+-            begin_footer();
+-            hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
+-            end_panel();
+-            return answer == 0;
+-        },
+-        false);
+-    return window_open && answer == 1;
+-}
+-
+-void SetupScreens::finished(const fs::path &data_dir) {
+-    Layer &layer = Layer::get();
+-    bool first = true;
+-    layer.run(
+-        [&] {
+-            begin_panel("##done", "All set", kSubtitle, false);
+-            begin_content();
+-            ImGui::Dummy({0.0f, font() * 0.5f});
+-            paragraph("The game is ready. Later starts go straight to it.", colors::kGood);
+-            ImGui::Dummy({0.0f, font() * 0.3f});
+-#if defined(PORTABLEKIT_ANDROID_APP)
+-            paragraph("In the game, Back, the menu button at the top of the touch controls, or L3+R3 on a gamepad "
+-                      "(both sticks pressed) opens " + std::string(portablekit::game().project_name) +
+-                          "'s menu, with the settings and the way back to this setup. "
+-                      "Touch the screen to show the touch controls.",
+-                      colors::kTextDim);
+-#else
+-            paragraph(std::string("In the game, Esc or L3+R3 (both sticks pressed) opens ") + portablekit::game().project_name + "'s menu, with the settings and the "
+-                      "way back to this setup.",
+-                      colors::kTextDim);
+-#endif
+-            ImGui::Dummy({0.0f, font() * 0.3f});
+-            section("Data folder");
+-            ImGui::Indent(std::round(16.0f * layer.scale()));
+-            paragraph(install::path_to_utf8(data_dir), colors::kTextDim);
+-            ImGui::Unindent(std::round(16.0f * layer.scale()));
+-            ImGui::Dummy({0.0f, font() * 0.8f});
+-            if (first) focus_next_row();
+-            first = false;
+-            const bool play = big_button("Play", std::min(font() * 13.0f, ImGui::GetContentRegionAvail().x), true);
+-            begin_footer();
+-            hints({{Control::Confirm, "Play"}});
+-            end_panel();
+-            return !play;
+-        },
+-        false);
+-    layer.set_interactive(false);
+-}
+-
+-// The screen for a problem found before the game starts.
+-ProblemAnswer run_problem(const std::string &title, const std::string &message, bool ask_setup) {
+-    Layer &layer = Layer::get();
+-    layer.set_interactive(true);
+-    int answer = 0;
+-    bool first = true;
+-    const bool window_open = layer.run(
+-        [&] {
+-            if (layer.take_back()) {
+-                answer = ask_setup ? 2 : 1;
+-                return false;
+-            }
+-            begin_panel("##problem", title, "", false);
+-            begin_content();
+-            ImGui::Dummy({0.0f, font() * 0.5f});
+-            paragraph(message);
+-            ImGui::Dummy({0.0f, font() * 0.8f});
+-            if (ask_setup) {
+-                answer = button_pair("Set up again", "Quit", first);
+-            } else {
+-                if (first) focus_next_row();
+-                if (big_button("Quit", std::min(font() * 13.0f, ImGui::GetContentRegionAvail().x), true)) answer = 1;
+-            }
+-            first = false;
+-            begin_footer();
+-            hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
+-            end_panel();
+-            return answer == 0;
+-        },
+-        false);
+-    layer.set_interactive(false);
+-    if (!window_open) return ProblemAnswer::Quit;
+-    return ask_setup && answer == 1 ? ProblemAnswer::SetUpAgain : ProblemAnswer::Quit;
+-}
+-
+-} // namespace
+-
+-std::unique_ptr<install::InstallerUi> make_setup_screens() {
+-    if (ensure_renderer() == nullptr || !Layer::get().attached()) return nullptr;
+-    return std::make_unique<SetupScreens>();
+-}
+-
+-ProblemAnswer show_problem(const std::string &title, const std::string &message, bool ask_setup) {
+-    if (ensure_renderer() == nullptr || !Layer::get().attached()) return ProblemAnswer::Unavailable;
+-    return run_problem(title, message, ask_setup);
+-}
+-
+-} // namespace portablekit::ui
++// The first-run setup as screens in the game's window: a welcome, the file
++// browser, the choice between copying the image and using it in place,
++// progress, and plain errors. It implements install::InstallerUi, so the
++// installer's own logic decides the order.
++
++#include "ui/ui.hpp"
++
++#include "ui/file_browser.hpp"
++#include "ui/layer.hpp"
++#include "ui/widgets.hpp"
++
++#include "hle/hle_common.hpp"
++#include "profile.hpp"
++#include "install/installer.hpp"
++#include "install/user_data.hpp"
++#include "settings/settings.hpp"
++#if defined(PORTABLEKIT_ANDROID_APP)
++#include "platform/android_jni.hpp"
++#endif
++
++#include "imgui.h"
++
++#include <atomic>
++#include <chrono>
++#include <cmath>
++#include <cstdio>
++#include <exception>
++#include <iostream>
++#include <mutex>
++#include <thread>
++
++namespace portablekit::ui {
++namespace {
++
++namespace fs = std::filesystem;
++using Clock = std::chrono::steady_clock;
++
++const char *const kSubtitle = "Setup";
++
++float font() { return Layer::get().font_size(); }
++
++// Two buttons side by side, the first one primary. Returns 1 or 2 when one
++// was activated. The first is focused when the screen appears.
++int button_pair(const char *first, const char *second, bool focus_first, bool first_disabled = false) {
++    const float gap = font() * 0.6f;
++    const float width = std::min(font() * 13.0f, (ImGui::GetContentRegionAvail().x - gap) * 0.5f);
++    ImGui::Dummy({0.0f, font() * 0.4f});
++    if (focus_first) focus_next_row();
++    int pressed = 0;
++    if (big_button(first, width, true, first_disabled)) pressed = 1;
++    ImGui::SameLine(0.0f, gap);
++    if (big_button(second, width)) pressed = 2;
++    return pressed;
++}
++
++std::string megabytes(std::uint64_t bytes) {
++    char text[32];
++    std::snprintf(text, sizeof(text), "%.0f MB", static_cast<double>(bytes) / 1e6);
++    return text;
++}
++
++class SetupScreens final : public install::InstallerUi {
++public:
++    bool introduce(const fs::path &data_dir) override;
++    std::optional<fs::path> choose_image() override;
++    std::optional<install::ImageStorage> choose_storage(const fs::path &image, const install::ImageInfo &info,
++                                                        const fs::path &data_dir) override;
++    void run_task(const std::string &title, const std::function<void()> &work) override;
++    void progress(const std::string &stage, std::uint64_t done, std::uint64_t total) override;
++    bool offer_retry(const std::string &message) override;
++    void finished(const fs::path &data_dir) override;
++
++private:
++    // A file dropped onto the welcome screen skips the browser.
++    std::optional<fs::path> dropped_;
++    fs::path data_dir_;
++
++    // Progress, written by the worker thread in progress().
++    std::mutex mutex_;
++    std::string stage_;
++    std::uint64_t done_{};
++    std::uint64_t total_{};
++    Clock::time_point stage_started_{};
++    std::atomic<bool> cancel_{false};
++};
++
++bool SetupScreens::introduce(const fs::path &data_dir) {
++    data_dir_ = data_dir;
++    Layer &layer = Layer::get();
++    layer.set_interactive(true);
++    bool first = true;
++    int answer = 0;
++    const bool window_open = layer.run(
++        [&] {
++            if (auto dropped = layer.take_dropped_file()) {
++                dropped_ = std::move(dropped);
++                answer = 1;
++                return false;
++            }
++            if (layer.take_back()) {
++                answer = 2;
++                return false;
++            }
++            begin_panel("##welcome", std::string("Welcome to ") + portablekit::game().project_name, kSubtitle, false);
++            begin_content();
++            ImGui::Dummy({0.0f, font() * 0.3f});
++            paragraph(std::string(portablekit::game().project_name) + " plays " + portablekit::game().game_title +
++                      " from your own copy of the game. It needs the disc image of the game's PSP disc, " +
++                      portablekit::game().disc_id_display + ", as an .iso file: the PlayStation 3 release carries it.");
++            ImGui::Dummy({0.0f, font() * 0.4f});
++#if defined(PORTABLEKIT_ANDROID_APP)
++            paragraph(std::string("Choose the image next, in Android's file picker. ") + portablekit::game().project_name + " copies it into its own storage (an "
++                      "app cannot keep reading a file elsewhere), checks that it is the right release and prepares "
++                      "the game from it. The copy needs as much free space as the image takes; once it is made, the "
++                      "original can be deleted. Nothing is downloaded.",
++                      colors::kTextDim);
++#else
++            paragraph(std::string("Choose the image next. ") + portablekit::game().project_name + " checks that it is the right release, prepares the game from it "
++                      "and, unless you choose otherwise, copies it into its data folder so the game keeps working if "
++                      "the original is moved or deleted. Nothing is downloaded.",
++                      colors::kTextDim);
++#endif
++            ImGui::Dummy({0.0f, font() * 0.4f});
++            section("Data folder");
++            ImGui::Indent(std::round(16.0f * layer.scale()));
++            paragraph(install::path_to_utf8(data_dir), colors::kTextDim);
++            ImGui::Unindent(std::round(16.0f * layer.scale()));
++            ImGui::Dummy({0.0f, font() * 0.6f});
++            answer = button_pair("Choose disc image", "Quit", first);
++            first = false;
++#if !defined(PORTABLEKIT_ANDROID_APP)
++            ImGui::Dummy({0.0f, font() * 0.4f});
++            paragraph("You can also drop the .iso file onto this window.", colors::kTextDim);
++#endif
++            layer.set_description(std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display +
++                                  ") is the only release supported.");
++            begin_footer();
++            hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
++            end_panel();
++            return answer == 0;
++        },
++        false);
++    return window_open && answer == 1;
++}
++
++#if defined(PORTABLEKIT_ANDROID_APP)
++std::optional<fs::path> SetupScreens::choose_image() {
++    for (;;) {
++        const std::optional<std::string> uri = android::pick_document();
++        if (!uri) return std::nullopt;
++        std::cout << "[setup] picked " << *uri << std::endl;
++        // The picked image is a content:// document, readable only through a
++        // file descriptor, so it is copied into the data folder, with
++        // progress, before it is checked. It cannot be used where it is.
++        try {
++            fs::path copied;
++            run_task("Copying the disc image", [&] {
++                copied = install::copy_image_document(*uri, data_dir_,
++                                                      [this](const std::string &stage, std::uint64_t done,
++                                                             std::uint64_t total) { progress(stage, done, total); });
++            });
++            return copied;
++        } catch (const install::InstallCancelled &) {
++            return std::nullopt;
++        } catch (const install::InstallError &e) {
++            std::cerr << "Setup: " << e.what() << "\n";
++            if (!offer_retry(e.what())) return std::nullopt;
++        }
++    }
++}
++#else
++std::optional<fs::path> SetupScreens::choose_image() {
++    if (dropped_) return std::exchange(dropped_, std::nullopt);
++    Layer &layer = Layer::get();
++    layer.set_interactive(true);
++    FileBrowser browser(settings::current().last_folder.empty()
++                            ? FileBrowser::home()
++                            : install::path_from_utf8(settings::current().last_folder));
++    std::optional<fs::path> chosen;
++    layer.run(
++        [&] {
++            if (auto dropped = layer.take_dropped_file()) {
++                chosen = std::move(dropped);
++                return false;
++            }
++            const bool back = layer.take_back();
++            const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
++            const bool pad_back = ImGui::IsKeyPressed(cancel, false);
++            begin_panel("##browser", "Choose the disc image", kSubtitle, false);
++            begin_content();
++            const FileBrowser::Result result = browser.frame(back || pad_back);
++            layer.set_description(std::string("Look for the .iso image of ") + portablekit::game().disc_id_display +
++                                  ". Removable drives and SD cards are listed next to Home.");
++            begin_footer();
++            if (layer.input_device() == InputDevice::Gamepad)
++                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}, {Control::Toggle, "All files"}});
++            else
++                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}});
++            end_panel();
++            if (result == FileBrowser::Result::Chosen) chosen = browser.chosen();
++            return result == FileBrowser::Result::Browsing;
++        },
++        false);
++    if (chosen) {
++        // The browser opens where the player found the image next time.
++        settings::current().last_folder = install::path_to_utf8(chosen->parent_path());
++        settings::save();
++    }
++    return chosen;
++}
++#endif
++
++std::optional<install::ImageStorage> SetupScreens::choose_storage(const fs::path &image,
++                                                                  const install::ImageInfo &info,
++                                                                  const fs::path &data_dir) {
++#if defined(PORTABLEKIT_ANDROID_APP)
++    // Already copied into the data folder by choose_image().
++    (void)image;
++    (void)info;
++    (void)data_dir;
++    return install::ImageStorage::Copy;
++#endif
++    Layer &layer = Layer::get();
++    const std::uint64_t needed = install::space_needed_to_copy(info);
++    const std::optional<std::uint64_t> space = install::available_space(data_dir);
++    const bool room = !space || *space >= needed;
++    std::optional<install::ImageStorage> choice;
++    bool first = true;
++    layer.run(
++        [&] {
++            if (layer.take_back()) return false;
++            const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
++            if (ImGui::IsKeyPressed(cancel, false)) return false;
++            begin_panel("##storage", "Disc image found", kSubtitle, false);
++            begin_content();
++            paragraph(std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + "), " +
++                          human_size(info.size_bytes) + ". It passed its checks.",
++                      colors::kGood);
++            ImGui::Dummy({0.0f, font() * 0.2f});
++            paragraph(install::path_to_utf8(image), colors::kTextDim);
++            ImGui::Dummy({0.0f, font() * 0.6f});
++            heading("Keep a copy, or use the image where it is?");
++
++            std::string copy_note = "Recommended. The game keeps working if the original is moved or deleted. Needs " +
++                                    human_size(needed);
++            if (space) copy_note += "; " + human_size(*space) + " free";
++            copy_note += ".";
++            if (!room) copy_note = "Not enough free space: the copy needs " + human_size(needed) + " and " +
++                                   human_size(*space) + " is free in the data folder.";
++            RowOptions copy_options{!room, {}, {}};
++            if (first && room) focus_next_row();
++            if (button_row((std::string("Copy it into ") + portablekit::game().project_name + "'s data folder").c_str(), copy_options)) choice = install::ImageStorage::Copy;
++            ImGui::Indent(std::round(16.0f * layer.scale()));
++            paragraph(copy_note, room ? colors::kTextDim : colors::kDanger);
++            ImGui::Unindent(std::round(16.0f * layer.scale()));
++            ImGui::Dummy({0.0f, font() * 0.4f});
++            const std::string place_note =
++                "Saves " + human_size(info.size_bytes) + ". The image must then stay where it is; if it moves, " +
++                std::string(portablekit::game().project_name) + " asks you to set up again.";
++            if (first && !room) focus_next_row();
++            if (button_row("Use it where it is")) choice = install::ImageStorage::InPlace;
++            ImGui::Indent(std::round(16.0f * layer.scale()));
++            paragraph(place_note, colors::kTextDim);
++            ImGui::Unindent(std::round(16.0f * layer.scale()));
++            first = false;
++            layer.set_description(std::string("Either way, the game's executable is prepared from the image into ") + portablekit::game().project_name + "'s data "
++                                  "folder.");
++            begin_footer();
++            hints({{Control::Confirm, "Continue"}, {Control::Back, "Choose another file"}});
++            end_panel();
++            return !choice;
++        },
++        false);
++    return choice;
++}
++
++void SetupScreens::run_task(const std::string &title, const std::function<void()> &work) {
++    Layer &layer = Layer::get();
++    {
++        std::lock_guard lock(mutex_);
++        stage_.clear();
++        done_ = total_ = 0u;
++        stage_started_ = Clock::now();
++    }
++    cancel_ = false;
++    std::atomic<bool> finished{false};
++    std::exception_ptr failure;
++    std::thread worker([&] {
++        try {
++            work();
++        } catch (...) {
++            failure = std::current_exception();
++        }
++        finished = true;
++    });
++    bool first = true;
++    const Clock::time_point started = Clock::now();
++    const bool window_open = layer.run(
++        [&] {
++            if (finished) return false;
++            const ImGuiKey cancel_key = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
++            if (layer.take_back() || ImGui::IsKeyPressed(cancel_key, false)) cancel_ = true;
++            std::string stage;
++            std::uint64_t done = 0;
++            std::uint64_t total = 0;
++            Clock::time_point stage_started;
++            {
++                std::lock_guard lock(mutex_);
++                stage = stage_;
++                done = done_;
++                total = total_;
++                stage_started = stage_started_;
++            }
++            begin_panel("##progress", title, kSubtitle, false);
++            begin_content();
++            ImGui::Dummy({0.0f, font() * 1.5f});
++            heading(stage.empty() ? title + "…" : stage);
++            ImGui::Dummy({0.0f, font() * 0.3f});
++            if (total > 1u) {
++                const float fraction = static_cast<float>(static_cast<double>(done) / static_cast<double>(total));
++                char text[96];
++                if (total >= 1'000'000u)
++                    std::snprintf(text, sizeof(text), "%d%%   %s of %s", static_cast<int>(fraction * 100.0f),
++                                  megabytes(done).c_str(), megabytes(total).c_str());
++                else std::snprintf(text, sizeof(text), "%d%%", static_cast<int>(fraction * 100.0f));
++                progress_bar(fraction, text);
++                const double seconds = std::chrono::duration<double>(Clock::now() - stage_started).count();
++                if (fraction > 0.02f && seconds > 2.0) {
++                    const double left = seconds * (1.0 - fraction) / fraction;
++                    char eta[64];
++                    std::snprintf(eta, sizeof(eta), "About %d s left", static_cast<int>(std::ceil(left)));
++                    paragraph(eta, colors::kTextDim);
++                }
++            } else {
++                // No size to measure against (the checks): a moving bar.
++                const double t = std::chrono::duration<double>(Clock::now() - started).count();
++                progress_bar(static_cast<float>(0.5 + 0.5 * std::sin(t * 3.0)), "");
++            }
++            ImGui::Dummy({0.0f, font() * 1.0f});
++            const float width = std::min(font() * 13.0f, ImGui::GetContentRegionAvail().x);
++            if (first) focus_next_row();
++            first = false;
++            if (big_button(cancel_ ? "Cancelling…" : "Cancel", width, false, cancel_)) cancel_ = true;
++            layer.set_description("Cancelling removes everything this step has written so far.");
++            begin_footer();
++            hints({{Control::Back, "Cancel"}});
++            end_panel();
++            return true;
++        },
++        false);
++    if (!window_open) cancel_ = true;
++    worker.join();
++    if (failure) std::rethrow_exception(failure);
++}
++
++void SetupScreens::progress(const std::string &stage, std::uint64_t done, std::uint64_t total) {
++    install::print_progress(stage, done, total);
++    {
++        std::lock_guard lock(mutex_);
++        if (stage != stage_) stage_started_ = Clock::now();
++        stage_ = stage;
++        done_ = done;
++        total_ = total;
++    }
++    if (cancel_) throw install::InstallCancelled();
++}
++
++bool SetupScreens::offer_retry(const std::string &message) {
++    Layer &layer = Layer::get();
++    const bool space = message.find("free space") != std::string::npos;
++    int answer = 0;
++    bool first = true;
++    const bool window_open = layer.run(
++        [&] {
++            if (auto dropped = layer.take_dropped_file()) {
++                dropped_ = std::move(dropped);
++                answer = 1;
++                return false;
++            }
++            if (layer.take_back()) {
++                answer = 2;
++                return false;
++            }
++            begin_panel("##error", space ? "Not enough free space" : "This file can't be used", kSubtitle, false);
++            begin_content();
++            ImGui::Dummy({0.0f, font() * 0.5f});
++            paragraph(message);
++            ImGui::Dummy({0.0f, font() * 0.8f});
++            answer = button_pair("Choose another file", "Quit", first);
++            first = false;
++            layer.set_description(std::string(portablekit::game().project_name) + " supports only " + portablekit::game().game_title + ", " +
++                                  portablekit::game().disc_id_display + ", as an unmodified, uncompressed .iso image.");
++            begin_footer();
++            hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
++            end_panel();
++            return answer == 0;
++        },
++        false);
++    return window_open && answer == 1;
++}
++
++void SetupScreens::finished(const fs::path &data_dir) {
++    Layer &layer = Layer::get();
++    bool first = true;
++    layer.run(
++        [&] {
++            begin_panel("##done", "All set", kSubtitle, false);
++            begin_content();
++            ImGui::Dummy({0.0f, font() * 0.5f});
++            paragraph("The game is ready. Later starts go straight to it.", colors::kGood);
++            ImGui::Dummy({0.0f, font() * 0.3f});
++#if defined(PORTABLEKIT_ANDROID_APP)
++            paragraph("In the game, Back, the menu button at the top of the touch controls, or Select+Start on a gamepad "
++                      "(Select and Start pressed together) opens " + std::string(portablekit::game().project_name) +
++                          "'s menu, with the settings and the way back to this setup. "
++                      "Touch the screen to show the touch controls.",
++                      colors::kTextDim);
++#else
++            paragraph(std::string("In the game, Esc or Select+Start (pressed together) opens ") + portablekit::game().project_name + "'s menu, with the settings and the "
++                      "way back to this setup.",
++                      colors::kTextDim);
++#endif
++            ImGui::Dummy({0.0f, font() * 0.3f});
++            section("Data folder");
++            ImGui::Indent(std::round(16.0f * layer.scale()));
++            paragraph(install::path_to_utf8(data_dir), colors::kTextDim);
++            ImGui::Unindent(std::round(16.0f * layer.scale()));
++            ImGui::Dummy({0.0f, font() * 0.8f});
++            if (first) focus_next_row();
++            first = false;
++            const bool play = big_button("Play", std::min(font() * 13.0f, ImGui::GetContentRegionAvail().x), true);
++            begin_footer();
++            hints({{Control::Confirm, "Play"}});
++            end_panel();
++            return !play;
++        },
++        false);
++    layer.set_interactive(false);
++}
++
++// The screen for a problem found before the game starts.
++ProblemAnswer run_problem(const std::string &title, const std::string &message, bool ask_setup) {
++    Layer &layer = Layer::get();
++    layer.set_interactive(true);
++    int answer = 0;
++    bool first = true;
++    const bool window_open = layer.run(
++        [&] {
++            if (layer.take_back()) {
++                answer = ask_setup ? 2 : 1;
++                return false;
++            }
++            begin_panel("##problem", title, "", false);
++            begin_content();
++            ImGui::Dummy({0.0f, font() * 0.5f});
++            paragraph(message);
++            ImGui::Dummy({0.0f, font() * 0.8f});
++            if (ask_setup) {
++                answer = button_pair("Set up again", "Quit", first);
++            } else {
++                if (first) focus_next_row();
++                if (big_button("Quit", std::min(font() * 13.0f, ImGui::GetContentRegionAvail().x), true)) answer = 1;
++            }
++            first = false;
++            begin_footer();
++            hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
++            end_panel();
++            return answer == 0;
++        },
++        false);
++    layer.set_interactive(false);
++    if (!window_open) return ProblemAnswer::Quit;
++    return ask_setup && answer == 1 ? ProblemAnswer::SetUpAgain : ProblemAnswer::Quit;
++}
++
++} // namespace
++
++std::unique_ptr<install::InstallerUi> make_setup_screens() {
++    if (ensure_renderer() == nullptr || !Layer::get().attached()) return nullptr;
++    return std::make_unique<SetupScreens>();
++}
++
++ProblemAnswer show_problem(const std::string &title, const std::string &message, bool ask_setup) {
++    if (ensure_renderer() == nullptr || !Layer::get().attached()) return ProblemAnswer::Unavailable;
++    return run_problem(title, message, ask_setup);
++}
++
++} // namespace portablekit::ui
+diff --git a/host/ui/ui.hpp b/host/ui/ui.hpp
+index e69841f..dbeee93 100644
+--- a/host/ui/ui.hpp
++++ b/host/ui/ui.hpp
+@@ -72,7 +72,7 @@ struct GamePicture {
+ [[nodiscard]] ImFont *game_text_font();
+ 
+ // After a game frame's window events: whether the player asked for the menu
+-// (Esc, or L3+R3 on a gamepad).
++// (Esc, or Select+Start on a gamepad).
+ [[nodiscard]] bool menu_requested();
+ 
+ // Whether the menu, opened now, pauses the game. Settings decide: "Pause the
+diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
+index 1049cde..41bb1e9 100644
+--- a/host/ui/widgets.cpp
++++ b/host/ui/widgets.cpp
+@@ -690,8 +690,8 @@ float lay_out_hints(ImDrawList *draw, ImVec2 start, std::initializer_list<Hint>
+         case Control::Change: arrows(); break;
+         case Control::Menu:
+             if (pad) {
+-                cap("L3");
+-                cap("R3");
++                cap("Select");
++                cap("Start");
+             } else {
+                 cap("Esc");
+             }
+-- 
+2.54.0.windows.1
+

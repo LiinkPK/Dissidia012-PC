@@ -570,7 +570,7 @@ Other
 
 ---
 
-## Session 21-22 (02/11/2026 to 05/11/2026), release v1.0.2
+## Session 21-22 (02/11/2026 to 05/11/2026), release v1.0.4
 
 **Result: the HUD, the select screens, the text and the subtitles are now remastered; the next step is a 3D model on the select screen.**
 

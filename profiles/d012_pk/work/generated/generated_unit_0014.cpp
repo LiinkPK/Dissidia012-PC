@@ -17256,7 +17256,11 @@ L_0883F86C:
     aot_mem.aot_store32(ctx.gpr[19] + static_cast<std::uint32_t>(40), ctx.gpr[6]);
     goto L_0883F870;
 L_0883F870:
+    if (g_d012_mod_bt) {
+    ctx.gpr[6] = (aot_mem.aot_load32(ctx.gpr[20] + static_cast<std::uint32_t>(44)));
+    } else {
     ctx.gpr[6] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[20] + static_cast<std::uint32_t>(20))))));
+    }
     goto L_0883F874;
 L_0883F874:
     aot_mem.aot_store32(ctx.gpr[19] + static_cast<std::uint32_t>(44), ctx.gpr[6]);

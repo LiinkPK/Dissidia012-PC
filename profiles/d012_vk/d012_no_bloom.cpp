@@ -1,4 +1,4 @@
-// Remove Bloom (v1.0.2): the ghosting / bloom effect, gone for good.
+// Remove Bloom (v1.0.4): the ghosting / bloom effect, gone for good.
 //
 // The known cheat patches the game's code at 0x089A17DC (a jump to a cave at 0x0880109C). A recompiled build
 // does not run the bytes in memory, so the patch is made here instead: FUN_089A1770 (the 2D sprite packet

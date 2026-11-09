@@ -10804,7 +10804,11 @@ L_0880DE0C:
 L_0880DE10:
     ctx.gpr[31] = (0x0880DE18u);
     ctx.gpr[5] = (ctx.gpr[2] | 0u);
+    if (g_d012_mod_bt) {
+    if (rt.invoke_chained_direct<&recomp_unit_1243_entry, 1243u, 3009u, 0x09B73C00u>(ctx, &aot_mem) && ctx.pc == 0x0880DE18u) goto L_0880DE18;
+    } else {
     if (rt.invoke_chained_direct<&recomp_unit_0104_entry, 104u, 874u, 0x089A4DE4u>(ctx, &aot_mem) && ctx.pc == 0x0880DE18u) goto L_0880DE18;
+    }
     return;
 L_0880DE14:
     ctx.gpr[5] = (ctx.gpr[2] | 0u);
@@ -14379,7 +14383,11 @@ L_0880EF24:
 L_0880EF28:
     ctx.gpr[31] = (0x0880EF30u);
     ctx.gpr[5] = (ctx.gpr[2] | 0u);
+    if (g_d012_mod_bt) {
+    if (rt.invoke_chained_direct<&recomp_unit_1243_entry, 1243u, 3009u, 0x09B73C00u>(ctx, &aot_mem) && ctx.pc == 0x0880EF30u) goto L_0880EF30;
+    } else {
     if (rt.invoke_chained_direct<&recomp_unit_0104_entry, 104u, 874u, 0x089A4DE4u>(ctx, &aot_mem) && ctx.pc == 0x0880EF30u) goto L_0880EF30;
+    }
     return;
 L_0880EF2C:
     ctx.gpr[5] = (ctx.gpr[2] | 0u);

@@ -17028,7 +17028,11 @@ L_088CB514:
     ctx.gpr[18] = (aot_mem.aot_load8(ctx.gpr[17] + static_cast<std::uint32_t>(1)));
     goto L_088CB518;
 L_088CB518:
+    if (g_d012_mod_bt) {
+    ctx.gpr[5] = (static_cast<std::int32_t>(ctx.gpr[18]) < 250 ? 1u : 0u);
+    } else {
     ctx.gpr[5] = (static_cast<std::int32_t>(ctx.gpr[18]) < 100 ? 1u : 0u);
+    }
     goto L_088CB51C;
 L_088CB51C:
     { const bool branch_taken = ctx.gpr[5] != 0u;
@@ -17071,14 +17075,22 @@ L_088CB538:
     goto L_088CB53C;
 L_088CB53C:
     { const bool branch_taken = ctx.gpr[5] == 0u;
+    if (g_d012_mod_bt) {
+    ctx.gpr[5] = (0u | 250u);
+    } else {
     ctx.gpr[5] = (0u | 100u);
+    }
       if (branch_taken) {
           goto L_088CB54C;
       }
       goto L_088CB544;
     }
 L_088CB540:
+    if (g_d012_mod_bt) {
+    ctx.gpr[5] = (0u | 250u);
+    } else {
     ctx.gpr[5] = (0u | 100u);
+    }
     goto L_088CB544;
 L_088CB544:
     { const bool branch_taken = 0u == 0u;
@@ -17107,14 +17119,22 @@ L_088CB554:
     goto L_088CB558;
 L_088CB558:
     { const bool branch_taken = 0u == 0u;
+    if (g_d012_mod_bt) {
+    ctx.gpr[19] = (0u | 250u);
+    } else {
     ctx.gpr[19] = (0u | 100u);
+    }
       if (branch_taken) {
           goto L_088CB560;
       }
       goto L_088CB560;
     }
 L_088CB55C:
+    if (g_d012_mod_bt) {
+    ctx.gpr[19] = (0u | 250u);
+    } else {
     ctx.gpr[19] = (0u | 100u);
+    }
     goto L_088CB560;
 L_088CB560:
     aot_mem.aot_store8(ctx.gpr[17] + static_cast<std::uint32_t>(1), static_cast<std::uint8_t>(ctx.gpr[19]));
@@ -17439,14 +17459,22 @@ L_088CB6A8:
     goto L_088CB6AC;
 L_088CB6AC:
     { const bool branch_taken = 0u == 0u;
+    if (g_d012_mod_bt) {
+    ctx.gpr[18] = (static_cast<std::int32_t>(ctx.gpr[17]) < 250 ? 1u : 0u);
+    } else {
     ctx.gpr[18] = (static_cast<std::int32_t>(ctx.gpr[17]) < 100 ? 1u : 0u);
+    }
       if (branch_taken) {
           goto L_088CB6BC;
       }
       goto L_088CB6B4;
     }
 L_088CB6B0:
+    if (g_d012_mod_bt) {
+    ctx.gpr[18] = (static_cast<std::int32_t>(ctx.gpr[17]) < 250 ? 1u : 0u);
+    } else {
     ctx.gpr[18] = (static_cast<std::int32_t>(ctx.gpr[17]) < 100 ? 1u : 0u);
+    }
     goto L_088CB6B4;
 L_088CB6B4:
     ctx.gpr[18] = (static_cast<std::int32_t>(ctx.gpr[17]) < 2 ? 1u : 0u);

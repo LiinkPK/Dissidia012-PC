@@ -1,0 +1,76 @@
+From 85f0b366beb7473ec390d5ff429488d42124d34c Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Mon, 9 Nov 2026 03:31:33 +0100
+Subject: [PATCH] Renderer: D012_TRACE_ROSTER=1 logs the 2D draws near the
+ roster, before and after the HUD scaling (off by default)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/gpu/vulkan_renderer.cpp | 44 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index ea72568..6a79b5a 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -8467,6 +8467,20 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+             }
+             if (x1 - x0 >= kScreenWideDraw && y1 - y0 >= 250.0f) impl.menu_over_hud = true;
+         }
++        // D012_TRACE_ROSTER=1: the 2D draws near the roster (the Quick Battle / CPU select grid), before and after the
++        // HUD scaling, to see which draw puts a stray line on a tile. At most 6000 lines.
++        static const bool trace_roster = portablekit::env("TRACE_ROSTER") != nullptr;
++        float trace_pre[4]{0.0f, 0.0f, 0.0f, 0.0f};
++        if (trace_roster && !impl.scratch.empty()) {
++            trace_pre[0] = trace_pre[2] = impl.scratch[0].x;
++            trace_pre[1] = trace_pre[3] = impl.scratch[0].y;
++            for (const GpuVertex &vertex : impl.scratch) {
++                trace_pre[0] = std::min(trace_pre[0], vertex.x);
++                trace_pre[2] = std::max(trace_pre[2], vertex.x);
++                trace_pre[1] = std::min(trace_pre[1], vertex.y);
++                trace_pre[3] = std::max(trace_pre[3], vertex.y);
++            }
++        }
+         // The game marks the display-list commands of its HUD layouts (see kMarkerHudBegin): every draw between
+         // the markers is moved with one rule, and nothing else is, so no part of the screen is taken for the HUD
+         // by where it is or how big it is. A corner piece scales about its own side, the bottom-centre counter
+@@ -8668,6 +8682,36 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 }
+             }
+         }
++        if (trace_roster && !impl.scratch.empty()) {
++            static unsigned trace_lines = 0;
++            bool roster_on = false;
++            for (int c = 0; c < 40; ++c)
++                if (impl.roster_drawn_frame[c] == impl.frames || impl.roster_drawn_frame[c] + 1u == impl.frames) roster_on = true;
++            float post[4]{impl.scratch[0].x, impl.scratch[0].y, impl.scratch[0].x, impl.scratch[0].y};
++            for (const GpuVertex &vertex : impl.scratch) {
++                post[0] = std::min(post[0], vertex.x);
++                post[2] = std::max(post[2], vertex.x);
++                post[1] = std::min(post[1], vertex.y);
++                post[3] = std::max(post[3], vertex.y);
++            }
++            // Only what lies in the band the roster is shrunk into (and the band it comes from), and not a whole-screen quad.
++            const bool near_roster = post[3] > 190.0f && post[1] < 262.0f && post[2] - post[0] < 470.0f;
++            if (roster_on && near_roster && trace_lines < 6000u) {
++                ++trace_lines;
++                char line[420];
++                std::snprintf(line, sizeof line,
++                              "[roster] f%llu hud=%d mode=0x%X prim=%d verts=%zu tex=%d(%08X) col0=%08X blend=%d "
++                              "before=(%.1f,%.1f)-(%.1f,%.1f) after=(%.1f,%.1f)-(%.1f,%.1f) scissor=(%u,%u)-(%u,%u)",
++                              static_cast<unsigned long long>(impl.frames), impl.in_hud_layout ? 1 : 0,
++                              static_cast<unsigned>(impl.hud_mode), static_cast<int>(call.primitive), impl.scratch.size(),
++                              call.texture.enabled ? 1 : 0, static_cast<unsigned>(call.texture.address & 0x0FFFFFFFu),
++                              impl.scratch[0].color, call.blend.enabled ? 1 : 0, trace_pre[0], trace_pre[1], trace_pre[2],
++                              trace_pre[3], post[0], post[1], post[2], post[3],
++                              static_cast<unsigned>(call.viewport.scissor_x1), static_cast<unsigned>(call.viewport.scissor_y1),
++                              static_cast<unsigned>(call.viewport.scissor_x2), static_cast<unsigned>(call.viewport.scissor_y2));
++                std::cout << line << std::endl;
++            }
++        }
+         if (hud_texture && !impl.menu_over_hud && !portablekit::game().hud_scaled_by_game && (hud_scale < 1.0f || hud_margin > 0.0f || hud_side > 0.0f) &&
+             !call.clear_mode &&
+             (quads || (call.primitive == PrimitiveType::Triangles && impl.scratch.size() % 6u == 0u))) {
+-- 
+2.54.0.windows.1
+

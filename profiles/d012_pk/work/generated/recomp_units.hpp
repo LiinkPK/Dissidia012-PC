@@ -4,6 +4,8 @@
 #include "psprecomp/corpus_abi.hpp"
 
 namespace psprecomp {
+// The Braviest Turning mod switch (d012_braviest_turning.cpp): read by the code the mod changes, set once at start-up.
+extern bool g_d012_mod_bt;
 void recomp_unit_0000(CorpusRuntime &, AllegrexContext &);
 void recomp_unit_0000_entry(CorpusRuntime &, AllegrexContext &, std::uint16_t, AotFastView &);
 void recomp_unit_0001(CorpusRuntime &, AllegrexContext &);
@@ -230,4 +232,8 @@ void recomp_unit_0111(CorpusRuntime &, AllegrexContext &);
 void recomp_unit_0111_entry(CorpusRuntime &, AllegrexContext &, std::uint16_t, AotFastView &);
 void recomp_unit_0112(CorpusRuntime &, AllegrexContext &);
 void recomp_unit_0112_entry(CorpusRuntime &, AllegrexContext &, std::uint16_t, AotFastView &);
+void recomp_unit_1243(CorpusRuntime &, AllegrexContext &);
+void recomp_unit_1243_entry(CorpusRuntime &, AllegrexContext &, std::uint16_t, AotFastView &);
+void recomp_unit_1244(CorpusRuntime &, AllegrexContext &);
+void recomp_unit_1244_entry(CorpusRuntime &, AllegrexContext &, std::uint16_t, AotFastView &);
 } // namespace psprecomp

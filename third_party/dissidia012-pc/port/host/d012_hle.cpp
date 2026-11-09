@@ -1,13 +1,10 @@
 // Dissidia 012's own HLE additions and diagnostics, reached through the
 // profile's hooks. MIT licence; see port/README.md.
 
-#include "d012_bgm_playlist.hpp"
 #include "d012_camera.hpp"
 #include "d012_dlc.hpp"
 #include "d012_hle.hpp"
-#include "d012_mods.hpp"
 #include "d012_test_switches.hpp"
-#include "d012_versus.hpp"
 
 #include "hle/hle_common.hpp"
 #include "profile.hpp"
@@ -98,13 +95,8 @@ void register_extra_hle(portablekit::HleRegistrar &hle) {
 
     // What DLC the game will find, in the log (d012_dlc.cpp).
     dlc::install(hle);
-    // Mods: music added to the game (d012_mods.cpp, docs/port/mod-folder.md).
-    mods::install(hle);
-    // The right-stick battle camera and R3 (d012_camera.cpp).
+    // The right-stick battle camera and the battle shortcuts (d012_camera.cpp).
     camera::install(hle);
-    // Local versus: player 2 on a second controller (d012_versus.cpp), after
-    // the camera's wrapper so the menus' pad swap is the last word.
-    versus::install(hle);
     // Test switches, off by default (d012_test_switches.cpp).
     test_switches::install(hle);
 }

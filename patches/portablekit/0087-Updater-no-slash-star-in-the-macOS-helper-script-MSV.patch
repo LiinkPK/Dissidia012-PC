@@ -1,0 +1,30 @@
+From 69cb1b028bd034d7b8b18327e6fdd54b4a4e8301 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 16:26:13 +0100
+Subject: [PATCH] Updater: no slash-star in the macOS helper script (MSVC reads
+ it as an unterminated comment in the skipped block)
+
+---
+ host/ui/updater.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 29d3e65..3662aa2 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -481,10 +481,10 @@ const char *kHelperScript = R"SH(#!/bin/sh
+ PID="$1"; PKG="$2"; TARGET="$3"; EXE="$4"; PROGRESS="$5"
+ LOG="${TMPDIR:-/tmp}/d012_update.log"
+ STAGE="$TARGET/update_staging"
+-# Run from inside a macOS .app (.../X.app/Contents/MacOS/exe): the whole .app is replaced, never written into, so the unpacking
++# Run from inside a macOS .app (X.app, Contents, MacOS, the executable): the whole .app is replaced, never written into, so the unpacking
+ # goes beside it and the player's data (kept outside the app) is not involved.
+ APPDIR=""
+-case "$EXE" in */Contents/MacOS/*) APPDIR="${EXE%%/Contents/MacOS/*}"; STAGE="$(dirname "$APPDIR")/.d012_update_staging" ;; esac
++case "$EXE" in *".app/Contents/MacOS/"*) APPDIR="$(dirname "$(dirname "$(dirname "$EXE")")")"; STAGE="$(dirname "$APPDIR")/.d012_update_staging" ;; esac
+ report() { printf '%s\n' "$1" > "$PROGRESS"; }
+ fail() { printf '%s\n' "$1" >> "$LOG"; report "failed: $1"; rm -rf "$STAGE"; exit 1; }
+ printf 'started %s pkg=%s target=%s exe=%s\n' "$(date)" "$PKG" "$TARGET" "$EXE" > "$LOG"
+-- 
+2.54.0.windows.1
+

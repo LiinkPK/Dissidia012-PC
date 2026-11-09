@@ -1,0 +1,78 @@
+From 4b983132624bbbf561678102463d66b261552157 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 18:11:18 +0100
+Subject: [PATCH] Fonts: one lock over the glyph caches, filled by the HLE font
+ calls and the HD line renderer at once (two inserts into a map corrupt the
+ heap)
+
+---
+ host/fonts/game_font.cpp | 29 +++++++++++++++++++++++------
+ 1 file changed, 23 insertions(+), 6 deletions(-)
+
+diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
+index 2708396..46c2219 100644
+--- a/host/fonts/game_font.cpp
++++ b/host/fonts/game_font.cpp
+@@ -403,7 +403,15 @@ void load(State &s) {
+     std::cout << "\n";
+ }
+ 
++// The glyph caches (layouts, bitmaps) and the font faces are filled by the game's own font calls (the HLE thread) and by the
++// HD line renderer (the drawing thread) at the same time: one lock covers them, or two inserts into a map corrupt the heap.
++std::recursive_mutex &cache_mutex() {
++    static std::recursive_mutex value;
++    return value;
++}
++
+ State &loaded_state() {
++    const std::lock_guard<std::recursive_mutex> lock(cache_mutex());
+     State &s = state();
+     if (!s.loaded) load(s);
+     return s;
+@@ -593,9 +601,13 @@ bool ready() {
+     return s.chosen || s.fallback;
+ }
+ 
+-GlyphMetrics metrics(std::uint32_t code) { return layout_for(loaded_state(), code).metrics; }
++GlyphMetrics metrics(std::uint32_t code) {
++    const std::lock_guard<std::recursive_mutex> lock(cache_mutex());
++    return layout_for(loaded_state(), code).metrics;
++}
+ 
+ GlyphBitmap render(std::uint32_t code, float shift_x, float shift_y) {
++    const std::lock_guard<std::recursive_mutex> lock(cache_mutex());
+     State &s = loaded_state();
+     const int sx = std::clamp(static_cast<int>(shift_x * 64.0f), 0, 63);
+     const int sy = std::clamp(static_cast<int>(shift_y * 64.0f), 0, 63);
+@@ -672,6 +684,7 @@ bool line_glyphs(std::uint32_t buffer, std::vector<LineGlyph> &out, std::uint64_
+ }
+ 
+ std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int width, int height, int scale) {
++    const std::lock_guard<std::recursive_mutex> lock(cache_mutex());
+     State &s = loaded_state();
+     const int out_w = width * scale, out_h = height * scale;
+     std::vector<std::uint8_t> out(static_cast<std::size_t>(out_w) * static_cast<std::size_t>(out_h), 0u);
+@@ -718,11 +731,15 @@ std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int
+ static void (*reload_hook)() = nullptr;
+ 
+ void reload() {
+-    State &s = state();
+-    s.layouts.clear();
+-    s.bitmaps.clear();
+-    load(s);
+-    ++s.generation;
++    {
++        const std::lock_guard<std::recursive_mutex> lock(cache_mutex());
++        State &s = state();
++        s.layouts.clear();
++        s.bitmaps.clear();
++        load(s);
++        ++s.generation;
++    }
++    // Outside the lock: the hook reaches the renderer, whose own lock may be held by a thread waiting for this one.
+     if (reload_hook != nullptr) reload_hook();
+ }
+ 
+-- 
+2.54.0.windows.1
+

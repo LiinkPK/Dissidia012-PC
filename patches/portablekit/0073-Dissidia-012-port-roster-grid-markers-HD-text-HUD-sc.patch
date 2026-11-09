@@ -1507,7 +1507,7 @@ index 4febd7e..97e51c9 100644
      // Which release that is, as the installer names it when it is handed
      // another one: "the Japanese release". Null: it is named by disc id alone.
      const char *release_name = nullptr;
-+    // The version of this release of the port, as its GitHub tag ("v1.0.1"): what the update check compares with
++    // The version of this release of the port, as its GitHub tag ("v1.0.3"): what the update check compares with
 +    // the newest release. Null: the build's git describe text.
 +    const char *release_version = nullptr;
 +    // The game moves its own battle HUD to the Battle HUD settings (host code in the profile's sources does it

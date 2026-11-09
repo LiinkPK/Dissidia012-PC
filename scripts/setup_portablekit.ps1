@@ -10,7 +10,11 @@ $root = Split-Path -Parent $PSScriptRoot
 if (-not $Dest) { $Dest = Join-Path $root "third_party\PortableKit-d012" }
 $base = "33800c4060c53f3233e08f8ab2cc4590a0872063"
 if ($Force -and (Test-Path $Dest)) { Remove-Item -Recurse -Force $Dest }
-if ((Test-Path (Join-Path $Dest "cmake\PortableKit.cmake")) -and (Test-Path (Join-Path $Dest ".d012_patched"))) { Write-Host "PortableKit is already set up: $Dest"; return }
+# Up to date only when it was patched with as many patches as there are now: a copy of an older checkout is made again
+$want = @(Get-ChildItem (Join-Path $root "third_party\dissidia012-pc\port\portablekit-patches") -Filter *.patch).Count + @(Get-ChildItem (Join-Path $root "patches\portablekit") -Filter *.patch).Count
+$stamp = Join-Path $Dest ".d012_patched"
+$have = if (Test-Path $stamp) { [int](((Get-Content $stamp -Raw) -split ' ')[0]) } else { 0 }
+if ((Test-Path (Join-Path $Dest "cmake\PortableKit.cmake")) -and ($have -eq $want)) { Write-Host "PortableKit is already set up: $Dest ($have patches)"; return }
 if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw "git is needed" }
 Write-Host "Cloning PortableKit from $Source ..."

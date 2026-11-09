@@ -6,7 +6,7 @@
 #     any copy in Release\overlays, so an old overlay can never travel in the zip;
 #   - FFmpeg's DLLs and licence files come from the build's bin folder;
 #   - requirements.bat and README.txt come from the repo's release\ folder;
-#   - data\fonts\calibri.ttf comes from the Windows fonts folder (or release\fonts);
+#   - fonts\calibri.ttf (next to the exe, not inside data\) comes from the Windows fonts folder (or release\fonts);
 #   - data\ (fonts, textures, ...) is copied as it is, except the player's own folders and the files made while
 #     testing here (listed below): those are in the zip as empty folders.
 # It stops with a message if something the game needs is missing.
@@ -25,6 +25,8 @@ $stage = Join-Path $root "$Out\$name"
 $playerFolders = "data\mods", "data\ms0\PSP\GAME", "data\ms0\PSP\SAVEDATA", "game"
 # Made on this machine while testing: the game writes them again on the player's first run.
 $localFiles = "data\settings.ini", "data\pipeline_cache.bin", "data\pipeline_keys.bin"
+# The logs are the player's own (running the game from the build folder makes data\logs): they never ship.
+$localFolders = "data\logs"
 # Test leftovers and old copies that must not ship.
 $junk = "*.stale*", "*.old", "*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak"
 # Linux and macOS files never go in the Windows zip: the shell scripts, the Linux binary and libraries, the .dylib files, and the Carlito font
@@ -41,7 +43,7 @@ Write-Host "Done!"
 
 # robocopy exit codes below 8 are success
 Write-Host "[2/6] Copying the build... " -NoNewline
-robocopy $src $stage /E /XD ($playerFolders | ForEach-Object { Join-Path $src $_ }) /XF (($localFiles | ForEach-Object { Join-Path $src $_ }) + $junk + $linuxOnly) /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $src $stage /E /XD (($playerFolders + $localFolders) | ForEach-Object { Join-Path $src $_ }) /XF (($localFiles | ForEach-Object { Join-Path $src $_ }) + $junk + $linuxOnly) /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
 Write-Host "Done!"
 
@@ -54,9 +56,9 @@ Get-ChildItem $overlaySrc -Filter "*.dll" | Where-Object { $_.Name -notlike "*.s
 # FFmpeg (LGPL): its DLLs and its licence text and source pointer travel together.
 Get-ChildItem $bin -Filter "*.dll" -File | Copy-Item -Destination $stage -Force
 foreach ($f in "FFmpeg-LICENSE.txt", "FFmpeg-SOURCE.txt") { $p = Join-Path $bin $f; if (Test-Path $p) { Copy-Item $p $stage -Force } }
-# Calibri Regular: the game's text is drawn from it only (data\fonts\calibri.ttf, found next to the exe on any
+# Calibri Regular: the game's text is drawn from it only (fonts\calibri.ttf next to the exe, not in data\; found on any
 # system). Taken from this machine's Windows fonts, or from release\fonts\calibri.ttf if that exists.
-$calibriDst = Join-Path $stage "data\fonts"
+$calibriDst = Join-Path $stage "fonts"
 New-Item -ItemType Directory -Force $calibriDst | Out-Null
 $calibri = @((Join-Path $root "release\fonts\calibri.ttf"), (Join-Path $env:WINDIR "Fonts\calibri.ttf")) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $calibri) { throw "calibri.ttf not found (looked in release\fonts and the Windows fonts folder)" }
@@ -64,6 +66,15 @@ Copy-Item $calibri (Join-Path $calibriDst "calibri.ttf") -Force
 # requirements.bat and README.txt: the repo's copies win over the ones in the build folder.
 $releaseDir = Join-Path $root "release"
 if (Test-Path $releaseDir) { Get-ChildItem $releaseDir -File -Exclude $linuxOnly | Copy-Item -Destination $stage -Force }
+# The cheats files (ULES and ULUS) kept in the repo go in too, whether or not the build folder has them.
+$cheatsSrc = Join-Path $root "release\data\ms0\PSP\CHEATS"
+if (Test-Path $cheatsSrc) {
+    $cheatsDst = Join-Path $stage "data\ms0\PSP\CHEATS"
+    New-Item -ItemType Directory -Force $cheatsDst | Out-Null
+    Copy-Item (Join-Path $cheatsSrc "*") $cheatsDst -Recurse -Force
+}
+# data\logs is never packed, whichever way it got in.
+Remove-Item -Recurse -Force (Join-Path $stage "data\logs") -ErrorAction SilentlyContinue
 # Sweep: whatever Linux file got in by another way is removed before zipping.
 Get-ChildItem $stage -Recurse -File -Include $linuxOnly | Remove-Item -Force
 Write-Host "Done!"
@@ -81,7 +92,8 @@ foreach ($o in "battle", "extra", "menu", "suppreacc") {
     if (-not (Get-ChildItem $stageOverlays -Filter "ovl*_${o}_*.dll")) { $missing += "overlays\*_${o}_*.dll" }
 }
 if (-not (Test-Path (Join-Path $stage "data\textures"))) { $missing += "data\textures" }
-if (-not (Test-Path (Join-Path $stage "data\fonts\calibri.ttf"))) { $missing += "data\fonts\calibri.ttf" }
+if (-not (Test-Path (Join-Path $stage "fonts\calibri.ttf"))) { $missing += "fonts\calibri.ttf" }
+Remove-Item -Recurse -Force (Join-Path $stage "data\fonts") -ErrorAction SilentlyContinue  # fonts live in the root only
 if ($missing.Count -gt 0) { throw "Missing from the package: $($missing -join ', ')" }
 # An overlay older than the exe means the build was not finished: say so instead of shipping it.
 $exeTime = (Get-Item (Join-Path $stage "d012_native.exe")).LastWriteTime

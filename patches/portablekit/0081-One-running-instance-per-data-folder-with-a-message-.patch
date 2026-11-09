@@ -1,0 +1,215 @@
+From 58318a6b872c3747296c344bb87101eebe697482 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Mon, 9 Nov 2026 00:10:49 +0100
+Subject: [PATCH] One running instance per data folder, with a message;
+ <PREFIX>_ALLOW_MULTIPLE=1 turns it off
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/main.cpp            |  13 +++-
+ host/single_instance.hpp | 154 +++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 165 insertions(+), 2 deletions(-)
+ create mode 100644 host/single_instance.hpp
+
+diff --git a/host/main.cpp b/host/main.cpp
+index 1424597..31e3300 100644
+--- a/host/main.cpp
++++ b/host/main.cpp
+@@ -10,6 +10,7 @@
+ #include "adhoc/session.hpp"
+ 
+ #include "profile.hpp"
++#include "single_instance.hpp"
+ #include "install/installer.hpp"
+ #include "install/user_data.hpp"
+ #include "gpu/ge_census.hpp"
+@@ -346,6 +347,8 @@ int main(int argc, char **argv) {
+             return 2;
+         }
+         if (options.install_image) return install_from_command_line(options);
++        // One copy per data folder (single_instance.hpp); <PREFIX>_ALLOW_MULTIPLE=1 turns it off.
++        if (!portablekit::acquire_single_instance()) return 3;
+ #if defined(PORTABLEKIT_ANDROID_APP)
+         {
+             // "Set up game data again" from the menu, left for this start.
+@@ -456,9 +459,15 @@ int main(int argc, char **argv) {
+         // threads stop here, while everything they use still exists.
+         portablekit::adhoc_shutdown();
+         // "Set up game data again" in the in-game menu.
+-        if (portablekit::install::setup_requested_on_exit()) return portablekit::install::restart_for_setup(argv[0]);
++        if (portablekit::install::setup_requested_on_exit()) {
++            portablekit::release_single_instance();
++            return portablekit::install::restart_for_setup(argv[0]);
++        }
+         // "Restart now" after importing a save.
+-        if (portablekit::install::restart_requested_on_exit()) return portablekit::install::restart(argv);
++        if (portablekit::install::restart_requested_on_exit()) {
++            portablekit::release_single_instance();
++            return portablekit::install::restart(argv);
++        }
+         std::cout << portablekit::kernel().describe_threads() << "\n";
+         runtime.report_hle_histogram();
+         portablekit::gpu::GeState::report_ignored_commands();
+diff --git a/host/single_instance.hpp b/host/single_instance.hpp
+new file mode 100644
+index 0000000..0418abc
+--- /dev/null
++++ b/host/single_instance.hpp
+@@ -0,0 +1,154 @@
++#pragma once
++
++// One running copy per data folder. A second start of the same install (same saves, settings and logs) would write the same
++// files as the first, so it is refused with a message instead. Two copies that keep their own data folder (<PREFIX>_DATA_DIR,
++// which is how a second window for a split screen or a before/after comparison is run) do not meet: the lock belongs to the
++// folder. <PREFIX>_ALLOW_MULTIPLE=1 turns the check off.
++//
++// Windows: a named mutex in the session, named after the folder. Linux and macOS: an exclusive flock on
++// <data folder>/.instance.lock, which the system drops when the process ends, however it ends. The message is a message box
++// on Windows; on Linux and macOS it is printed, and also shown through zenity, kdialog or osascript where one is installed.
++
++#include "install/user_data.hpp"
++#include "profile.hpp"
++
++#include <algorithm>
++#include <cctype>
++#include <cerrno>
++#include <cstdio>
++#include <cwctype>
++#include <cstdlib>
++#include <filesystem>
++#include <functional>
++#include <iostream>
++#include <string>
++#include <system_error>
++
++#if defined(_WIN32)
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#if defined(_MSC_VER)
++#pragma comment(lib, "user32.lib")
++#endif
++#elif !defined(__ANDROID__)
++#include <fcntl.h>
++#include <sys/file.h>
++#include <unistd.h>
++#endif
++
++namespace portablekit {
++
++namespace single_instance_detail {
++
++inline std::string game_name() {
++    const GameProfile &profile = game();
++    if (profile.window_title != nullptr && *profile.window_title != '\0') return profile.window_title;
++    if (profile.game_title != nullptr && *profile.game_title != '\0') return profile.game_title;
++    return profile.app_name;
++}
++
++inline std::string message_text() {
++    return "An instance of " + game_name() +
++           " is already running.\n\nOnly one instance can run at a time with the same data folder. Close the running "
++           "instance (look for " +
++           std::string(game().app_name) + " in the taskbar or the process list) and start it again.";
++}
++
++#if !defined(_WIN32)
++// Keeps only characters that are safe inside a quoted shell argument.
++inline std::string shell_safe(const std::string &text) {
++    std::string out;
++    for (const char c : text) out += (c == '\'' || c == '"' || c == '\\' || c == '`' || c == '$') ? ' ' : (c == '\n' ? ' ' : c);
++    return out;
++}
++#endif
++
++inline void report() {
++    const std::string text = message_text();
++    std::cerr << text << "\n";
++#if defined(_WIN32)
++    const std::string title = game_name();
++    const auto wide = [](const std::string &s) {
++        const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
++        std::wstring w(n > 0 ? static_cast<std::size_t>(n) : 1u, L'\0');
++        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
++        return w;
++    };
++    MessageBoxW(nullptr, wide(text).c_str(), wide(title).c_str(), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
++#elif defined(__APPLE__)
++    const std::string command = "osascript -e 'display dialog \"" + shell_safe(text) +
++                                "\" with title \"" + shell_safe(game_name()) +
++                                "\" buttons {\"OK\"} default button \"OK\" with icon caution' >/dev/null 2>&1";
++    if (std::system(command.c_str()) != 0) { /* the message is on stderr */ }
++#elif !defined(__ANDROID__)
++    const std::string t = shell_safe(text), n = shell_safe(game_name());
++    const std::string command = "(zenity --warning --no-markup --title='" + n + "' --text='" + t +
++                                "' || kdialog --title '" + n + "' --sorry '" + t + "' || xmessage -center '" + t +
++                                "') >/dev/null 2>&1";
++    if (std::system(command.c_str()) != 0) { /* the message is on stderr */ }
++#endif
++}
++
++// What holds the lock: a mutex handle on Windows, a file descriptor elsewhere.
++inline void *&held_handle() {
++    static void *handle = nullptr;
++    return handle;
++}
++inline int &held_fd() {
++    static int fd = -1;
++    return fd;
++}
++
++} // namespace single_instance_detail
++
++// Lets the lock go before this process starts its own replacement (the menu's restart), which would otherwise meet it.
++inline void release_single_instance() {
++#if defined(_WIN32)
++    if (single_instance_detail::held_handle() != nullptr) CloseHandle(static_cast<HANDLE>(single_instance_detail::held_handle()));
++    single_instance_detail::held_handle() = nullptr;
++#elif !defined(__ANDROID__)
++    if (single_instance_detail::held_fd() >= 0) ::close(single_instance_detail::held_fd());
++    single_instance_detail::held_fd() = -1;
++#endif
++}
++
++// True when this process may go on: it is the only one on its data folder, or the check is off. False after the message
++// has been shown. The lock is held until the process ends.
++inline bool acquire_single_instance() {
++    if (env("ALLOW_MULTIPLE") != nullptr && *env("ALLOW_MULTIPLE") != '\0' && std::string(env("ALLOW_MULTIPLE")) != "0")
++        return true;
++    std::error_code ec;
++    const std::filesystem::path folder = install::user_data_directory();
++    std::filesystem::create_directories(folder, ec);
++#if defined(_WIN32)
++    std::wstring key = std::filesystem::absolute(folder, ec).wstring();
++    std::transform(key.begin(), key.end(), key.begin(), [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
++    const std::wstring name = L"Local\\PortableKit_" + std::to_wstring(std::hash<std::wstring>{}(key));
++    HANDLE mutex = CreateMutexW(nullptr, FALSE, name.c_str());
++    if (mutex != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
++        single_instance_detail::report();
++        return false;
++    }
++    single_instance_detail::held_handle() = mutex;  // open until the process ends, or release_single_instance()
++    return true;
++#elif !defined(__ANDROID__)
++    const std::filesystem::path lock = folder / ".instance.lock";
++    const int fd = ::open(lock.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
++    if (fd >= 0 && ::flock(fd, LOCK_EX | LOCK_NB) != 0 && errno == EWOULDBLOCK) {
++        single_instance_detail::report();
++        ::close(fd);
++        return false;
++    }
++    single_instance_detail::held_fd() = fd;  // open until the process ends; a failure to lock at all lets the game start
++    return true;
++#else
++    return true;
++#endif
++}
++
++} // namespace portablekit
+-- 
+2.54.0.windows.1
+

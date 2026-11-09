@@ -8960,8 +8960,13 @@ L_08839440:
     aot_mem.aot_store32(ctx.gpr[9] + static_cast<std::uint32_t>(44), 0u);
     goto L_08839444;
 L_08839444:
+    if (g_d012_mod_bt) {
+    aot_mem.aot_store16(ctx.gpr[9] + static_cast<std::uint32_t>(50), static_cast<std::uint16_t>(ctx.gpr[8]));
+    (void)rt.invoke_chained_direct<&recomp_unit_1243_entry, 1243u, 1029u, 0x09B71D10u>(ctx, &aot_mem); return;
+    } else {
     aot_mem.aot_store16(ctx.gpr[9] + static_cast<std::uint32_t>(48), static_cast<std::uint16_t>(0u));
     goto L_08839448;
+    }
 L_08839448:
     aot_mem.aot_store16(ctx.gpr[9] + static_cast<std::uint32_t>(50), static_cast<std::uint16_t>(ctx.gpr[8]));
     goto L_0883944C;
@@ -9124,8 +9129,13 @@ L_08839500:
     aot_mem.aot_store32(ctx.gpr[9] + static_cast<std::uint32_t>(44), 0u);
     goto L_08839504;
 L_08839504:
+    if (g_d012_mod_bt) {
+    aot_mem.aot_store16(ctx.gpr[9] + static_cast<std::uint32_t>(50), static_cast<std::uint16_t>(ctx.gpr[8]));
+    (void)rt.invoke_chained_direct<&recomp_unit_1243_entry, 1243u, 1033u, 0x09B71D20u>(ctx, &aot_mem); return;
+    } else {
     aot_mem.aot_store16(ctx.gpr[9] + static_cast<std::uint32_t>(48), static_cast<std::uint16_t>(0u));
     goto L_08839508;
+    }
 L_08839508:
     aot_mem.aot_store16(ctx.gpr[9] + static_cast<std::uint32_t>(50), static_cast<std::uint16_t>(ctx.gpr[8]));
     goto L_0883950C;
@@ -9365,10 +9375,19 @@ L_08839608:
     aot_mem.aot_store32(ctx.gpr[17] + static_cast<std::uint32_t>(44), ctx.gpr[4]);
     goto L_0883960C;
 L_0883960C:
+    if (g_d012_mod_bt) {
+    // nop
+    (void)rt.invoke_chained_direct<&recomp_unit_1243_entry, 1243u, 1037u, 0x09B71D30u>(ctx, &aot_mem); return;
+    } else {
     ctx.gpr[4] = (aot_mem.aot_load32(ctx.gpr[18] + static_cast<std::uint32_t>(56)));
     goto L_08839610;
+    }
 L_08839610:
+    if (g_d012_mod_bt) {
+    // nop
+    } else {
     aot_mem.aot_store16(ctx.gpr[17] + static_cast<std::uint32_t>(48), static_cast<std::uint16_t>(ctx.gpr[4]));
+    }
     goto L_08839614;
 L_08839614:
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[16] + static_cast<std::uint32_t>(42))))));

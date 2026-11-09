@@ -34,37 +34,19 @@ add_subdirectory("${PORTABLEKIT_ROOT}" portablekit)
 # portablekit_add_game() reads <profile>/config/nids.csv for NIDs the framework does not name.
 configure_file("${D012_PORT_DIR}/config/nids.csv" "${D012_WORK_DIR}/config/nids.csv" COPYONLY)
 
-# Local versus and split screen (the open-source port's own work) are left out of the release build. Configure a
-# separate build folder with -DD012_SPLITSCREEN=ON to build them in; the normal build is not touched.
-option(D012_SPLITSCREEN "Build local versus and split screen in" OFF)
-if(D012_SPLITSCREEN)
-    set(D012_VERSUS_SOURCES
-        "${D012_PORT_DIR}/host/d012_split_view.cpp"
-        "${D012_PORT_DIR}/host/d012_versus.cpp"
-        "${D012_PORT_DIR}/host/d012_versus_menu.cpp")
-else()
-    set(D012_VERSUS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_versus.cpp")
-endif()
-
 portablekit_add_game(d012_native
     PROFILE_DIR "${D012_WORK_DIR}"
     SOURCES "${D012_PROFILE_HOST}/d012_profile.cpp"
-            ${D012_VERSUS_SOURCES}
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_hud_layout.cpp"
             "${D012_PORT_DIR}/host/d012_hle.cpp"
             "${D012_PORT_DIR}/host/d012_prx.cpp"
-            "${D012_PORT_DIR}/host/d012_json.cpp"
-            "${D012_PORT_DIR}/host/d012_mod_manifest.cpp"
-            "${D012_PORT_DIR}/host/d012_mods.cpp"
             "${D012_PORT_DIR}/host/d012_dlc.cpp"
-            "${D012_PORT_DIR}/host/d012_nintendo_stream.cpp"
             "${D012_PORT_DIR}/host/d012_decomp_harness.cpp"
-            "${D012_PORT_DIR}/host/d012_decomp_bgm.cpp"
             "${D012_PORT_DIR}/host/d012_decomp_pad.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_bloom.cpp"
-            "${D012_PORT_DIR}/host/d012_bgm_playlist.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/d012_braviest_turning.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/d012_emendatus.cpp"
             "${D012_PORT_DIR}/host/d012_camera.cpp"
-            "${D012_PORT_DIR}/host/d012_loading_layout.cpp"
             "${D012_PORT_DIR}/host/d012_crash_report.cpp"
             "${D012_PORT_DIR}/host/d012_test_switches.cpp"
             "${D012_PORT_DIR}/host/d012_portable.cpp")
@@ -73,9 +55,7 @@ set(D012_PORTABLEKIT_DIR "${PORTABLEKIT_ROOT}")
 
 # Decompiled game functions (C), run as native overrides (third_party/dissidia012-pc/port/decomp/). C is enabled
 # in project() above: SDL3's CMake package compiles a C test program when PortableKit looks for it.
-add_library(d012_decomp STATIC "${D012_PORT_DIR}/decomp/bgm_table.c"
-                               "${D012_PORT_DIR}/decomp/bgm_selector.c"
-                               "${D012_PORT_DIR}/decomp/battle_camera.c"
+add_library(d012_decomp STATIC "${D012_PORT_DIR}/decomp/battle_camera.c"
                                "${D012_PORT_DIR}/decomp/pad.c"
                                "${D012_PORT_DIR}/decomp/pad_walk.c")
 target_link_libraries(d012_native PRIVATE d012_decomp)

@@ -83,7 +83,7 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 
 ## Status
 
-**Version v1.0.2.** **The game is fully ported and playable**: menus, battles with shadows and effects, story mode, cutscenes, music, saves and the HD texture pack all work in the native build. What is left is not porting but tweaking it into a proper HD remaster:
+**Version v1.0.4.** **The game is fully ported and playable**: menus, battles with shadows and effects, story mode, cutscenes, music, saves and the HD texture pack all work in the native build. What is left is not porting but tweaking it into a proper HD remaster:
 - **HUD downscaling and placement:** done in the game's own layout data (`profiles/d012_vk/d012_hud_layout.cpp`; Video menu: HUD size, lift, side space). The shrink still reaches some story mode screens (dialogue boxes, the "Skip cutscene?" prompt, cutscene images); that is being fixed.
 - **HD text:** done. Each line of text is drawn again from the TrueType font at 3 times its size, so menus, descriptions and dialogue are sharp; Text > Size sets the letter size. Subtitles are crisp, raised and smaller (Subtitle size and Subtitle height).
 - **Select screens:** the roster is two rows of 16 with the Party roster and descriptions working. Next: a 3D model of the hovered character (a placeholder exists; reading the models from the disc is in progress).

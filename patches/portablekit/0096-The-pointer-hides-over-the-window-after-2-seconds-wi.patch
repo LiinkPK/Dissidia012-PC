@@ -1,0 +1,65 @@
+From e3a8ae6869e7ec99e0030eb3786025e14c901135 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 18:43:21 +0100
+Subject: [PATCH] The pointer hides over the window after 2 seconds without
+ moving and comes back when it moves
+
+---
+ host/gpu/vulkan_renderer.cpp | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 6ad2443..c54a11c 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1347,6 +1347,9 @@ struct VulkanRenderer::Impl {
+     input::touch::Controls touch;
+     bool touch_visible{};
+     bool real_mouse_seen{};
++    // The pointer hides after 2 seconds without moving over the window, and comes back when it moves.
++    std::chrono::steady_clock::time_point last_pointer_move{std::chrono::steady_clock::now()};
++    bool pointer_hidden{};
+     MouseMotion touch_motion{};
+     struct TouchLayoutKey {
+         int width{};
+@@ -7156,7 +7159,14 @@ bool VulkanRenderer::pump_events() {
+         if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) ||
+             ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
+              event.button.which != SDL_TOUCH_MOUSEID))
++        {
+             impl_->real_mouse_seen = true;
++            impl_->last_pointer_move = std::chrono::steady_clock::now();
++            if (impl_->pointer_hidden) {
++                SDL_ShowCursor();
++                impl_->pointer_hidden = false;
++            }
++        }
+         impl_->handle_touch(event);
+         if (event.type == SDL_EVENT_MOUSE_MOTION && impl_->mouse_captured && event.motion.which != SDL_TOUCH_MOUSEID &&
+             (!impl_->scripted_input || event.motion.which == kScriptedMouse)) {
+@@ -7206,6 +7216,22 @@ bool VulkanRenderer::pump_events() {
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
+             impl_->overlay_visible = !impl_->overlay_visible;
+     }
++#if !defined(__ANDROID__)
++    // Hide the pointer over the window after 2 seconds without moving; any move brings it back (above). While the mouse is
++    // captured for the game, SDL hides it itself.
++    {
++        const bool over = (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MOUSE_FOCUS) != 0u;
++        const bool idle = std::chrono::steady_clock::now() - impl_->last_pointer_move > std::chrono::seconds(2);
++        const bool hide = over && idle && !impl_->mouse_captured;
++        if (hide && !impl_->pointer_hidden) {
++            SDL_HideCursor();
++            impl_->pointer_hidden = true;
++        } else if (!hide && impl_->pointer_hidden) {
++            SDL_ShowCursor();
++            impl_->pointer_hidden = false;
++        }
++    }
++#endif
+     // Only sample while the window has focus: a key still down when focus is
+     // lost stays down in SDL's snapshot, which the guest sees as a held
+     // direction it can never release.
+-- 
+2.54.0.windows.1
+

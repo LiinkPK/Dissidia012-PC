@@ -1,0 +1,374 @@
+From 9a76b18d2983f0637dcf75b50bb77976ad29e5ac Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 5 Nov 2026 23:03:47 +0100
+Subject: [PATCH] Updater on Linux and macOS: curl download, a shell script
+ unpacks while the game runs
+
+The same flow as Windows: the release's .tar.gz (the name holds linux or macos) is fetched with curl, a detached sh script unpacks it into a staging folder reporting progress through a file, and once the game has closed it copies the files over the game's folder (not game/ or data/, except data/fonts and new textures; textures.ini is replaced) and starts the game again through run.sh.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/ui/updater.cpp | 263 +++++++++++++++++++++++++++++++++++++++++++-
+ host/ui/updater.hpp |   7 +-
+ 2 files changed, 262 insertions(+), 8 deletions(-)
+
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 2cb866b..361e2ef 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -19,6 +19,18 @@
+ #include <thread>
+ #include <vector>
+ 
++#include "app_paths.hpp"
++
++// Windows, Linux and macOS (not Android) have the updater.
++#if defined(_WIN32) || ((defined(__linux__) || defined(__APPLE__)) && !defined(__ANDROID__))
++#define PK_UPDATER 1
++#endif
++#if defined(PK_UPDATER) && !defined(_WIN32)
++#include <fcntl.h>
++#include <sys/wait.h>
++#include <unistd.h>
++#endif
++
+ #if defined(_WIN32)
+ #define WIN32_LEAN_AND_MEAN
+ #define NOMINMAX
+@@ -41,6 +53,7 @@ std::mutex g_mutex;
+ Status g_status;
+ std::string g_zip_url;
+ std::filesystem::path g_zip_path;
++std::uint64_t g_zip_size = 0;  // the package's size as the release lists it (the download's total on Linux and macOS)
+ 
+ void set_status(const std::function<void(Status &)> &change) {
+     const std::lock_guard<std::mutex> lock(g_mutex);
+@@ -137,6 +150,59 @@ bool http_get(const std::string &url, const std::function<void(const char *, std
+     return ok;
+ }
+ 
++#elif defined(PK_UPDATER)
++// GETs `url` with curl (on macOS and every common Linux; no library to link): the body goes to `sink` as it comes,
++// `progress` is told how much of the expected size is in. False with the reason in `error`.
++bool http_get(const std::string &url, const std::function<void(const char *, std::size_t)> &sink,
++              const std::function<void(std::uint64_t, std::uint64_t)> &progress, std::string &error) {
++    int fds[2];
++    if (pipe(fds) != 0) {
++        error = "no pipe";
++        return false;
++    }
++    const pid_t pid = fork();
++    if (pid < 0) {
++        close(fds[0]);
++        close(fds[1]);
++        error = "cannot start curl";
++        return false;
++    }
++    if (pid == 0) {
++        dup2(fds[1], STDOUT_FILENO);
++        close(fds[0]);
++        close(fds[1]);
++        const int null = open("/dev/null", O_WRONLY);
++        if (null >= 0) dup2(null, STDERR_FILENO);
++        execlp("curl", "curl", "-fsSL", "--retry", "2", "-H", "Accept: application/vnd.github+json", url.c_str(),
++               static_cast<char *>(nullptr));
++        _exit(127);
++    }
++    close(fds[1]);
++    std::vector<char> buffer(64u * 1024u);
++    std::uint64_t done = 0;
++    for (;;) {
++        const ssize_t got = read(fds[0], buffer.data(), buffer.size());
++        if (got <= 0) break;
++        sink(buffer.data(), static_cast<std::size_t>(got));
++        done += static_cast<std::uint64_t>(got);
++        if (progress) progress(done, g_zip_size);
++    }
++    close(fds[0]);
++    int status = 0;
++    waitpid(pid, &status, 0);
++    if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
++        error = "curl is not installed";
++        return false;
++    }
++    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
++        error = "curl failed (exit " + std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1) + ")";
++        return false;
++    }
++    return true;
++}
++#endif
++
++#if defined(PK_UPDATER)
+ void check_thread() {
+     // D012_UPDATE_TEST_ZIP=<a release zip on this disk>: offers that zip as a newer release and "downloads" it at once, so
+     // the installer can be tried without publishing anything.
+@@ -161,17 +227,28 @@ void check_thread() {
+     std::string page = json_string(body, "html_url");
+     // The first attached zip is the release's package.
+     std::string zip;
++    std::uint64_t package_size = 0;
+     for (std::size_t at = body.find("browser_download_url"); at != std::string::npos;
+          at = body.find("browser_download_url", at + 1u)) {
+         const std::string url = json_string(body, "browser_download_url", at);
+-        if (url.size() > 4u && url.compare(url.size() - 4u, 4u, ".zip") == 0) {
++#if defined(_WIN32)
++        const bool package = url.size() > 4u && url.compare(url.size() - 4u, 4u, ".zip") == 0;
++#elif defined(__APPLE__)
++        const bool package = url.size() > 7u && url.compare(url.size() - 7u, 7u, ".tar.gz") == 0 && url.find("macos") != std::string::npos;
++#else
++        const bool package = url.size() > 7u && url.compare(url.size() - 7u, 7u, ".tar.gz") == 0 && url.find("linux") != std::string::npos;
++#endif
++        if (package) {
+             zip = url;
++            const std::size_t size_at = body.rfind("\"size\":", at);
++            package_size = size_at == std::string::npos ? 0u : std::strtoull(body.c_str() + size_at + 7u, nullptr, 10);
+             break;
+         }
+     }
+     {
+         const std::lock_guard<std::mutex> lock(g_mutex);
+         g_zip_url = zip;
++        g_zip_size = package_size;
+     }
+     set_status([&](Status &s) {
+         s.latest = tag;
+@@ -193,7 +270,7 @@ bool is_newer(const std::string &latest, const std::string &local) {
+ std::string local_version() { return kLocalVersion(); }
+ 
+ void start_check() {
+-#if defined(_WIN32)
++#if defined(PK_UPDATER)
+     {
+         const std::lock_guard<std::mutex> lock(g_mutex);
+         if (g_status.state == State::Checking || g_status.state == State::Downloading) return;
+@@ -387,11 +464,178 @@ void unpack(const std::filesystem::path &zip) {
+     }
+ }
+ 
++} // namespace
++#elif defined(PK_UPDATER)
++namespace {
++
++pid_t g_helper = -1;  // the shell script: unpacks the update while the game runs, installs it once the game has closed
++std::filesystem::path g_progress_path;
++
++const char *kHelperScript = R"SH(#!/bin/sh
++# Unpacks the update while the game runs, then installs it once the game has closed, and starts the game again.
++# $1 game's process id, $2 the .tar.gz, $3 the game's folder, $4 the game's executable, $5 progress file
++PID="$1"; PKG="$2"; TARGET="$3"; EXE="$4"; PROGRESS="$5"
++LOG="${TMPDIR:-/tmp}/d012_update.log"
++STAGE="$TARGET/update_staging"
++report() { printf '%s\n' "$1" > "$PROGRESS"; }
++fail() { printf '%s\n' "$1" >> "$LOG"; report "failed: $1"; rm -rf "$STAGE"; exit 1; }
++printf 'started %s pkg=%s target=%s exe=%s\n' "$(date)" "$PKG" "$TARGET" "$EXE" > "$LOG"
++
++rm -rf "$STAGE"
++mkdir -p "$STAGE" || fail "cannot write in $TARGET"
++report "0/1"
++NAME="$(basename "$EXE")"
++TOTAL="$(tar -tzf "$PKG" 2>>"$LOG" | wc -l | tr -d ' ')"
++[ "${TOTAL:-0}" -gt 0 ] || fail "the update could not be read"
++# The package holds its files in one folder (or at the top): the folder is the one with the game's executable.
++PREFIX="$(tar -tzf "$PKG" 2>>"$LOG" | grep -E "(^|/)$NAME\$" | head -n 1 | sed "s|$NAME\$||")"
++tar -tzf "$PKG" 2>/dev/null | grep -qE "(^|/)$NAME\$" || fail "the update has no $NAME"
++COUNT=0
++tar -xzvf "$PKG" -C "$STAGE" 2>&1 | while IFS= read -r line; do
++  COUNT=$((COUNT + 1))
++  [ $((COUNT % 5)) -eq 0 ] && report "$COUNT/$TOTAL"
++done
++[ -f "$STAGE/${PREFIX}$NAME" ] || fail "the update could not be unpacked"
++report "unpacked"
++
++# Unpacked while the game ran. Once it has closed, the new files go over the game's own.
++while kill -0 "$PID" 2>/dev/null; do sleep 1; done
++sleep 1
++SRC="$STAGE/${PREFIX%/}"
++[ -n "$PREFIX" ] || SRC="$STAGE"
++(
++  cd "$SRC" || exit 1
++  # everything except the player's own folders
++  for item in * .[!.]*; do
++    [ -e "$item" ] || continue
++    case "$item" in game|data|update_staging) continue ;; esac
++    cp -Rp "$item" "$TARGET/" || exit 1
++  done
++  # data/fonts: replaced. data/textures: only pictures that are new; textures.ini is always replaced.
++  if [ -d data/fonts ]; then mkdir -p "$TARGET/data/fonts" && cp -Rp data/fonts/. "$TARGET/data/fonts/"; fi
++  if [ -d data/textures ]; then
++    find data/textures -type f | while IFS= read -r file; do
++      if [ ! -e "$TARGET/$file" ] || [ "$(basename "$file")" = "textures.ini" ]; then
++        mkdir -p "$(dirname "$TARGET/$file")" && cp -p "$file" "$TARGET/$file"
++      fi
++    done
++  fi
++) >> "$LOG" 2>&1 || printf 'copy failed\n' >> "$LOG"
++chmod +x "$EXE" "$TARGET/run.sh" 2>/dev/null
++rm -rf "$STAGE"
++case "$PKG" in "${TMPDIR:-/tmp}/"?*) rm -f "$PKG" ;; esac
++printf 'installed\n' >> "$LOG"
++cd "$TARGET" || exit 1
++# run.sh sets the library and Vulkan paths; without it the executable is started as it is
++if [ -x ./run.sh ]; then nohup ./run.sh >/dev/null 2>&1 & else nohup "$EXE" >/dev/null 2>&1 & fi
++)SH";
++
++std::string read_text(const std::filesystem::path &path) {
++    std::ifstream in(path, std::ios::binary);
++    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++    while (!text.empty() && (text.back() == '\r' || text.back() == '\n' || text.back() == ' ')) text.pop_back();
++    return text;
++}
++
++// Starts the script in a session of its own (it outlives the game, which is what it waits for), with no terminal.
++// It reports through a file: "N/total" while unpacking, then "unpacked", or "failed: why".
++bool start_helper(const std::filesystem::path &package, std::string &error) {
++    std::error_code ec;
++    const std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
++    const std::filesystem::path script = temp / "d012_update.sh";
++    g_progress_path = temp / "d012_update_progress.txt";
++    std::filesystem::remove(g_progress_path, ec);
++    {
++        std::ofstream out(script, std::ios::trunc);
++        out << kHelperScript;
++        if (!out) {
++            error = "the installer script could not be written";
++            return false;
++        }
++    }
++    const std::filesystem::path exe = portablekit::executable_path();
++    if (exe.empty()) {
++        error = "the game's own path is not known";
++        return false;
++    }
++    const std::string script_text = script.string(), package_text = package.string(), target = exe.parent_path().string(),
++                      exe_text = exe.string(), progress = g_progress_path.string(), pid_text = std::to_string(getpid());
++    const pid_t pid = fork();
++    if (pid < 0) {
++        error = "cannot start the installer";
++        return false;
++    }
++    if (pid == 0) {
++        setsid();
++        const int null = open("/dev/null", O_RDWR);
++        if (null >= 0) {
++            dup2(null, STDIN_FILENO);
++            dup2(null, STDOUT_FILENO);
++            dup2(null, STDERR_FILENO);
++        }
++        execl("/bin/sh", "sh", script_text.c_str(), pid_text.c_str(), package_text.c_str(), target.c_str(), exe_text.c_str(),
++              progress.c_str(), static_cast<char *>(nullptr));
++        _exit(127);
++    }
++    g_helper = pid;
++    return true;
++}
++
++// Runs on the download's thread: starts the script, then follows what it reports until the update is unpacked.
++void unpack(const std::filesystem::path &package) {
++    set_status([](Status &s) {
++        s.state = State::Unpacking;
++        s.progress = 0.0f;
++        s.error.clear();
++    });
++    std::string error;
++    if (!start_helper(package, error)) {
++        set_status([&](Status &s) {
++            s.state = State::Failed;
++            s.error = error;
++        });
++        return;
++    }
++    for (;;) {
++        std::this_thread::sleep_for(std::chrono::milliseconds(200));
++        int wait_status = 0;
++        const bool stopped = waitpid(g_helper, &wait_status, WNOHANG) == g_helper;
++        const std::string text = read_text(g_progress_path);
++        if (text == "unpacked") {
++            set_status([](Status &s) {
++                s.state = State::Ready;
++                s.progress = 1.0f;
++            });
++            return;
++        }
++        if (text.rfind("failed:", 0) == 0) {
++            set_status([&](Status &s) {
++                s.state = State::Failed;
++                s.error = text.substr(7);
++            });
++            return;
++        }
++        if (stopped) {
++            set_status([](Status &s) {
++                s.state = State::Failed;
++                s.error = "the installer stopped (see d012_update.log in the temp folder)";
++            });
++            return;
++        }
++        const std::size_t slash = text.find('/');
++        if (slash != std::string::npos) {
++            const double done = std::atof(text.substr(0, slash).c_str());
++            const double total = std::atof(text.substr(slash + 1u).c_str());
++            if (total > 0.0) set_status([&](Status &s) { s.progress = static_cast<float>(done / total); });
++        }
++    }
++}
++
+ } // namespace
+ #endif
+ 
+ void start_download() {
+-#if defined(_WIN32)
++#if defined(PK_UPDATER)
+     std::string url;
+     std::filesystem::path test_zip;
+     {
+@@ -417,7 +661,12 @@ void start_download() {
+             return;
+         }
+         std::error_code ec;
+-        const std::filesystem::path zip = std::filesystem::temp_directory_path(ec) / "d012_update.zip";
++        const std::filesystem::path zip = std::filesystem::temp_directory_path(ec) /
++#if defined(_WIN32)
++                                           "d012_update.zip";
++#else
++                                           "d012_update.tar.gz";
++#endif
+         std::string error;
+         bool ok = false;
+         {
+@@ -448,9 +697,13 @@ void start_download() {
+ 
+ // The script is already running and waits for the game to close: the caller only has to quit.
+ bool launch_installer() {
+-#if defined(_WIN32)
++#if defined(PK_UPDATER)
+     const std::lock_guard<std::mutex> lock(g_mutex);
++#if defined(_WIN32)
+     return g_status.state == State::Ready && g_helper != nullptr;
++#else
++    return g_status.state == State::Ready && g_helper > 0;
++#endif
+ #else
+     return false;
+ #endif
+diff --git a/host/ui/updater.hpp b/host/ui/updater.hpp
+index b317ae7..d28488c 100644
+--- a/host/ui/updater.hpp
++++ b/host/ui/updater.hpp
+@@ -3,9 +3,10 @@
+ #include <string>
+ 
+ // Checks GitHub for a newer release and installs it over the program's own files. The check runs once, on a
+-// thread of its own, and only reads the latest release's tag. An install downloads the release's zip, then a
+-// script waits for the game to close and copies the zip's files over the game's folder, leaving the player's
+-// own folders (data, game) alone. Windows only; elsewhere nothing is ever reported as available.
++// thread of its own, and only reads the latest release's tag. An install downloads the release's package (a .zip on
++// Windows; a .tar.gz with "linux" or "macos" in its name elsewhere, fetched with curl), has a hidden script unpack it
++// beside the game while the game runs, and once the game has closed the script puts the files over the game's folder,
++// leaving the player's own folders (data, game) alone, and starts the game again. Not on Android.
+ namespace portablekit::ui::updater {
+ 
+ enum class State { Idle, Checking, UpToDate, Available, Failed, Downloading, Unpacking, Ready };
+-- 
+2.54.0.windows.1
+

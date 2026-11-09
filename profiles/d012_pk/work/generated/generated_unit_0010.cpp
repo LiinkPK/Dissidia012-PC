@@ -9022,7 +9022,11 @@ L_0882D470:
     ctx.gpr[5] = (ctx.gpr[16] + static_cast<std::uint32_t>(8));
     goto L_0882D474;
 L_0882D474:
+    if (g_d012_mod_bt) {
+    ctx.gpr[4] = (aot_mem.aot_load32(ctx.gpr[4] + static_cast<std::uint32_t>(44)));
+    } else {
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[4] + static_cast<std::uint32_t>(20))))));
+    }
     goto L_0882D478;
 L_0882D478:
     ctx.gpr[5] = (aot_mem.aot_load32(ctx.gpr[5] + static_cast<std::uint32_t>(8)));

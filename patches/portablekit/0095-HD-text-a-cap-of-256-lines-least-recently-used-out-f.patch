@@ -1,0 +1,65 @@
+From cff73e1d4a179365a9943ad5e58001bac16217a7 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 18:40:59 +0100
+Subject: [PATCH] HD text: a cap of 256 lines (least recently used out first)
+ and a checked descriptor allocation; a full pool no longer reaches
+ vkUpdateDescriptorSets with a null set (driver crash when cycling shop lists
+ fast)
+
+---
+ host/gpu/vulkan_renderer.cpp | 32 +++++++++++++++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 6584e5b..6ad2443 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -4894,7 +4894,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
+     descriptor_info.descriptorPool = descriptor_pool;
+     descriptor_info.descriptorSetCount = 1u;
+     descriptor_info.pSetLayouts = &descriptor_layout;
+-    vkAllocateDescriptorSets(device, &descriptor_info, &texture.descriptor);
++    if (vkAllocateDescriptorSets(device, &descriptor_info, &texture.descriptor) != VK_SUCCESS) {
++        // The pool is full. Writing to a null set crashes the driver: give the image back and report no texture.
++        vkDestroyImageView(device, texture.view, nullptr);
++        vkDestroyImage(device, texture.image, nullptr);
++        vkFreeMemory(device, texture.memory, nullptr);
++        return Texture{};
++    }
+     VkDescriptorImageInfo image_info{texture_sampler(), texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+     write.dstSet = texture.descriptor;
+@@ -5332,6 +5338,30 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+         }
+     }
+ 
++    // Every line is an image and a descriptor set of the pool the texture cache shares, and scrolling a long list makes new
++    // lines faster than the 4 seconds above free the old ones. A cap, least recently used out first (never a line drawn in
++    // this very frame), keeps the pool from running out.
++    constexpr std::size_t kMaxTextLines = 256u, kEvictBatch = 48u;
++    if (text_lines.size() >= kMaxTextLines && text_lines.find(address) == text_lines.end()) {
++        std::vector<std::pair<std::uint64_t, std::uint32_t>> oldest;
++        oldest.reserve(text_lines.size());
++        for (const auto &entry : text_lines)
++            if (entry.second.last_frame != frames) oldest.emplace_back(entry.second.last_frame, entry.first);
++        std::sort(oldest.begin(), oldest.end());
++        for (std::size_t i = 0; i < oldest.size() && i < kEvictBatch; ++i) {
++            const auto found = text_lines.find(oldest[i].second);
++            if (async_uploads()) {
++                slots[slot].retired_textures.push_back(found->second.texture);
++            } else {
++                queue_wait_idle();
++                destroy_texture(found->second.texture);
++            }
++            text_lines.erase(found);
++        }
++        // Everything is in use this frame: draw this line with the game's own image.
++        if (text_lines.size() >= kMaxTextLines) return VK_NULL_HANDLE;
++    }
++
+     std::vector<fonts::LineGlyph> glyphs;
+     std::uint64_t version = 0;
+     if (!fonts::line_glyphs(address, glyphs, version)) return VK_NULL_HANDLE;
+-- 
+2.54.0.windows.1
+

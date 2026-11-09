@@ -44,7 +44,6 @@ Facts about the game (addresses, sizes, hashes, format descriptions) are fine in
 
   ```powershell
   .\.venv\Scripts\python.exe -m unittest discover -s tools -p "test_*.py"
-  python -m unittest discover -s port/tools/bgm_maker/tests
   ```
 
   Many tool tests need the locally extracted game files and skip or fail without them. Say in your pull request which

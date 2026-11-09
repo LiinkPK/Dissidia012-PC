@@ -27,7 +27,6 @@
 #include "d012_camera.hpp"
 #include "d012_decomp_harness.hpp"
 #include "d012_decomp_pad.hpp"
-#include "d012_versus.hpp"
 
 #include "../decomp/battle_camera.h"
 
@@ -53,6 +52,9 @@ namespace ext = portablekit::hle_extension;
 constexpr std::uint32_t kSceCtrlReadBufferPositive = 0x1F803938u;
 constexpr std::uint32_t kSelect = 0x0001u;
 constexpr std::uint32_t kHold = 0x00020000u;
+// The PSP buttons the battle shortcuts below press (SceCtrlButtons).
+constexpr std::uint32_t kDpadUp = 0x0010u, kDpadDown = 0x0040u, kL1 = 0x0100u, kR1 = 0x0200u;
+constexpr std::uint32_t kTriangle = 0x1000u, kCircle = 0x2000u, kCross = 0x4000u, kSquare = 0x8000u;
 // A battle camera must have taken input within this many pad reads for R3
 // to press SELECT (one read a frame).
 constexpr std::uint32_t kLiveReads = 4u;
@@ -73,6 +75,9 @@ float number(const char *name, float fallback, float low, float high) {
 
 struct Options {
     bool enabled = true;
+    // The battle shortcuts for the buttons a PSP lacks (L2, R2, L3) and the D-pad's up and down; D012_NO_BATTLE_SHORTCUTS=1
+    // leaves the pad as the game reads it.
+    bool shortcuts = true;
     // The plugin's: each axis's dead zone, the response rescaled to start
     // from 0 at its edge. On top of PortableKit's radial dead zone for the
     // stick (the menu's Dead zone), as the plugin's was on top of PPSSPP's.
@@ -96,6 +101,7 @@ const Options &options() {
     static const Options o = [] {
         Options v;
         v.enabled = !flag("D012_NO_RIGHT_STICK_CAMERA");
+        v.shortcuts = !flag("D012_NO_BATTLE_SHORTCUTS");
         v.dead_zone = number("D012_CAMERA_DEAD_ZONE", v.dead_zone, 0.0f, 0.9f);
         v.sensitivity = number("D012_CAMERA_SENSITIVITY", v.sensitivity, 0.05f, 4.0f);
         v.invert_x = flag("D012_CAMERA_INVERT_X");
@@ -138,10 +144,8 @@ float stick_axis(std::uint8_t raw) {
 
 // The local player's camera with manual input on, while the game takes
 // input: the gates of the game's own pad accessors (input muted, a replay
-// playing) and hardware feeding pad 0 (not ad-hoc).
-// In local versus (d012_versus.cpp) the camera on logical pad 1 is player
-// 2's, fed by player 2's pad: 0 for player 1's camera, 1 for player 2's, -1
-// for any other.
+// playing) and hardware feeding pad 0 (not ad-hoc): 0 for the player's camera,
+// -1 for any other.
 int local_camera(Guest *g, gaddr camera) {
     if (g_ld8(g, camera + CAM_MANUAL) == 0) return -1;
     const gaddr pads = g_ld32(g, G_PAD_MANAGER);
@@ -149,7 +153,6 @@ int local_camera(Guest *g, gaddr camera) {
     if ((g_ld32(g, pads + PAD_FLAGS) & (PAD_FLAG_REPLAY | PAD_FLAG_MUTED)) != 0) return -1;
     const gaddr listens = g_ld32(g, camera + CAM_PAD);
     if (listens == pads + PAD_LOGICAL0) return g_ld32s(g, pads + PAD_RAW0_MODE) != 1 ? 0 : -1;
-    if (versus::active() && listens == pads + PAD_LOGICAL0 + PAD_LOGICAL_SIZE) return 1;
     return -1;
 }
 
@@ -164,14 +167,7 @@ bool camera_stick(Guest *g, gaddr camera, float &turn, float &closer) {
     // camera too (source 1, main 0x08918E90), and SELECT is not its recentre.
     const bool battle = g_ld32s(g, camera + CAM_STEP_SOURCE) == 0;
     std::uint8_t x = p.x, y = p.y;
-    if (player == 1) {
-        if (battle) versus::note_camera_live();
-        const versus::RightStick stick = versus::player2_right_stick();
-        x = stick.x;
-        y = stick.y;
-    } else if (battle) {
-        p.live_read = p.reads;
-    }
+    if (battle) p.live_read = p.reads;
     turn = stick_axis(x);
     closer = -stick_axis(y);  // the Y axis grows downward
     if (turn == 0.0f && closer == 0.0f) return false;
@@ -429,6 +425,27 @@ void install(portablekit::HleRegistrar &hle) {
                 rt.memory().store32(at, rt.memory().load32(at) | kSelect);
             }
             if (!p.r3) std::cout << "[camera] R3: recentre (SELECT)" << std::endl;
+        }
+        // Battle shortcuts, only while a local battle camera is running (menus keep the D-pad and the R1/L1 buttons):
+        //   L3 (stick click)  EX Mode / EX Revenge   R1 + Square
+        //   L2 (left trigger) dodge                  R1 + Cross
+        //   R2 (right trigger) dash to the target    R1 + Triangle
+        //   D-pad up          call an Assist         L1 + Circle
+        //   D-pad down        call a BRV Assist      L1 + Square
+        // D-pad up and down no longer move the camera closer or away (the right stick does that); left and right still turn it.
+        if (live && options().shortcuts) {
+            const std::uint32_t extra = ext::extra_buttons();
+            std::uint32_t add = 0u;
+            if ((extra & ext::kExtraL3) != 0u) add |= kR1 | kSquare;
+            if ((extra & ext::kExtraL2) != 0u) add |= kR1 | kCross;
+            if ((extra & ext::kExtraR2) != 0u) add |= kR1 | kTriangle;
+            for (std::uint32_t i = 0; i < count; ++i) {
+                const std::uint32_t at = buffer + i * 16u + 4u;
+                std::uint32_t buttons = rt.memory().load32(at);
+                if ((buttons & kDpadUp) != 0u) buttons = (buttons & ~kDpadUp) | kL1 | kCircle;
+                if ((buttons & kDpadDown) != 0u) buttons = (buttons & ~kDpadDown) | kL1 | kSquare;
+                rt.memory().store32(at, buttons | add);
+            }
         }
         p.r3 = r3;
     });

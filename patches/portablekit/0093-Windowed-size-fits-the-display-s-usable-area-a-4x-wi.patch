@@ -1,0 +1,75 @@
+From c7abad9767df2122992086f01e6391104a3c15ff Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 18:20:12 +0100
+Subject: [PATCH] Windowed size fits the display's usable area (a 4x window is
+ 1920x1088 and covered a 1080p desktop, taskbar and title bar included)
+
+---
+ host/gpu/vulkan_renderer.cpp | 30 ++++++++++++++++++++++++++----
+ 1 file changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 7b4ba8c..a887780 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -745,6 +745,23 @@ bool write_png(const std::string &path, const std::uint8_t *pixels, std::uint32_
+     return ok;
+ }
+ 
++// The size of a window of `scale` times the PSP picture, shrunk (in the picture's proportions) to fit the display's usable
++// area, which is the desktop without the taskbar, with room for the window's frame. A 4x window is 1920x1088: it does not
++// fit a 1080p desktop, so its title bar went off the top of the screen and it covered the taskbar.
++void windowed_size(SDL_DisplayID display, std::uint32_t scale, int &width, int &height) {
++    width = static_cast<int>(kPspWidth * scale);
++    height = static_cast<int>(kPspHeight * scale);
++    SDL_Rect usable{};
++    if (display == 0u || !SDL_GetDisplayUsableBounds(display, &usable) || usable.w <= 0 || usable.h <= 0) return;
++    constexpr int kFrameWidth = 16, kFrameHeight = 48;  // borders and title bar, not known before the window exists
++    const float fit = std::min(1.0f, std::min(static_cast<float>(usable.w - kFrameWidth) / static_cast<float>(width),
++                                              static_cast<float>(usable.h - kFrameHeight) / static_cast<float>(height)));
++    if (fit < 1.0f) {
++        width = std::max(static_cast<int>(static_cast<float>(width) * fit), 1);
++        height = std::max(static_cast<int>(static_cast<float>(height) * fit), 1);
++    }
++}
++
+ // Back from full screen to a normal window: with its frame (and so the taskbar visible), resizable, at the player's window
+ // size and centred. A window created in full screen has no windowed shape to go back to, so SDL alone can leave it
+ // borderless at the size of the screen.
+@@ -754,7 +771,9 @@ void leave_fullscreen(SDL_Window *window) {
+     SDL_SetWindowBordered(window, true);
+     SDL_SetWindowResizable(window, true);
+     const std::uint32_t scale = std::clamp<std::uint32_t>(settings::current().window_scale, 1u, settings::kMaxWindowScale);
+-    SDL_SetWindowSize(window, static_cast<int>(kPspWidth * scale), static_cast<int>(kPspHeight * scale));
++    int width = 0, height = 0;
++    windowed_size(SDL_GetDisplayForWindow(window), scale, width, height);
++    SDL_SetWindowSize(window, width, height);
+     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+     SDL_SyncWindow(window);
+ }
+@@ -2990,8 +3009,9 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+     // under them). The safe area keeps the picture clear of a camera cutout.
+     window_flags |= SDL_WINDOW_FULLSCREEN;
+ #endif
+-    impl.window = SDL_CreateWindow(config.title.c_str(), static_cast<int>(kPspWidth * window_scale),
+-                                   static_cast<int>(kPspHeight * window_scale), window_flags);
++    int window_width = 0, window_height = 0;
++    windowed_size(SDL_GetPrimaryDisplay(), window_scale, window_width, window_height);
++    impl.window = SDL_CreateWindow(config.title.c_str(), window_width, window_height, window_flags);
+     if (impl.window == nullptr) {
+         error = std::string("SDL_CreateWindow failed: ") + SDL_GetError();
+         return false;
+@@ -7585,7 +7605,9 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+     const Impl::Guard guard(*impl_);
+     scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
+     if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
+-    SDL_SetWindowSize(impl_->window, static_cast<int>(kPspWidth * scale), static_cast<int>(kPspHeight * scale));
++    int width = 0, height = 0;
++    windowed_size(SDL_GetDisplayForWindow(impl_->window), scale, width, height);
++    SDL_SetWindowSize(impl_->window, width, height);
+     impl_->swapchain_dirty = true;
+ }
+ 
+-- 
+2.54.0.windows.1
+

@@ -1,0 +1,36 @@
+From 94d4c1175d0087d9ce2a469b10613a2efb02d556 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Sun, 8 Nov 2026 16:38:39 +0100
+Subject: [PATCH] Updater: replace the overlays folder as a whole, so no
+ library of an older version is left beside the new ones
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/ui/updater.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 361e2ef..f7d6282 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -349,6 +349,8 @@ try {
+ try {
+   Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+   Start-Sleep -Seconds 1
++  # The overlays are replaced as a whole: a library of an older version left beside the new ones would be loaded with them.
++  if (Test-Path -LiteralPath (Join-Path $stage 'overlays')) { Remove-Item -LiteralPath (Join-Path $Target 'overlays') -Recurse -Force -ErrorAction SilentlyContinue }
+   robocopy $stage $Target /E /MOVE /R:8 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+   if ($LASTEXITCODE -ge 8) { throw ('robocopy failed: ' + $LASTEXITCODE) }
+   Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+@@ -503,6 +505,8 @@ while kill -0 "$PID" 2>/dev/null; do sleep 1; done
+ sleep 1
+ SRC="$STAGE/${PREFIX%/}"
+ [ -n "$PREFIX" ] || SRC="$STAGE"
++# The overlays are replaced as a whole: a library of an older version left beside the new ones would be loaded with them.
++[ -d "$SRC/overlays" ] && rm -rf "$TARGET/overlays"
+ (
+   cd "$SRC" || exit 1
+   # everything except the player's own folders
+-- 
+2.54.0.windows.1
+

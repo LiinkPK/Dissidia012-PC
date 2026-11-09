@@ -1,0 +1,119 @@
+# Builds the Linux and macOS packages on GitHub's machines with the repository's own scripts (scripts/build_linux.sh and
+# scripts/build_macos.sh, unchanged), and attaches them to a DRAFT release. The Windows zip is added by hand, then the draft is
+# published. Run it from the Actions tab: "Build release" -> "Run workflow", with the tag (for example v1.0.5).
+#
+# The textures and the cheats are not in the repository: they come from the pre-release tagged `data-pack` (data.zip), which
+# holds textures/ and ms0/PSP/CHEATS/ and nothing personal.
+name: Build release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v1.0.5 (it must be the same as kReleaseVersion in the code)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag }}
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag must match the version in the code
+        run: |
+          code="$(sed -n 's/.*kReleaseVersion = "\(.*\)".*/\1/p' profiles/d012/host/d012_profile.cpp | head -1)"
+          echo "kReleaseVersion in the code: $code, tag asked for: $TAG"
+          [ "$code" = "$TAG" ] || { echo "They differ: change kReleaseVersion (or the tag) and run again."; exit 1; }
+
+  linux:
+    needs: check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (the build is large)
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux
+      - name: Data pack (textures and cheats)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download data-pack --repo "$GITHUB_REPOSITORY" --pattern data.zip --dir "$RUNNER_TEMP"
+          mkdir -p release/data
+          unzip -q "$RUNNER_TEMP/data.zip" -d release/data
+          ls release/data
+      - name: Build and package
+        run: bash scripts/build_linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/d012_native-linux.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  macos:
+    needs: check
+    runs-on: macos-14
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos
+      - name: Tools
+        run: brew install cmake ninja python || true
+      - name: SDL3 source (the script reads SDL_SRC)
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/sdl3.tar.gz" https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
+          tar -xzf "$RUNNER_TEMP/sdl3.tar.gz" -C "$RUNNER_TEMP"
+          echo "SDL_SRC=$RUNNER_TEMP/SDL3-3.4.18" >> "$GITHUB_ENV"
+      - name: Vulkan SDK (loader and MoltenVK; the script looks in ~/VulkanSDK/*/macOS)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fL --retry 3 -o vulkan-sdk.zip https://sdk.lunarg.com/sdk/download/latest/mac/vulkan-sdk.zip
+          unzip -q vulkan-sdk.zip
+          app="$(ls -d *.app | head -1)"
+          bin="$app/Contents/MacOS/$(ls "$app/Contents/MacOS" | head -1)"
+          sudo "./$bin" --root "$HOME/VulkanSDK/ci" --accept-licenses --default-answer --confirm-command install
+          ls "$HOME/VulkanSDK/ci"
+      - name: Data pack (textures and cheats)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download data-pack --repo "$GITHUB_REPOSITORY" --pattern data.zip --dir "$RUNNER_TEMP"
+          mkdir -p release/data
+          unzip -q "$RUNNER_TEMP/data.zip" -d release/data
+          ls release/data
+      - name: "Build and package (universal, Intel and Apple Silicon)"
+        run: UNIVERSAL=1 bash scripts/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/d012_native-macos.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    needs: [linux, macos]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Attach to a draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -la packages
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" \
+              --notes "Draft made by the build. Add the Windows zip, write the notes and publish."
+          gh release upload "$TAG" packages/* --repo "$GITHUB_REPOSITORY" --clobber

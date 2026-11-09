@@ -1,0 +1,96 @@
+From 45a250be7fec8b9cdbe6c5625e5843e15902c4c2 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 5 Nov 2026 22:00:28 +0100
+Subject: [PATCH] Update question: open one second after the release is found,
+ and through the menu request, so the game pauses under it
+
+The question used to open the menu over the running game directly, which never pauses. It is now asked for like the player's own menu request: the game's frame flip opens it, pausing the game when the setting says so.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/ui/menu.cpp | 39 +++++++++++++++++++++++++++++++++++----
+ 1 file changed, 35 insertions(+), 4 deletions(-)
+
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 89ca429..2053782 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -1986,6 +1986,17 @@ void add_mod_rows(void (*rows)()) {
+     if (rows != nullptr) mod_rows().push_back(rows);
+ }
+ 
++// The update question is waiting to be shown: menu_requested() reports it as a menu request, and the menu that opens
++// for it starts on the question (show_update_on_open).
++bool &update_prompt_pending() {
++    static bool value = false;
++    return value;
++}
++bool &show_update_on_open() {
++    static bool value = false;
++    return value;
++}
++
+ void draw_over_game() {
+     Layer &layer = Layer::get();
+     if (!layer.attached()) return;
+@@ -2016,11 +2027,23 @@ void draw_over_game() {
+     }();
+     (void)update_check_started;
+     static bool update_offered = false;
++    // The question opens a second after the release is found, so the game is already running and pauses itself when the
++    // menu opens over it (straight away, it opened before the game had a frame to pause on).
++    static bool update_seen = false;
++    static std::chrono::steady_clock::time_point update_seen_at;
+     if (!menu && !update_offered && settings::current().update_notice &&
+         updater::status().state == updater::State::Available) {
+-        update_offered = true;
+-        open_menu_over_game();
+-        if (menu) menu->show_update();
++        const auto now = std::chrono::steady_clock::now();
++        if (!update_seen) {
++            update_seen = true;
++            update_seen_at = now;
++        }
++        if (now - update_seen_at >= std::chrono::seconds(1)) {
++            update_offered = true;
++            // Asked for like the player's own menu request: the game's frame flip opens the menu then, pausing the
++            // game under it when the setting says so (opening it from here ran the game on behind the question).
++            update_prompt_pending() = true;
++        }
+     }
+     const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
+     const bool overlay = network_overlay();
+@@ -2062,6 +2085,7 @@ void open_menu_over_game() {
+     layer.renderer().set_game_input(false);
+     layer.set_interactive(true);
+     menu.emplace(false);
++    if (std::exchange(show_update_on_open(), false)) menu->show_update();
+ }
+ 
+ bool menu_over_game() { return menu_over_game_state().has_value(); }
+@@ -2073,7 +2097,13 @@ bool menu_requested() {
+     if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
+     // The on-screen menu button, then Esc or L3+R3.
+     const bool touched = layer.renderer().take_touch_menu();
+-    return layer.take_menu_toggle() || touched;
++    const bool asked = layer.take_menu_toggle() || touched;
++    if (update_prompt_pending()) {
++        update_prompt_pending() = false;
++        show_update_on_open() = true;
++        return true;
++    }
++    return asked;
+ }
+ 
+ bool run_menu() {
+@@ -2082,6 +2112,7 @@ bool run_menu() {
+     layer.renderer().set_game_input(false);
+     layer.set_interactive(true);
+     Menu menu(true);
++    if (std::exchange(show_update_on_open(), false)) menu.show_update();
+     const bool window_open = layer.run([&] { return menu.frame(); }, true);
+     layer.set_interactive(false);
+     layer.renderer().set_game_input(true);
+-- 
+2.54.0.windows.1
+

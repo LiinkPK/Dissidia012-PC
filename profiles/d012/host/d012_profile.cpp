@@ -20,12 +20,19 @@
 #include <span>
 #include <string_view>
 
+namespace d012_braviest_turning {
+void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_vk/d012_braviest_turning.cpp
+}
+namespace d012_emendatus {
+void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_vk/d012_emendatus.cpp (runs Braviest Turning's first)
+}
+
 namespace portablekit {
 namespace {
 
 // The version of this release, as its GitHub tag. Change it here for every release: the in-game update check
 // compares it with the newest release on https://github.com/LiinkPK/Dissidia012-PC/releases.
-constexpr const char *kReleaseVersion = "v1.0.2";
+constexpr const char *kReleaseVersion = "v1.0.5";
 
 // The game names its saves "ms0:/PSP/SAVEDATA/%s%s": the disc id followed by the slot.
 constexpr SaveFolder kSaveFolders[] = {
@@ -111,12 +118,12 @@ GameProfile build(const Release &r) {
 
         .adhoc_product_code = r.disc_id,
 
-        // L2 and R2, which a PSP lacks, switch the loading screen's D-pad between its menu and the battle
-        // music (d012_bgm_playlist.cpp); R3 recentres the battle camera (d012_camera.cpp).
-        .extra_buttons = input::kExtraL2 | input::kExtraR2 | input::kExtraR3,
+        // The buttons a PSP lacks, which the battle shortcuts use (L3 EX, L2 dodge, R2 dash, R3 recentres the camera;
+        // d012_camera.cpp).
+        .extra_buttons = input::kExtraL2 | input::kExtraR2 | input::kExtraL3 | input::kExtraR3,
 
         .register_extra_hle = &d012::register_extra_hle,
-        .patch_loaded_image = &d012::patch_loaded_image,
+        .patch_loaded_image = &::d012_emendatus::patch_loaded_image,
 
         .skip_message_dialog = skip_autosave_notice,
         .window_title = "Dissidia 012 Final Fantasy HD Remastered",

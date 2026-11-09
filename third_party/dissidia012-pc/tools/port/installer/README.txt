@@ -15,25 +15,17 @@ Playing
   Start "Dissidia 012 (PC port)" from the Start menu or the desktop. Esc on the keyboard, or L3 + R3 on a
   controller, opens the port's menu: video, controls and audio.
 
-Battle music mods
-  Mods add music to the battle music selector; they never replace the game's own. Put a mod's folder in
-  data\mods (the Start menu has a "Mods folder" shortcut). To make your own, tick "Battle BGM Maker" in Setup
-  and start it from the Start menu: add tracks (MP3, OGG, FLAC, WAV, BRSTM and others), set where each one loops, and it writes the mod
-  for you and can start the game on a track to try it. It can also make a copy of your .iso with your mods'
-  tracks added, for PPSSPP or a PSP with custom firmware (Check & save, "Make a PSP / PPSSPP ISO").
-
 Downloadable content (DLC)
   The game's own DLC (music packs and costumes) works once you add it yourself; none comes with the port. Put
   its .edat files and PARAM.PBP in data\ms0\PSP\GAME\ULUS10566 (make the folders). The folder must be named
-  ULUS10566: a copy named ULES01505 (the European release) is never read until you rename it. DLC music joins
-  the battle music list under its own game; DLC costumes are "DLC 1", "DLC 2" under Look (Square) at character
-  select. The log in data\logs says at the start how many DLC files the game will find.
+  ULUS10566: a copy named ULES01505 (the European release) is never read until you rename it. DLC costumes are
+  "DLC 1", "DLC 2" under Look (Square) at character select. The log in data\logs says at the start how many DLC files the game will find.
 
 Your files, in the install folder
   data\ms0\PSP\SAVEDATA   your saves (back this folder up)
   data\ms0\PSP\GAME\ULUS10566   DLC you added
   data\settings.ini       your settings
-  data\mods\              battle music mods
+  data\mods\              reserved for mods
   data\logs\              the last run's log, for bug reports
 
 Updating

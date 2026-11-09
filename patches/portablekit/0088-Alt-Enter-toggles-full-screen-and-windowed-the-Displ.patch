@@ -1,0 +1,47 @@
+From 0b117f2b7db866f232153bf6371f8d84c1e6cda7 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 17:15:31 +0100
+Subject: [PATCH] Alt+Enter toggles full screen and windowed (the Display
+ setting follows); that Enter is not passed to the game
+
+---
+ host/gpu/vulkan_renderer.cpp | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index e01394f..b39724b 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -7076,6 +7076,18 @@ bool VulkanRenderer::pump_events() {
+         // F9 asks for the roster trace (roster_trace.txt, two frames); the draw code looks for this file.
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F9 && !event.key.repeat)
+             if (std::FILE *trigger = std::fopen("roster_trigger", "wb")) std::fclose(trigger);
++#if !defined(__ANDROID__)
++        // Alt+Enter: full screen and back, and the Display setting follows it.
++        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
++            (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) && (event.key.mod & SDL_KMOD_ALT) != 0 &&
++            impl_->window != nullptr) {
++            const bool fullscreen = (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) == 0u;
++            SDL_SetWindowFullscreen(impl_->window, fullscreen);
++            impl_->swapchain_dirty = true;
++            settings::current().fullscreen = fullscreen;
++            settings::save();
++        }
++#endif
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
+             impl_->overlay_visible = !impl_->overlay_visible;
+     }
+@@ -7115,6 +7127,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+         if (const int button = input::mouse_button_of(binding))
+             return impl_->mouse_captured && (impl_->mouse_buttons & (1u << button)) != 0u;
+         const int position = input::key_position(binding);
++        // Alt+Enter is the full screen toggle: its Enter does not reach the game as a button.
++        if ((position == SDL_SCANCODE_RETURN || position == SDL_SCANCODE_KP_ENTER) &&
++            (keys[SDL_SCANCODE_LALT] || keys[SDL_SCANCODE_RALT]))
++            return false;
+         return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
+                                  impl_->scripted_keys[static_cast<std::size_t>(position)]);
+     });
+-- 
+2.54.0.windows.1
+

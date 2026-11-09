@@ -115,6 +115,8 @@ void register_recomp_unit_109(CorpusRuntime &runtime);
 void register_recomp_unit_110(CorpusRuntime &runtime);
 void register_recomp_unit_111(CorpusRuntime &runtime);
 void register_recomp_unit_112(CorpusRuntime &runtime);
+void register_recomp_unit_1243(CorpusRuntime &runtime);
+void register_recomp_unit_1244(CorpusRuntime &runtime);
 
 static void import_0(CorpusRuntime &rt, AllegrexContext &ctx) {
     const RuntimeExecutionContextToken caller_context = rt.capture_execution_context();
@@ -2896,6 +2898,8 @@ void register_generated_functions(CorpusRuntime &runtime) {
     register_recomp_unit_110(runtime);
     register_recomp_unit_111(runtime);
     register_recomp_unit_112(runtime);
+    register_recomp_unit_1243(runtime);
+    register_recomp_unit_1244(runtime);
     runtime.register_function(0x089C5770u, &import_0, "sceNetAdhocMatching::0x2A2A1E07");
     runtime.register_function(0x089C5778u, &import_1, "sceNetAdhocMatching::0x32B156B3");
     runtime.register_function(0x089C5780u, &import_2, "sceNetAdhocMatching::0x5E3D4B79");

@@ -16579,7 +16579,11 @@ L_0888F484:
     ctx.gpr[21] = (aot_mem.aot_load32(ctx.gpr[21] + static_cast<std::uint32_t>(8)));
     goto L_0888F488;
 L_0888F488:
+    if (g_d012_mod_bt) {
+    ctx.gpr[4] = (aot_mem.aot_load32(ctx.gpr[4] + static_cast<std::uint32_t>(44)));
+    } else {
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[4] + static_cast<std::uint32_t>(20))))));
+    }
     goto L_0888F48C;
 L_0888F48C:
     ctx.gpr[21] = (ctx.gpr[5] - ctx.gpr[21]);
@@ -17200,7 +17204,11 @@ L_0888F734:
     ctx.gpr[10] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[9] + static_cast<std::uint32_t>(22))))));
     goto L_0888F738;
 L_0888F738:
+    if (g_d012_mod_bt) {
+    ctx.gpr[3] = (aot_mem.aot_load32(ctx.gpr[9] + static_cast<std::uint32_t>(44)));
+    } else {
     ctx.gpr[3] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[9] + static_cast<std::uint32_t>(20))))));
+    }
     goto L_0888F73C;
 L_0888F73C:
     ctx.gpr[10] = (static_cast<std::int32_t>(ctx.gpr[10]) < static_cast<std::int32_t>(ctx.gpr[3]) ? 1u : 0u);

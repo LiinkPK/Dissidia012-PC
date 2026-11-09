@@ -52,7 +52,7 @@ endif()
 # Ship the texture pack inside the executable: after every link the pack is appended to the
 # exe itself (tools/textures/embed_textures.py), so the game is one file with the textures in it.
 set(D012_TEXTURE_PACK_DIR "" CACHE PATH "Folder with textures.ini to embed (default: the script's)")
-find_program(D012_PYTHON NAMES python python3)
+find_program(D012_PYTHON NAMES py python python3)
 set(D012_EMBED_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/textures/embed_textures.py")
 if(D012_PYTHON AND EXISTS "${D012_EMBED_SCRIPT}")
     add_custom_command(TARGET d012_native POST_BUILD

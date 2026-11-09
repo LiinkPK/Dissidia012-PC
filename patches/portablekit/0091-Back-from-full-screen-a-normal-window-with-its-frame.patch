@@ -1,0 +1,59 @@
+From 3ee294f2e54baa39653f32ab904ff2dd68647481 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 18:12:41 +0100
+Subject: [PATCH] Back from full screen: a normal window with its frame,
+ resizable, at the player's window size and centred (Alt+Enter and the Display
+ setting)
+
+---
+ host/gpu/vulkan_renderer.cpp | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index de4cdbb..a8e3028 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -745,6 +745,20 @@ bool write_png(const std::string &path, const std::uint8_t *pixels, std::uint32_
+     return ok;
+ }
+ 
++// Back from full screen to a normal window: with its frame (and so the taskbar visible), resizable, at the player's window
++// size and centred. A window created in full screen has no windowed shape to go back to, so SDL alone can leave it
++// borderless at the size of the screen.
++void leave_fullscreen(SDL_Window *window) {
++    SDL_SetWindowFullscreen(window, false);
++    SDL_SyncWindow(window);
++    SDL_SetWindowBordered(window, true);
++    SDL_SetWindowResizable(window, true);
++    const std::uint32_t scale = std::clamp<std::uint32_t>(settings::current().window_scale, 1u, settings::kMaxWindowScale);
++    SDL_SetWindowSize(window, static_cast<int>(kPspWidth * scale), static_cast<int>(kPspHeight * scale));
++    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
++    SDL_SyncWindow(window);
++}
++
+ struct PadTuning {
+     float dead_zone{0.15f};
+     bool stick_square{true};
+@@ -7126,7 +7140,8 @@ bool VulkanRenderer::pump_events() {
+             (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) && (event.key.mod & SDL_KMOD_ALT) != 0 &&
+             impl_->window != nullptr) {
+             const bool fullscreen = (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) == 0u;
+-            SDL_SetWindowFullscreen(impl_->window, fullscreen);
++            if (fullscreen) SDL_SetWindowFullscreen(impl_->window, true);
++            else leave_fullscreen(impl_->window);
+             impl_->swapchain_dirty = true;
+             settings::current().fullscreen = fullscreen;
+             settings::save();
+@@ -7578,7 +7593,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+ #if defined(__ANDROID__)
+     fullscreen = true;
+ #endif
+-    SDL_SetWindowFullscreen(impl_->window, fullscreen);
++    if (fullscreen) SDL_SetWindowFullscreen(impl_->window, true);
++    else leave_fullscreen(impl_->window);
+     impl_->swapchain_dirty = true;
+ }
+ 
+-- 
+2.54.0.windows.1
+

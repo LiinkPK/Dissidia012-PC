@@ -1,0 +1,447 @@
+From dced3c52cbab462b9c4d8133b823c0d6ba48b15c Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 5 Nov 2026 22:18:38 +0100
+Subject: [PATCH] Updater: unpack while the game runs, with a progress bar in
+ the game's own window and no console
+
+A hidden script unpacks the release into a staging folder (new textures go straight in; textures.ini is replaced) and reports its progress through a file, which the update question shows as an 'Unpacking' bar. When it is done the game closes, the script moves the staged files over the game's and starts it again.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/ui/menu.cpp    |  10 +-
+ host/ui/updater.cpp | 304 +++++++++++++++++++++++++++++---------------
+ host/ui/updater.hpp |   9 +-
+ 3 files changed, 213 insertions(+), 110 deletions(-)
+
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 2053782..df24eb5 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -469,7 +469,9 @@ bool Menu::frame() {
+     if (confirm_ != Confirm::None) {
+         if ((back || pad_back) && confirm_opened_) confirm_ = Confirm::None;
+     } else if (update_open_) {
+-        if ((back || pad_back) && updater::status().state != updater::State::Downloading) update_open_ = false;
++        const updater::State update_state = updater::status().state;
++        if ((back || pad_back) && update_state != updater::State::Downloading && update_state != updater::State::Unpacking)
++            update_open_ = false;
+     } else if (!font_list_was_open && (((back || pad_back) && !was_editing_) || start)) {
+         close_ = true;
+     }
+@@ -1720,7 +1722,7 @@ void Menu::system() {
+     {
+         const updater::Status u = updater::status();
+         const bool newer = u.state == updater::State::Available || u.state == updater::State::Downloading ||
+-                           u.state == updater::State::Ready || (u.state == updater::State::Failed && !u.latest.empty());
++                           u.state == updater::State::Unpacking || u.state == updater::State::Ready || (u.state == updater::State::Failed && !u.latest.empty());
+         std::string label = newer ? "Update to " + u.latest + "…" : "Check for updates";
+         std::string note = u.state == updater::State::Checking    ? "Checking…"
+                            : u.state == updater::State::UpToDate  ? "Up to date"
+@@ -1817,7 +1819,11 @@ bool Menu::update_dialog() {
+         const float width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+         if (u.state == updater::State::Downloading) {
+             progress_bar(u.progress, "Downloading");
++        } else if (u.state == updater::State::Unpacking) {
++            progress_bar(u.progress, "Unpacking the update");
++            paragraph("Please wait. The game closes and opens again by itself when this is done.", colors::kTextDim);
+         } else if (u.state == updater::State::Ready) {
++            paragraph("Done. The game will now close and reopen automatically.", colors::kTextDim);
+             if (updater::launch_installer()) {
+                 quit_ = true;
+                 keep_open = false;
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 4e627f4..2cb866b 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -6,6 +6,8 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cctype>
++#include <iterator>
++#include <chrono>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <filesystem>
+@@ -207,91 +209,24 @@ Status status() {
+     return g_status;
+ }
+ 
+-void start_download() {
+ #if defined(_WIN32)
+-    std::string url;
+-    {
+-        const std::lock_guard<std::mutex> lock(g_mutex);
+-        if (g_status.state != State::Available && g_status.state != State::Failed) return;
+-        if (const char *test = std::getenv("D012_UPDATE_TEST_ZIP"); test != nullptr && *test != '\0') {
+-            g_zip_path = test;  // already on this disk
+-            g_status.state = State::Ready;
+-            g_status.progress = 1.0f;
+-            return;
+-        }
+-        url = g_zip_url;
+-        g_status.state = State::Downloading;
+-        g_status.progress = 0.0f;
+-        g_status.error.clear();
+-    }
+-    std::thread([url] {
+-        if (url.empty()) {
+-            set_status([](Status &s) {
+-                s.state = State::Failed;
+-                s.error = "the release has no zip to download";
+-            });
+-            return;
+-        }
+-        std::error_code ec;
+-        const std::filesystem::path zip = std::filesystem::temp_directory_path(ec) / "d012_update.zip";
+-        std::string error;
+-        bool ok = false;
+-        {
+-            std::ofstream out(zip, std::ios::binary | std::ios::trunc);
+-            ok = out && http_get(url, [&](const char *data, std::size_t n) { out.write(data, static_cast<std::streamsize>(n)); },
+-                                 [](std::uint64_t done, std::uint64_t total) {
+-                                     if (total != 0u)
+-                                         set_status([&](Status &s) { s.progress = static_cast<float>(done) / static_cast<float>(total); });
+-                                 },
+-                                 error);
+-        }
+-        if (ok) {
+-            const std::lock_guard<std::mutex> lock(g_mutex);
+-            g_zip_path = zip;
+-            g_status.state = State::Ready;
+-            g_status.progress = 1.0f;
+-        } else {
+-            std::filesystem::remove(zip, ec);
+-            set_status([&](Status &s) {
+-                s.state = State::Failed;
+-                s.error = error.empty() ? "the download failed" : error;
+-            });
+-        }
+-    }).detach();
+-#endif
+-}
++namespace {
+ 
+-bool launch_installer() {
+-#if defined(_WIN32)
+-    std::filesystem::path zip;
+-    {
+-        const std::lock_guard<std::mutex> lock(g_mutex);
+-        if (g_status.state != State::Ready) return false;
+-        zip = g_zip_path;
+-    }
+-    wchar_t exe_buffer[MAX_PATH * 4]{};
+-    GetModuleFileNameW(nullptr, exe_buffer, MAX_PATH * 4);
+-    const std::filesystem::path exe = exe_buffer;
+-    std::error_code ec;
+-    const std::filesystem::path script = std::filesystem::temp_directory_path(ec) / "d012_update.ps1";
+-    // Waits for the game to close, unpacks the zip, copies it over the game's folder except the player's own
+-    // folders (data: saves, settings, textures, cheats; game: the disc image), then starts the game again.
+-    // Whatever goes wrong is written to d012_update.log in the temp folder.
+-    // The release zip holds the player's own folders too (the HD textures are most of its size), so it is not unpacked as
+-    // a whole: only the entries outside game\ and data\ are written, plus data\fonts\. The window stays visible, so the
+-    // player sees the update is running (unpacking takes a while), and the game starts again whatever happens.
+-    {
+-        std::ofstream out(script, std::ios::trunc);
+-        out << R"PS(param($ProcessId, $Zip, $Target, $Exe)
++HANDLE g_helper = nullptr;  // the hidden script: unpacks the update while the game runs, installs it once the game has closed
++std::filesystem::path g_progress_path;
++
++// What the script is told to do, written to the temp folder when an update starts.
++const char *kHelperScript = R"PS(param($ProcessId, $Zip, $Target, $Exe, $Progress)
+ $log = Join-Path $env:TEMP 'd012_update.log'
+ Set-Content -LiteralPath $log -Value ('started ' + (Get-Date) + ' zip=' + $Zip + ' target=' + $Target + ' exe=' + $Exe)
+-$Host.UI.RawUI.WindowTitle = 'Updating Dissidia 012 HD Remastered'
+-Write-Host 'Updating Dissidia 012 Final Fantasy HD Remastered. Do not close this window; the game starts again when it is done.'
++function Report($text) { Set-Content -LiteralPath $Progress -Value $text -Encoding ASCII }
++$stage = Join-Path $Target 'update_staging'
+ try {
+-  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+-  Start-Sleep -Seconds 1
+   Add-Type -AssemblyName System.IO.Compression.FileSystem
+   $name = Split-Path $Exe -Leaf
++  if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
++  New-Item -ItemType Directory -Force -Path $stage | Out-Null
++  Report '0/1'
+   $archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
+   try {
+     $prefix = $null
+@@ -300,61 +235,222 @@ try {
+       if ($path -eq $name -or $path.EndsWith('/' + $name)) { $prefix = $path.Substring(0, $path.Length - $name.Length); break }
+     }
+     if ($null -eq $prefix) { throw ('the update has no ' + $name) }
+-    $count = 0
++    $todo = New-Object System.Collections.ArrayList
+     foreach ($entry in $archive.Entries) {
+       $path = $entry.FullName -replace '\\', '/'
+       if (-not $path.StartsWith($prefix) -or $path.EndsWith('/')) { continue }
+       $relative = $path.Substring($prefix.Length)
+       if ($relative -match '^game/' -or ($relative -match '^data/' -and $relative -notmatch '^data/(fonts|textures)/')) { continue }
+-      $destination = Join-Path $Target ($relative -replace '/', '\')
+-      # The texture pack: only what is new is written (the player may have their own pictures there); textures.ini, which
+-      # lists them, is always replaced.
+-      if ($relative -match '^data/textures/' -and $relative -notmatch '(^|/)textures\.ini$' -and (Test-Path -LiteralPath $destination)) { continue }
+-      New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
+-      for ($try = 1; $try -le 8; $try++) {
+-        try { [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $true); break }
+-        catch { if ($try -eq 8) { throw }; Start-Sleep -Seconds 1 }
++      $final = Join-Path $Target ($relative -replace '/', '\')
++      if ($relative -match '^data/textures/') {
++        # The texture pack: only pictures that are new are written, straight into place; textures.ini, which lists them,
++        # is always replaced.
++        if ($relative -notmatch '(^|/)textures\.ini$' -and (Test-Path -LiteralPath $final)) { continue }
++        $destination = $final
++      } else {
++        $destination = Join-Path $stage ($relative -replace '/', '\')
+       }
++      [void]$todo.Add([pscustomobject]@{ Entry = $entry; Destination = $destination })
++    }
++    $total = $todo.Count
++    $count = 0
++    foreach ($item in $todo) {
++      New-Item -ItemType Directory -Force -Path (Split-Path $item.Destination) | Out-Null
++      [System.IO.Compression.ZipFileExtensions]::ExtractToFile($item.Entry, $item.Destination, $true)
+       $count++
+-      if ($count % 10 -eq 0) { Write-Host ('  ' + $count + ' files') }
++      if ($count % 5 -eq 0 -or $count -eq $total) { Report ($count.ToString() + '/' + $total.ToString()) }
+     }
+-    Write-Host ('Done: ' + $count + ' files. Starting the game...')
+-    Add-Content -LiteralPath $log -Value ('unpacked ' + $count + ' files')
+   } finally { $archive.Dispose() }
+-  Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue
++  Report 'unpacked'
++} catch {
++  $_ | Out-File -LiteralPath $log -Append
++  Report ('failed: ' + $_.Exception.Message)
++  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
++  exit
++}
++# Unpacked while the game ran. Once it has closed, the staged files go over the game's own, and the game starts again.
++try {
++  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
++  Start-Sleep -Seconds 1
++  robocopy $stage $Target /E /MOVE /R:8 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
++  if ($LASTEXITCODE -ge 8) { throw ('robocopy failed: ' + $LASTEXITCODE) }
++  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
++  if ($Zip -like (Join-Path $env:TEMP '*')) { Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue }
++  Add-Content -LiteralPath $log -Value 'installed'
+ } catch {
+   $_ | Out-File -LiteralPath $log -Append
+-  Write-Host ('The update failed: ' + $_.Exception.Message)
+-  Write-Host ('Details: ' + $log)
+-  Start-Sleep -Seconds 10
+ }
+ Start-Process -FilePath $Exe -WorkingDirectory $Target
+ )PS";
+-        if (!out) return false;
++
++std::string read_text(const std::filesystem::path &path) {
++    std::ifstream in(path, std::ios::binary);
++    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++    while (!text.empty() && (text.back() == '\r' || text.back() == '\n' || text.back() == ' ')) text.pop_back();
++    return text;
++}
++
++// Starts the script with no window of its own. It reports through a file: "N/total" while unpacking, then "unpacked",
++// or "failed: why".
++bool start_helper(const std::filesystem::path &zip, std::string &error) {
++    std::error_code ec;
++    const std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
++    const std::filesystem::path script = temp / "d012_update.ps1";
++    g_progress_path = temp / "d012_update_progress.txt";
++    std::filesystem::remove(g_progress_path, ec);
++    {
++        std::ofstream out(script, std::ios::trunc);
++        out << kHelperScript;
++        if (!out) {
++            error = "the installer script could not be written";
++            return false;
++        }
+     }
++    wchar_t exe_buffer[MAX_PATH * 4]{};
++    GetModuleFileNameW(nullptr, exe_buffer, MAX_PATH * 4);
++    const std::filesystem::path exe = exe_buffer;
+     // By its full path: a PATH without the PowerShell folder must not keep the update from starting.
+     wchar_t system_dir[MAX_PATH]{};
+     GetSystemDirectoryW(system_dir, MAX_PATH);
+     std::wstring powershell = std::wstring(system_dir) + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
+     if (!std::filesystem::exists(powershell, ec)) powershell = L"powershell.exe";
+-    const std::wstring command = L"\"" + powershell + L"\" -NoProfile -ExecutionPolicy Bypass -File \"" +
+-                                 script.wstring() + L"\" -ProcessId " + std::to_wstring(GetCurrentProcessId()) +
+-                                 L" -Zip \"" + zip.wstring() + L"\" -Target \"" + exe.parent_path().wstring() +
+-                                 L"\" -Exe \"" + exe.wstring() + L"\"";
++    const std::wstring command = L"\"" + powershell + L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
++                                 script.wstring() + L"\" -ProcessId " + std::to_wstring(GetCurrentProcessId()) + L" -Zip \"" +
++                                 zip.wstring() + L"\" -Target \"" + exe.parent_path().wstring() + L"\" -Exe \"" + exe.wstring() +
++                                 L"\" -Progress \"" + g_progress_path.wstring() + L"\"";
+     std::vector<wchar_t> mutable_command(command.begin(), command.end());
+     mutable_command.push_back(L'\0');
+     STARTUPINFOW startup{};
+     startup.cb = sizeof(startup);
++    startup.dwFlags = STARTF_USESHOWWINDOW;
++    startup.wShowWindow = SW_HIDE;
+     PROCESS_INFORMATION process{};
+-    // A console window of its own (it outlives the game, and shows the update's progress).
+-    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr,
+-                        &startup, &process)) {
+-        std::cerr << "[update] could not start " << std::filesystem::path(powershell).string() << " (error " << GetLastError() << ")\n";
++    // No window at all; the script outlives the game, which is what it waits for.
++    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
++                        nullptr, nullptr, &startup, &process)) {
++        error = "PowerShell could not be started (error " + std::to_string(GetLastError()) + ")";
+         return false;
+     }
+-    CloseHandle(process.hProcess);
+     CloseHandle(process.hThread);
++    if (g_helper != nullptr) CloseHandle(g_helper);
++    g_helper = process.hProcess;
+     return true;
++}
++
++// Runs on the download's thread: starts the script, then follows what it reports until the update is unpacked.
++void unpack(const std::filesystem::path &zip) {
++    set_status([](Status &s) {
++        s.state = State::Unpacking;
++        s.progress = 0.0f;
++        s.error.clear();
++    });
++    std::string error;
++    if (!start_helper(zip, error)) {
++        set_status([&](Status &s) {
++            s.state = State::Failed;
++            s.error = error;
++        });
++        return;
++    }
++    for (;;) {
++        std::this_thread::sleep_for(std::chrono::milliseconds(200));
++        std::string text = read_text(g_progress_path);
++        const bool stopped = WaitForSingleObject(g_helper, 0) == WAIT_OBJECT_0;
++        if (stopped) text = read_text(g_progress_path);  // what it wrote last
++        if (text == "unpacked") {
++            set_status([](Status &s) {
++                s.state = State::Ready;
++                s.progress = 1.0f;
++            });
++            return;
++        }
++        if (text.rfind("failed:", 0) == 0) {
++            set_status([&](Status &s) {
++                s.state = State::Failed;
++                s.error = text.substr(7);
++            });
++            return;
++        }
++        if (stopped) {
++            set_status([](Status &s) {
++                s.state = State::Failed;
++                s.error = "the installer stopped (see d012_update.log in the temp folder)";
++            });
++            return;
++        }
++        const std::size_t slash = text.find('/');
++        if (slash != std::string::npos) {
++            const double done = std::atof(text.substr(0, slash).c_str());
++            const double total = std::atof(text.substr(slash + 1u).c_str());
++            if (total > 0.0) set_status([&](Status &s) { s.progress = static_cast<float>(done / total); });
++        }
++    }
++}
++
++} // namespace
++#endif
++
++void start_download() {
++#if defined(_WIN32)
++    std::string url;
++    std::filesystem::path test_zip;
++    {
++        const std::lock_guard<std::mutex> lock(g_mutex);
++        if (g_status.state != State::Available && g_status.state != State::Failed) return;
++        // D012_UPDATE_TEST_ZIP: a zip already on this disk, unpacked as if it had just been downloaded.
++        if (const char *test = std::getenv("D012_UPDATE_TEST_ZIP"); test != nullptr && *test != '\0') test_zip = test;
++        url = g_zip_url;
++        g_status.state = test_zip.empty() ? State::Downloading : State::Unpacking;
++        g_status.progress = 0.0f;
++        g_status.error.clear();
++    }
++    std::thread([url, test_zip] {
++        if (!test_zip.empty()) {
++            unpack(test_zip);
++            return;
++        }
++        if (url.empty()) {
++            set_status([](Status &s) {
++                s.state = State::Failed;
++                s.error = "the release has no zip to download";
++            });
++            return;
++        }
++        std::error_code ec;
++        const std::filesystem::path zip = std::filesystem::temp_directory_path(ec) / "d012_update.zip";
++        std::string error;
++        bool ok = false;
++        {
++            std::ofstream out(zip, std::ios::binary | std::ios::trunc);
++            ok = out && http_get(url, [&](const char *data, std::size_t n) { out.write(data, static_cast<std::streamsize>(n)); },
++                                 [](std::uint64_t done, std::uint64_t total) {
++                                     if (total != 0u)
++                                         set_status([&](Status &s) { s.progress = static_cast<float>(done) / static_cast<float>(total); });
++                                 },
++                                 error);
++        }
++        if (ok) {
++            {
++                const std::lock_guard<std::mutex> lock(g_mutex);
++                g_zip_path = zip;
++            }
++            unpack(zip);
++        } else {
++            std::filesystem::remove(zip, ec);
++            set_status([&](Status &s) {
++                s.state = State::Failed;
++                s.error = error.empty() ? "the download failed" : error;
++            });
++        }
++    }).detach();
++#endif
++}
++
++// The script is already running and waits for the game to close: the caller only has to quit.
++bool launch_installer() {
++#if defined(_WIN32)
++    const std::lock_guard<std::mutex> lock(g_mutex);
++    return g_status.state == State::Ready && g_helper != nullptr;
+ #else
+     return false;
+ #endif
+diff --git a/host/ui/updater.hpp b/host/ui/updater.hpp
+index efa0449..b317ae7 100644
+--- a/host/ui/updater.hpp
++++ b/host/ui/updater.hpp
+@@ -8,7 +8,7 @@
+ // own folders (data, game) alone. Windows only; elsewhere nothing is ever reported as available.
+ namespace portablekit::ui::updater {
+ 
+-enum class State { Idle, Checking, UpToDate, Available, Failed, Downloading, Ready };
++enum class State { Idle, Checking, UpToDate, Available, Failed, Downloading, Unpacking, Ready };
+ 
+ struct Status {
+     State state{State::Idle};
+@@ -21,10 +21,11 @@ struct Status {
+ // Starts the check; ignored while one or a download is running.
+ void start_check();
+ [[nodiscard]] Status status();
+-// Downloads the release's zip on a thread of its own; State::Ready when it is done.
++// Downloads the release's zip on a thread of its own, then has a hidden script unpack it beside the game while it runs
++// (State::Unpacking, with progress); State::Ready when everything is unpacked and waits for the game to close.
+ void start_download();
+-// Starts the script that installs the downloaded zip once this program has exited, then runs the game again.
+-// The caller quits straight after. False when it cannot be started.
++// The unpacked update is installed by the script once this program has exited, and the game runs again. The caller
++// quits straight after. False when there is nothing ready.
+ bool launch_installer();
+ 
+ [[nodiscard]] std::string local_version();
+-- 
+2.54.0.windows.1
+

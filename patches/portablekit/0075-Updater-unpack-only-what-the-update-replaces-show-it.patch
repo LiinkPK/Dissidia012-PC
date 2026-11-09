@@ -1,0 +1,161 @@
+From 634c1c14ee054a8c4ab0a6308602434bea369f74 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 5 Nov 2026 21:50:10 +0100
+Subject: [PATCH] Updater: unpack only what the update replaces, show its
+ window, start PowerShell by its full path
+
+The installer was hidden and expanded the whole zip, which holds the HD textures: minutes with no sign of life, so the game looked like it just closed. It now writes only the files outside game\ and data\ (plus data\fonts\), in a visible window, and reports a failure there.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ host/ui/updater.cpp | 98 ++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 80 insertions(+), 18 deletions(-)
+
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index d29549f..4e627f4 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -7,9 +7,11 @@
+ #include <atomic>
+ #include <cctype>
+ #include <cstdint>
++#include <cstdlib>
+ #include <filesystem>
+ #include <fstream>
+ #include <functional>
++#include <iostream>
+ #include <mutex>
+ #include <string>
+ #include <thread>
+@@ -134,6 +136,16 @@ bool http_get(const std::string &url, const std::function<void(const char *, std
+ }
+ 
+ void check_thread() {
++    // D012_UPDATE_TEST_ZIP=<a release zip on this disk>: offers that zip as a newer release and "downloads" it at once, so
++    // the installer can be tried without publishing anything.
++    if (const char *test = std::getenv("D012_UPDATE_TEST_ZIP"); test != nullptr && *test != '\0') {
++        set_status([&](Status &s) {
++            s.latest = "v99.0.0 (test zip)";
++            s.page_url = "https://github.com/LiinkPK/Dissidia012-PC/releases/latest";
++            s.state = State::Available;
++        });
++        return;
++    }
+     std::string body, error;
+     const bool ok = http_get(kLatestApi, [&](const char *data, std::size_t n) { body.append(data, n); }, nullptr, error);
+     const std::string tag = ok ? json_string(body, "tag_name") : std::string();
+@@ -201,6 +213,12 @@ void start_download() {
+     {
+         const std::lock_guard<std::mutex> lock(g_mutex);
+         if (g_status.state != State::Available && g_status.state != State::Failed) return;
++        if (const char *test = std::getenv("D012_UPDATE_TEST_ZIP"); test != nullptr && *test != '\0') {
++            g_zip_path = test;  // already on this disk
++            g_status.state = State::Ready;
++            g_status.progress = 1.0f;
++            return;
++        }
+         url = g_zip_url;
+         g_status.state = State::Downloading;
+         g_status.progress = 0.0f;
+@@ -259,26 +277,67 @@ bool launch_installer() {
+     // Waits for the game to close, unpacks the zip, copies it over the game's folder except the player's own
+     // folders (data: saves, settings, textures, cheats; game: the disc image), then starts the game again.
+     // Whatever goes wrong is written to d012_update.log in the temp folder.
++    // The release zip holds the player's own folders too (the HD textures are most of its size), so it is not unpacked as
++    // a whole: only the entries outside game\ and data\ are written, plus data\fonts\. The window stays visible, so the
++    // player sees the update is running (unpacking takes a while), and the game starts again whatever happens.
+     {
+         std::ofstream out(script, std::ios::trunc);
+-        out << "param($ProcessId, $Zip, $Target, $Exe)\r\n"
+-               "$log = Join-Path $env:TEMP 'd012_update.log'\r\n"
+-               "try {\r\n"
+-               "  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue\r\n"
+-               "  $x = Join-Path $env:TEMP 'd012_update_files'\r\n"
+-               "  if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Recurse -Force }\r\n"
+-               "  Expand-Archive -LiteralPath $Zip -DestinationPath $x -Force\r\n"
+-               "  $name = Split-Path $Exe -Leaf\r\n"
+-               "  $src = (Get-ChildItem -LiteralPath $x -Recurse -Filter $name | Select-Object -First 1).DirectoryName\r\n"
+-               "  if (-not $src) { throw 'the update has no ' + $name }\r\n"
+-               "  robocopy $src $Target /E /XD data game /R:5 /W:1 | Out-Null\r\n"
+-               "  if ($LASTEXITCODE -ge 8) { throw ('robocopy failed: ' + $LASTEXITCODE) }\r\n"
+-               "  Remove-Item -LiteralPath $x, $Zip -Recurse -Force\r\n"
+-               "} catch { $_ | Out-File -LiteralPath $log }\r\n"
+-               "Start-Process -FilePath $Exe -WorkingDirectory $Target\r\n";
++        out << R"PS(param($ProcessId, $Zip, $Target, $Exe)
++$log = Join-Path $env:TEMP 'd012_update.log'
++Set-Content -LiteralPath $log -Value ('started ' + (Get-Date) + ' zip=' + $Zip + ' target=' + $Target + ' exe=' + $Exe)
++$Host.UI.RawUI.WindowTitle = 'Updating Dissidia 012 HD Remastered'
++Write-Host 'Updating Dissidia 012 Final Fantasy HD Remastered. Do not close this window; the game starts again when it is done.'
++try {
++  Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
++  Start-Sleep -Seconds 1
++  Add-Type -AssemblyName System.IO.Compression.FileSystem
++  $name = Split-Path $Exe -Leaf
++  $archive = [System.IO.Compression.ZipFile]::OpenRead($Zip)
++  try {
++    $prefix = $null
++    foreach ($entry in $archive.Entries) {
++      $path = $entry.FullName -replace '\\', '/'
++      if ($path -eq $name -or $path.EndsWith('/' + $name)) { $prefix = $path.Substring(0, $path.Length - $name.Length); break }
++    }
++    if ($null -eq $prefix) { throw ('the update has no ' + $name) }
++    $count = 0
++    foreach ($entry in $archive.Entries) {
++      $path = $entry.FullName -replace '\\', '/'
++      if (-not $path.StartsWith($prefix) -or $path.EndsWith('/')) { continue }
++      $relative = $path.Substring($prefix.Length)
++      if ($relative -match '^game/' -or ($relative -match '^data/' -and $relative -notmatch '^data/(fonts|textures)/')) { continue }
++      $destination = Join-Path $Target ($relative -replace '/', '\')
++      # The texture pack: only what is new is written (the player may have their own pictures there); textures.ini, which
++      # lists them, is always replaced.
++      if ($relative -match '^data/textures/' -and $relative -notmatch '(^|/)textures\.ini$' -and (Test-Path -LiteralPath $destination)) { continue }
++      New-Item -ItemType Directory -Force -Path (Split-Path $destination) | Out-Null
++      for ($try = 1; $try -le 8; $try++) {
++        try { [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $true); break }
++        catch { if ($try -eq 8) { throw }; Start-Sleep -Seconds 1 }
++      }
++      $count++
++      if ($count % 10 -eq 0) { Write-Host ('  ' + $count + ' files') }
++    }
++    Write-Host ('Done: ' + $count + ' files. Starting the game...')
++    Add-Content -LiteralPath $log -Value ('unpacked ' + $count + ' files')
++  } finally { $archive.Dispose() }
++  Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue
++} catch {
++  $_ | Out-File -LiteralPath $log -Append
++  Write-Host ('The update failed: ' + $_.Exception.Message)
++  Write-Host ('Details: ' + $log)
++  Start-Sleep -Seconds 10
++}
++Start-Process -FilePath $Exe -WorkingDirectory $Target
++)PS";
+         if (!out) return false;
+     }
+-    const std::wstring command = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
++    // By its full path: a PATH without the PowerShell folder must not keep the update from starting.
++    wchar_t system_dir[MAX_PATH]{};
++    GetSystemDirectoryW(system_dir, MAX_PATH);
++    std::wstring powershell = std::wstring(system_dir) + L"\\WindowsPowerShell\\v1.0\\powershell.exe";
++    if (!std::filesystem::exists(powershell, ec)) powershell = L"powershell.exe";
++    const std::wstring command = L"\"" + powershell + L"\" -NoProfile -ExecutionPolicy Bypass -File \"" +
+                                  script.wstring() + L"\" -ProcessId " + std::to_wstring(GetCurrentProcessId()) +
+                                  L" -Zip \"" + zip.wstring() + L"\" -Target \"" + exe.parent_path().wstring() +
+                                  L"\" -Exe \"" + exe.wstring() + L"\"";
+@@ -287,9 +346,12 @@ bool launch_installer() {
+     STARTUPINFOW startup{};
+     startup.cb = sizeof(startup);
+     PROCESS_INFORMATION process{};
+-    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS,
+-                        nullptr, nullptr, &startup, &process))
++    // A console window of its own (it outlives the game, and shows the update's progress).
++    if (!CreateProcessW(nullptr, mutable_command.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr,
++                        &startup, &process)) {
++        std::cerr << "[update] could not start " << std::filesystem::path(powershell).string() << " (error " << GetLastError() << ")\n";
+         return false;
++    }
+     CloseHandle(process.hProcess);
+     CloseHandle(process.hThread);
+     return true;
+-- 
+2.54.0.windows.1
+

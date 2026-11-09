@@ -1,0 +1,107 @@
+From 2879850eb02a8cc4a536f4f37d0bb665ff6094d6 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 17:36:02 +0100
+Subject: [PATCH] F9 takes a screenshot of the window as PNG in <data
+ folder>/screenshots (made on the first one); the roster trace is asked for by
+ its file only
+
+---
+ host/gpu/vulkan_renderer.cpp | 54 ++++++++++++++++++++++++++++++++----
+ 1 file changed, 49 insertions(+), 5 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index b39724b..de4cdbb 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -25,6 +25,12 @@
+ #include "input/stick.hpp"
+ #include "settings/settings.hpp"
+ 
++// PNG for the screenshot key (the same encoder the texture pack uses; static here, so the two copies do not meet).
++#define STB_IMAGE_WRITE_STATIC
++#define STBI_WRITE_NO_STDIO
++#define STB_IMAGE_WRITE_IMPLEMENTATION
++#include "stb_image_write.h"
++
+ #if defined(PORTABLEKIT_ANDROID_APP)
+ #include "platform/android_jni.hpp"
+ #endif
+@@ -49,6 +55,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#include <ctime>
+ #include <filesystem>
+ #include <fstream>
+ #include <iomanip>
+@@ -719,6 +726,25 @@ bool write_bmp(const std::string &path, const std::uint8_t *pixels, std::uint32_
+     return static_cast<bool>(out);
+ }
+ 
++// Writes 4-byte pixels, top row first, as a PNG (RGB, no alpha). The path is UTF-8.
++bool write_png(const std::string &path, const std::uint8_t *pixels, std::uint32_t width, std::uint32_t height, bool bgra) {
++    std::vector<std::uint8_t> rgb(static_cast<std::size_t>(width) * height * 3u);
++    for (std::size_t i = 0, n = static_cast<std::size_t>(width) * height; i < n; ++i) {
++        rgb[i * 3u + 0u] = pixels[i * 4u + (bgra ? 2u : 0u)];
++        rgb[i * 3u + 1u] = pixels[i * 4u + 1u];
++        rgb[i * 3u + 2u] = pixels[i * 4u + (bgra ? 0u : 2u)];
++    }
++    int size = 0;
++    unsigned char *png = stbi_write_png_to_mem(rgb.data(), static_cast<int>(width) * 3, static_cast<int>(width),
++                                               static_cast<int>(height), 3, &size);
++    if (png == nullptr) return false;
++    std::ofstream out(portablekit::install::path_from_utf8(path), std::ios::binary);
++    if (out) out.write(reinterpret_cast<const char *>(png), size);
++    const bool ok = static_cast<bool>(out);
++    STBIW_FREE(png);
++    return ok;
++}
++
+ struct PadTuning {
+     float dead_zone{0.15f};
+     bool stick_square{true};
+@@ -4610,8 +4636,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
+     void *mapped = nullptr;
+     vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped);
+     const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM || swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
+-    if (write_bmp(capture_path, static_cast<const std::uint8_t *>(mapped), capture_extent.width,
+-                  capture_extent.height, bgra))
++    const bool png = capture_path.size() > 4u && capture_path.compare(capture_path.size() - 4u, 4u, ".png") == 0;
++    if ((png ? write_png : write_bmp)(capture_path, static_cast<const std::uint8_t *>(mapped), capture_extent.width,
++                                      capture_extent.height, bgra))
+         std::cout << "[render] window " << capture_extent.width << "x" << capture_extent.height << " -> "
+                   << capture_path << std::endl;
+     else
+@@ -7073,9 +7100,26 @@ bool VulkanRenderer::pump_events() {
+         if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
+             impl_->mouse_buttons &= ~(1u << event.button.button);
+         if (impl_->event_hook && impl_->event_hook(event)) continue;
+-        // F9 asks for the roster trace (roster_trace.txt, two frames); the draw code looks for this file.
+-        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F9 && !event.key.repeat)
+-            if (std::FILE *trigger = std::fopen("roster_trigger", "wb")) std::fclose(trigger);
++        // F9: a screenshot of the window as PNG in <data folder>/screenshots, made when the first one is taken.
++        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F9 && !event.key.repeat && impl_->ready &&
++            impl_->capture_path.empty() && (impl_->swapchain_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u) {
++            try {
++                const std::filesystem::path folder = portablekit::install::user_data_directory() / "screenshots";
++                std::filesystem::create_directories(folder);
++                const std::time_t now = std::time(nullptr);
++                std::tm local{};
++#if defined(_WIN32)
++                localtime_s(&local, &now);
++#else
++                localtime_r(&now, &local);
++#endif
++                char stamp[32];
++                std::strftime(stamp, sizeof stamp, "%Y-%m-%d_%H-%M-%S", &local);
++                impl_->capture_path = portablekit::install::path_to_utf8(folder / (std::string(portablekit::game().app_name) + "_" + stamp + ".png"));
++            } catch (const std::exception &e) {
++                std::cout << "[render] no screenshot: " << e.what() << std::endl;
++            }
++        }
+ #if !defined(__ANDROID__)
+         // Alt+Enter: full screen and back, and the Display setting follows it.
+         if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat &&
+-- 
+2.54.0.windows.1
+

@@ -1,0 +1,143 @@
+From b3896b10d9c8c9ff59116e751c75127986d597c7 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 19:03:57 +0100
+Subject: [PATCH] The pointer hides again after the menu closes (the cursor's
+ real state is asked); F10 writes a trace of the text textures drawn and the
+ lines the game recorded (text_trace.txt)
+
+---
+ host/fonts/game_font.cpp     | 21 +++++++++++++++++
+ host/fonts/game_font.hpp     |  2 ++
+ host/gpu/vulkan_renderer.cpp | 45 ++++++++++++++++++++++++++++++++----
+ 3 files changed, 63 insertions(+), 5 deletions(-)
+
+diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
+index ea8f139..3f85756 100644
+--- a/host/fonts/game_font.cpp
++++ b/host/fonts/game_font.cpp
+@@ -22,6 +22,7 @@
+ #include <memory>
+ #include <mutex>
+ #include <set>
++#include <cstdio>
+ #include <string>
+ #include <thread>
+ #include <unordered_map>
+@@ -676,6 +677,26 @@ void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64)
+     ++line.version;
+ }
+ 
++std::string describe_lines() {
++    std::lock_guard lock(lines_mutex());
++    std::string text;
++    char row[200];
++    for (const auto &entry : lines()) {
++        int min_x = 0, max_x = 0;
++        bool first = true;
++        for (const LineGlyph &g : entry.second.glyphs) {
++            const int x = g.x64 / 64;
++            if (first || x < min_x) min_x = x;
++            if (first || x > max_x) max_x = x;
++            first = false;
++        }
++        std::snprintf(row, sizeof row, "[text-line] buffer 0x%08X glyphs %zu x %d..%d version %llu\n", entry.first,
++                      entry.second.glyphs.size(), min_x, max_x, static_cast<unsigned long long>(entry.second.version));
++        text += row;
++    }
++    return text;
++}
++
+ bool line_known(std::uint32_t buffer) {
+     std::lock_guard lock(lines_mutex());
+     return lines().find(buffer) != lines().end();
+diff --git a/host/fonts/game_font.hpp b/host/fonts/game_font.hpp
+index dcf980a..e4e5819 100644
+--- a/host/fonts/game_font.hpp
++++ b/host/fonts/game_font.hpp
+@@ -101,6 +101,8 @@ void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64)
+ bool line_glyphs(std::uint32_t buffer, std::vector<LineGlyph> &out, std::uint64_t &version);
+ // Whether glyphs have been written into the buffer at `buffer`.
+ [[nodiscard]] bool line_known(std::uint32_t buffer);
++// One text row per recorded line (buffer address, glyph count, the span of their x positions): for the text trace.
++[[nodiscard]] std::string describe_lines();
+ // The line as 8-bit coverage, width*scale by height*scale.
+ [[nodiscard]] std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int width, int height, int scale);
+ 
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index ecdf1ef..0217168 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5498,11 +5498,41 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+     return line.texture.descriptor;
+ }
+ 
++// The text trace: with a file "text_trigger" in the working directory (F10 makes it), the next two frames write the text
++// textures that were drawn, and whether each got an HD line, to text_trace.txt, with the lines the game recorded.
++static void trace_text_draw(std::uint64_t frame, const DrawCall &call, bool hd) {
++    static std::uint64_t checked = ~0ull, until = 0;
++    if (frame != checked) {
++        checked = frame;
++        if (std::FILE *trigger = std::fopen("text_trigger", "rb")) {
++            std::fclose(trigger);
++            std::remove("text_trigger");
++            until = frame + 2u;
++            if (std::FILE *out = std::fopen("text_trace.txt", "ab")) {
++                const std::string lines = fonts::describe_lines();
++                std::fwrite(lines.data(), 1u, lines.size(), out);
++                std::fclose(out);
++            }
++        }
++    }
++    if (frame >= until) return;
++    if (std::FILE *out = std::fopen("text_trace.txt", "ab")) {
++        const TextureState &t = call.texture;
++        std::fprintf(out, "[text-draw] f%llu texture 0x%08X %ux%u buffer_width %u known %d hd %d primitive %d\n",
++                     static_cast<unsigned long long>(frame), static_cast<unsigned>(t.address & 0x0FFFFFFFu),
++                     static_cast<unsigned>(t.width), static_cast<unsigned>(t.height), static_cast<unsigned>(t.buffer_width),
++                     fonts::line_known(t.address & 0x0FFFFFFFu) ? 1 : 0, hd ? 1 : 0, static_cast<int>(call.primitive));
++        std::fclose(out);
++    }
++}
++
+ VkDescriptorSet VulkanRenderer::Impl::texture_descriptor(const GuestMemory &memory, const DrawCall &call) {
+     const perf::SplitScope split(perf::Split::Texture);
+     Texture &texture = texture_for(memory, call);
+     if (call.through && call.texture.format == TextureFormat::Clut4) {
+-        if (const VkDescriptorSet sharp = text_line_descriptor(memory, call, texture)) return sharp;
++        const VkDescriptorSet sharp = text_line_descriptor(memory, call, texture);
++        trace_text_draw(frames, call, sharp != VK_NULL_HANDLE);
++        if (sharp) return sharp;
+     }
+     if (texture.replacement && pack) {
+         // Until the image is decoded and on the GPU, the original is drawn.
+@@ -7264,6 +7294,9 @@ bool VulkanRenderer::pump_events() {
+         if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
+             impl_->mouse_buttons &= ~(1u << event.button.button);
+         if (impl_->event_hook && impl_->event_hook(event)) continue;
++        // F10: asks for the text trace (text_trace.txt, two frames); the draw code looks for this file.
++        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F10 && !event.key.repeat)
++            if (std::FILE *trigger = std::fopen("text_trigger", "wb")) std::fclose(trigger);
+         // F9: a screenshot of the window as PNG in <data folder>/screenshots, made when the first one is taken.
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F9 && !event.key.repeat && impl_->ready &&
+             impl_->capture_path.empty() && (impl_->swapchain_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u) {
+@@ -7307,11 +7340,13 @@ bool VulkanRenderer::pump_events() {
+         const bool over = (SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_MOUSE_FOCUS) != 0u;
+         const bool idle = std::chrono::steady_clock::now() - impl_->last_pointer_move > std::chrono::seconds(2);
+         const bool hide = over && idle && !impl_->mouse_captured;
+-        if (hide && !impl_->pointer_hidden) {
+-            SDL_HideCursor();
++        // The cursor's real state is asked each time: the menu shows it again on its own, and a flag kept here then said
++        // "hidden" while it was in view, so it stayed until the mouse moved.
++        if (hide) {
++            if (SDL_CursorVisible()) SDL_HideCursor();
+             impl_->pointer_hidden = true;
+-        } else if (!hide && impl_->pointer_hidden) {
+-            SDL_ShowCursor();
++        } else if (impl_->pointer_hidden) {
++            if (!SDL_CursorVisible()) SDL_ShowCursor();
+             impl_->pointer_hidden = false;
+         }
+     }
+-- 
+2.54.0.windows.1
+

@@ -10237,7 +10237,11 @@ L_088D58E4:
     ctx.gpr[16] = (ctx.gpr[22] | 0u);
     goto L_088D58E8;
 L_088D58E8:
+    if (g_d012_mod_bt) {
+    ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[16]) < 250 ? 1u : 0u);
+    } else {
     ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[16]) < 100 ? 1u : 0u);
+    }
     goto L_088D58EC;
 L_088D58EC:
     { const bool branch_taken = ctx.gpr[4] == 0u;

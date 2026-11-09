@@ -86,18 +86,10 @@ disassembler and the new `tools/port/` scripts cover the analysis.
 
 ## Mods (19 October 2026)
 
-- [Mod folder](mod-folder.md): mods that add content and never replace any, in `<data dir>/mods/<mod>/mod.json`.
   The first kind is battle music: series and tracks in MP3, Ogg Vorbis, Opus, FLAC or WAV, with loop points,
   played through a stand-in ATRAC3plus file that PortableKit's sceAtrac fills from the host file (three framework
   commits). A test switch played a generated mod track in place of a Quick Battle's music, looping where its
   manifest says, in the recompiled build with no interpreter. The game-side 2D selector is separate work.
-
-## Local versus (25 October 2026)
-
-- [Local split-screen versus](local-versus.md): a scope for a Quick Battle (Player vs Player) entry with a second
-  controller and a split screen. Route chosen: one copy of the game, with player 2 on the opponent's pad and the
-  battle's draw tasks run a second time from player 2's camera. Two copies over ad hoc are kept for later online
-  play. Not started.
 
 ## Next steps
 

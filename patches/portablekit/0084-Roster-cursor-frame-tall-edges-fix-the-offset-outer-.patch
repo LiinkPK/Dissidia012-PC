@@ -1,0 +1,109 @@
+From 7f4acc69c6c1e21ab7231abf1587d434b6f1bb8b Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 14:12:58 +0100
+Subject: [PATCH] Roster cursor frame: tall edges fix the offset, outer glow
+ pieces follow it; F9 writes roster_trace.txt; the menu opened with
+ Select+Start no longer closes at once (Start must be released first)
+
+---
+ host/gpu/vulkan_renderer.cpp | 38 ++++++++++++++++++++++++++++++++----
+ host/ui/menu.cpp             |  5 ++++-
+ 2 files changed, 38 insertions(+), 5 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 6a79b5a..e01394f 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -7073,6 +7073,9 @@ bool VulkanRenderer::pump_events() {
+         if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
+             impl_->mouse_buttons &= ~(1u << event.button.button);
+         if (impl_->event_hook && impl_->event_hook(event)) continue;
++        // F9 asks for the roster trace (roster_trace.txt, two frames); the draw code looks for this file.
++        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F9 && !event.key.repeat)
++            if (std::FILE *trigger = std::fopen("roster_trigger", "wb")) std::fclose(trigger);
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
+             impl_->overlay_visible = !impl_->overlay_visible;
+     }
+@@ -8469,7 +8472,18 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+         }
+         // D012_TRACE_ROSTER=1: the 2D draws near the roster (the Quick Battle / CPU select grid), before and after the
+         // HUD scaling, to see which draw puts a stray line on a tile. At most 6000 lines.
+-        static const bool trace_roster = portablekit::env("TRACE_ROSTER") != nullptr;
++        // Triggered by creating an empty file "roster_trigger" in the working directory: the next two frames are
++        // written to roster_trace.txt there.
++        static unsigned long long trace_checked = ~0ull, trace_until = 0;
++        if (impl.frames != trace_checked) {
++            trace_checked = impl.frames;
++            if (std::FILE *trigger = std::fopen("roster_trigger", "rb")) {
++                std::fclose(trigger);
++                std::remove("roster_trigger");
++                trace_until = impl.frames + 2u;
++            }
++        }
++        const bool trace_roster = impl.frames < trace_until;
+         float trace_pre[4]{0.0f, 0.0f, 0.0f, 0.0f};
+         if (trace_roster && !impl.scratch.empty()) {
+             trace_pre[0] = trace_pre[2] = impl.scratch[0].x;
+@@ -8608,9 +8622,22 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                             const float ny = 113.0f + 39.0f * static_cast<float>(row);
+                             const float tile_x = 7.0f + (nx - 28.0f) * 0.65f, tile_y = 203.0f + (ny - 113.0f) * 0.65f;
+                             if (is_frame) {
++                                // The outer glow pieces lie on the line between two cells, so they cannot choose a cell
++                                // themselves. The tall edges, inside one cell vertically, fix the frame's offset and every
++                                // other piece of the frame takes the same offset.
++                                static float frame_tx = 0.0f, frame_ty = 0.0f;
++                                static bool frame_valid = false;
++                                const bool tall_edge = y1 - y0 >= 25.0f && x1 - x0 <= 3.0f;
++                                if (tall_edge) {
++                                    frame_tx = nx - 28.0f - ox;
++                                    frame_ty = ny - 113.0f - oy;
++                                    frame_valid = true;
++                                }
++                                const float tx = frame_valid ? frame_tx : nx - 28.0f - ox;
++                                const float ty = frame_valid ? frame_ty : ny - 113.0f - oy;
+                                 for (std::size_t i = first; i < first + group; ++i) {
+-                                    impl.scratch[i].x = 7.0f + (impl.scratch[i].x - ox + nx - 28.0f) * 0.65f;
+-                                    impl.scratch[i].y = 203.0f + (impl.scratch[i].y - oy + ny - 113.0f) * 0.65f;
++                                    impl.scratch[i].x = 7.0f + (impl.scratch[i].x + tx) * 0.65f;
++                                    impl.scratch[i].y = 203.0f + (impl.scratch[i].y + ty) * 0.65f;
+                                 }
+                             } else {
+                                 // The hand keeps its size. 1.5 game pixels up, and a little more on top (2 screen pixels,
+@@ -8709,7 +8736,10 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                               trace_pre[3], post[0], post[1], post[2], post[3],
+                               static_cast<unsigned>(call.viewport.scissor_x1), static_cast<unsigned>(call.viewport.scissor_y1),
+                               static_cast<unsigned>(call.viewport.scissor_x2), static_cast<unsigned>(call.viewport.scissor_y2));
+-                std::cout << line << std::endl;
++                if (std::FILE *out = std::fopen("roster_trace.txt", "ab")) {
++                    std::fprintf(out, "%s\n", line);
++                    std::fclose(out);
++                }
+             }
+         }
+         if (hud_texture && !impl.menu_over_hud && !portablekit::game().hud_scaled_by_game && (hud_scale < 1.0f || hud_margin > 0.0f || hud_side > 0.0f) &&
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 222e430..fb9629d 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -413,6 +413,7 @@ private:
+     bool confirm_opened_{};  // the confirmation was on screen last frame
+     bool update_open_{};     // the update question is up
+     std::optional<input::Action> binding_;  // waiting for a key for this control
++    bool start_armed_ = false;              // Start was let go since the menu opened
+ };
+ 
+ bool Menu::frame() {
+@@ -429,7 +430,9 @@ bool Menu::frame() {
+     // The pad's back button closes the menu too, once nothing is being edited.
+     const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
+     const bool pad_back = ImGui::IsKeyPressed(cancel, false);
+-    const bool start = ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false);
++    // Select+Start opens the menu with Start still held: it closes the menu only after it has been let go once.
++    if (!ImGui::IsKeyDown(ImGuiKey_GamepadStart)) start_armed_ = true;
++    const bool start = start_armed_ && ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false);
+     // Back closes the font list, or the save import and export, before it
+     // closes the menu.
+     const bool font_list_was_open = (tab_ == 0 && (font_list_open() || texture_pack_screen_open())) ||
+-- 
+2.54.0.windows.1
+

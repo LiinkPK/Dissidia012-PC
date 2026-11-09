@@ -1,0 +1,32 @@
+From 1072ac77fef44d919eac6cf8806b745bc2fa9de8 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 19:31:05 +0100
+Subject: [PATCH] Screenshots are named D012HD_DD-MM-YYYY_HH-MM.png (_2, _3 for
+ more in the same minute)
+
+---
+ host/gpu/vulkan_renderer.cpp | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index a1ca26d..8a6184a 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -7311,8 +7311,12 @@ bool VulkanRenderer::pump_events() {
+                 localtime_r(&now, &local);
+ #endif
+                 char stamp[32];
+-                std::strftime(stamp, sizeof stamp, "%Y-%m-%d_%H-%M-%S", &local);
+-                impl_->capture_path = portablekit::install::path_to_utf8(folder / (std::string(portablekit::game().app_name) + "_" + stamp + ".png"));
++                std::strftime(stamp, sizeof stamp, "%d-%m-%Y_%H-%M", &local);
++                // D012HD_DD-MM-YYYY_HH-MM.png; a second one in the same minute gets _2, _3, ... so none is overwritten.
++                std::filesystem::path file = folder / (std::string("D012HD_") + stamp + ".png");
++                for (int copy = 2; std::filesystem::exists(file) && copy < 1000; ++copy)
++                    file = folder / (std::string("D012HD_") + stamp + "_" + std::to_string(copy) + ".png");
++                impl_->capture_path = portablekit::install::path_to_utf8(file);
+             } catch (const std::exception &e) {
+                 std::cout << "[render] no screenshot: " << e.what() << std::endl;
+             }
+-- 
+2.54.0.windows.1
+

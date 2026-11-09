@@ -1,0 +1,75 @@
+From d86a49286363b2c7f527efb9a53ec366a2a71ed0 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 18:17:38 +0100
+Subject: [PATCH] Text > HD text: turns the redrawn text lines off (the game's
+ own lines are drawn), saved in settings.ini as text.hd
+
+---
+ host/gpu/vulkan_renderer.cpp | 4 +++-
+ host/settings/settings.cpp   | 1 +
+ host/settings/settings.hpp   | 1 +
+ host/ui/font_menu.cpp        | 6 ++++++
+ 4 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index a8e3028..7b4ba8c 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5279,10 +5279,12 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &memory, const DrawCall &call,
+                                                            const Texture &original) {
+     // <prefix>_TEXT_HD_SCALE=N: texels per original texel of a text line (default 3; 0 draws the game's own lines).
+-    static const int scale = [] {
++    static const int env_scale = [] {
+         const char *text = portablekit::env("TEXT_HD_SCALE");
+         return text != nullptr ? std::clamp(std::atoi(text), 0, 6) : 3;
+     }();
++    // Text > HD text in the menu turns the redrawn lines off (the game's own lines are drawn).
++    const int scale = settings::current().hd_text ? env_scale : 0;
+     const TextureState &state = call.texture;
+     if (scale == 0 || state.format != TextureFormat::Clut4 || state.width == 0u || state.height == 0u ||
+         state.width > 1024u || state.height > 128u)
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 2d75aa8..c2c1463 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -236,6 +236,7 @@ const std::vector<Field> &fields() {
+         {"text.weight", nullptr,
+          [](Settings &s, const std::string &t) { return parse_uint(t, 0u, kMaxFontWeight, s.font_weight); },
+          [](const Settings &s) { return std::to_string(s.font_weight); }, nullptr},
++        BOOL_FIELD("text.hd", hd_text),
+         {"text.size", "TEXT_SIZE",
+          [](Settings &s, const std::string &t) { return parse_uint(t, 50u, 100u, s.text_size); },
+          [](const Settings &s) { return std::to_string(s.text_size); }, nullptr},
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 5a8f1d6..901ffda 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -64,6 +64,7 @@ struct Settings {
+     std::uint32_t subtitle_size{85u};  // percent, 50 to 100: cutscene and battle subtitles, on top of the HUD scale
+     std::uint32_t subtitle_lift{12u};  // game pixels the subtitles are raised, 0 to 60
+     std::uint32_t text_size{90u};      // percent of the size the game's cell gives each glyph, 50 to 100
++    bool hd_text{true};                // the game's text lines drawn again from the font at 3 times their size
+     std::uint32_t font_weight{1u};     // columns the game's glyphs are thickened by, 0 to kMaxFontWeight
+ 
+     // Battle HUD (read by the renderer every draw, so changes show at once)
+diff --git a/host/ui/font_menu.cpp b/host/ui/font_menu.cpp
+index cd4830b..7d9edf0 100644
+--- a/host/ui/font_menu.cpp
++++ b/host/ui/font_menu.cpp
+@@ -182,6 +182,12 @@ void font_rows() {
+     fonts::start_catalog();
+     section("Text");
+     // Font and Weight are fixed (Calibri Regular, see game_font.cpp load()): only the size is a choice.
++    if (toggle_row("HD text", s.hd_text,
++                   options_for("text.hd", "Draw the game's text lines again from the font at 3 times their size. Off "
++                                          "shows the game's own text lines."))) {
++        s.hd_text = !s.hd_text;
++        settings::save();
++    }
+     {
+         // Applied by the renderer on the next frame; no reload needed.
+         const std::string size_text = std::to_string(s.text_size) + "%";
+-- 
+2.54.0.windows.1
+

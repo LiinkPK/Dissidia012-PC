@@ -1,0 +1,222 @@
+From a502ab213e4dd39651a70ed38f598487649d1285 Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 19:00:36 +0100
+Subject: [PATCH] HD text: glyphs rasterised once and kept, colours from a
+ table, and only the box that holds ink is uploaded (the rest of the image is
+ cleared on the GPU); a scrolling list no longer overflows the upload ring
+
+---
+ host/fonts/game_font.cpp     |  47 +++++++++++-----
+ host/gpu/vulkan_renderer.cpp | 100 ++++++++++++++++++++++++++++++++---
+ 2 files changed, 125 insertions(+), 22 deletions(-)
+
+diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
+index 46c2219..ea8f139 100644
+--- a/host/fonts/game_font.cpp
++++ b/host/fonts/game_font.cpp
+@@ -328,6 +328,13 @@ struct State {
+     int baseline{kBaseline};  // row of the cell the baselines are on
+     std::unordered_map<std::uint32_t, Layout> layouts;
+     std::unordered_map<std::uint64_t, GlyphBitmap> bitmaps;
++    // The glyphs of the HD lines (render_line), by glyph, size and scale: rasterising them again for every line of a scrolling
++    // list was the cost of every new line. Cleared with the other caches when the font is loaded again.
++    struct LineGlyphImage {
++        GlyphBitmap bitmap;
++        int fx0{}, fx1{}, x0{}, x1{}, y0{};
++    };
++    std::unordered_map<std::uint64_t, LineGlyphImage> line_images;
+     std::atomic<std::uint64_t> generation{};
+ };
+ 
+@@ -692,23 +699,34 @@ std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int
+     for (const LineGlyph &g : glyphs) {
+         const Layout &layout = layout_for(s, g.code);
+         if (layout.face == nullptr || layout.metrics.width <= 0) continue;
+-        const float full_x = layout.scale_x * static_cast<float>(scale), full_y = layout.scale_y * static_cast<float>(scale);
+         // The Text > Size setting (<prefix>_TEXT_SIZE): percent of the size the game's cell gives the glyph. The glyph
+         // shrinks about its centre across and its baseline up, so lines keep the game's spacing and baseline.
+-        const float size_factor = static_cast<float>(std::clamp<std::uint32_t>(settings::current().text_size, 50u, 100u)) / 100.0f;
+-        const float sx = full_x * size_factor, sy = full_y * size_factor;
+-        int fx0 = 0, fy0 = 0, fx1 = 0, fy1 = 0;
+-        stbtt_GetGlyphBitmapBox(&layout.face->info, layout.glyph, full_x, full_y, &fx0, &fy0, &fx1, &fy1);
+-        int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+-        stbtt_GetGlyphBitmapBox(&layout.face->info, layout.glyph, sx, sy, &x0, &y0, &x1, &y1);
+-        GlyphBitmap bitmap;
+-        bitmap.width = std::max(x1 - x0, 0);
+-        bitmap.height = std::max(y1 - y0, 0);
++        const std::uint32_t size_percent = std::clamp<std::uint32_t>(settings::current().text_size, 50u, 100u);
++        const std::uint64_t image_key = (static_cast<std::uint64_t>(g.code) << 32u) | (static_cast<std::uint64_t>(size_percent) << 16u) |
++                                        (static_cast<std::uint64_t>(scale) << 8u) | static_cast<std::uint64_t>(layout.bold & 0xFFu);
++        auto cached = s.line_images.find(image_key);
++        if (cached == s.line_images.end()) {
++            State::LineGlyphImage image;
++            const float full_x = layout.scale_x * static_cast<float>(scale), full_y = layout.scale_y * static_cast<float>(scale);
++            const float size_factor = static_cast<float>(size_percent) / 100.0f;
++            const float sx = full_x * size_factor, sy = full_y * size_factor;
++            int fy0 = 0, fy1 = 0, y1 = 0;
++            stbtt_GetGlyphBitmapBox(&layout.face->info, layout.glyph, full_x, full_y, &image.fx0, &fy0, &image.fx1, &fy1);
++            stbtt_GetGlyphBitmapBox(&layout.face->info, layout.glyph, sx, sy, &image.x0, &image.y0, &image.x1, &y1);
++            image.bitmap.width = std::max(image.x1 - image.x0, 0);
++            image.bitmap.height = std::max(y1 - image.y0, 0);
++            if (image.bitmap.width != 0 && image.bitmap.height != 0) {
++                image.bitmap.pixels.assign(static_cast<std::size_t>(image.bitmap.width) * static_cast<std::size_t>(image.bitmap.height), 0u);
++                stbtt_MakeGlyphBitmap(&layout.face->info, image.bitmap.pixels.data(), image.bitmap.width, image.bitmap.height,
++                                      image.bitmap.width, sx, sy, layout.glyph);
++                if (layout.bold > 0) embolden(image.bitmap, layout.bold * scale);
++            }
++            cached = s.line_images.emplace(image_key, std::move(image)).first;
++        }
++        const State::LineGlyphImage &glyph_image = cached->second;
++        const GlyphBitmap &bitmap = glyph_image.bitmap;
+         if (bitmap.width == 0 || bitmap.height == 0) continue;
+-        bitmap.pixels.assign(static_cast<std::size_t>(bitmap.width) * static_cast<std::size_t>(bitmap.height), 0u);
+-        stbtt_MakeGlyphBitmap(&layout.face->info, bitmap.pixels.data(), bitmap.width, bitmap.height, bitmap.width, sx, sy,
+-                              layout.glyph);
+-        if (layout.bold > 0) embolden(bitmap, layout.bold * scale);
++        const int fx0 = glyph_image.fx0, fx1 = glyph_image.fx1, x0 = glyph_image.x0, x1 = glyph_image.x1, y0 = glyph_image.y0;
+         // The game placed the low-resolution bitmap, whose box starts at natural_x0/natural_y0, at (x64, y64)/64.
+         // Centred where the full-size glyph's box was; the baseline is where the game's bitmap puts it.
+         const int left = (g.x64 * scale) / 64 + fx0 - layout.natural_x0 * scale + ((fx1 - fx0) - (x1 - x0)) / 2;
+@@ -736,6 +754,7 @@ void reload() {
+         State &s = state();
+         s.layouts.clear();
+         s.bitmaps.clear();
++        s.line_images.clear();
+         load(s);
+         ++s.generation;
+     }
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index c54a11c..ecdf1ef 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -2859,6 +2859,11 @@ struct VulkanRenderer::Impl {
+     // Copies pixels into a texture's image: ahead of the frame's commands
+     // while one is recorded, else at once (waiting for the queue).
+     void upload_texture(VkImage image, std::uint32_t width, std::uint32_t height, const std::uint32_t *pixels);
++    // A new image whose every texel is `fill` except a box of pixels (`region_width` x `region_height` at x, y; none when
++    // either is 0): the HD text lines, mostly empty. The box is all that is staged; the rest is cleared on the GPU.
++    void upload_texture_region(VkImage image, std::uint32_t width, std::uint32_t height, std::uint32_t fill, std::uint32_t x,
++                               std::uint32_t y, std::uint32_t region_width, std::uint32_t region_height,
++                               const std::uint32_t *region_pixels);
+     void destroy_texture(Texture &texture);
+ };
+ 
+@@ -5020,6 +5025,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+     }
+ }
+ 
++void VulkanRenderer::Impl::upload_texture_region(VkImage image, std::uint32_t width, std::uint32_t height,
++                                                 std::uint32_t fill, std::uint32_t x, std::uint32_t y,
++                                                 std::uint32_t region_width, std::uint32_t region_height,
++                                                 const std::uint32_t *region_pixels) {
++    const bool has_region = region_width != 0u && region_height != 0u && region_pixels != nullptr;
++    const VkDeviceSize bytes = has_region ? VkDeviceSize{region_width} * region_height * 4u : 0u;
++    VkBuffer ring_buffer{};
++    VkDeviceSize ring_offset = 0u;
++    if (recording && async_uploads() && frame_uploads != VK_NULL_HANDLE &&
++        (!has_region || stage_upload(region_pixels, bytes, ring_buffer, ring_offset))) {
++        if (!frame_uploads_open) {
++            VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
++            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
++            vkBeginCommandBuffer(frame_uploads, &begin);
++            frame_uploads_open = true;
++        }
++        transition(frame_uploads, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++        VkClearColorValue color{};
++        for (std::uint32_t channel = 0; channel < 4u; ++channel)
++            color.float32[channel] = static_cast<float>((fill >> (8u * channel)) & 0xFFu) / 255.0f;
++        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
++        vkCmdClearColorImage(frame_uploads, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1u, &range);
++        if (has_region) {
++            // The copy writes where the clear did: the barrier keeps the clear first.
++            transition(frame_uploads, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++            VkBufferImageCopy copy{};
++            copy.bufferOffset = ring_offset;
++            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
++            copy.imageOffset = {static_cast<std::int32_t>(x), static_cast<std::int32_t>(y), 0};
++            copy.imageExtent = {region_width, region_height, 1u};
++            vkCmdCopyBufferToImage(frame_uploads, ring_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
++        }
++        transition(frame_uploads, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
++        ++frame_upload_count;
++        return;
++    }
++    // No frame being recorded, or no room in its ring: the whole image through the ordinary upload.
++    std::vector<std::uint32_t> whole(static_cast<std::size_t>(width) * height, fill);
++    if (has_region)
++        for (std::uint32_t row = 0; row < region_height && y + row < height; ++row)
++            std::memcpy(whole.data() + static_cast<std::size_t>(y + row) * width + x,
++                        region_pixels + static_cast<std::size_t>(row) * region_width,
++                        static_cast<std::size_t>(std::min(region_width, width - x)) * 4u);
++    upload_texture(image, width, height, whole.data());
++}
++
+ bool VulkanRenderer::Impl::stage_upload(const void *pixels, VkDeviceSize bytes, VkBuffer &buffer,
+                                         VkDeviceSize &offset) {
+     const auto make = [&](VkDeviceSize size, VkBuffer &made, VkDeviceMemory &memory, void *&mapped) {
+@@ -5385,9 +5436,12 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+     // The game writes a glyph's coverage as a 4-bit palette index (coverage / 16), so the palette is the colour ramp: each
+     // texel takes the colour between the two entries its coverage falls between.
+     const std::vector<std::uint8_t> coverage = fonts::render_line(glyphs, state.width, state.height, scale);
+-    std::vector<std::uint32_t> image(coverage.size());
+-    for (std::size_t i = 0; i < coverage.size(); ++i) {
+-        const std::uint32_t position = coverage[i] * 15u * 256u / 255u;  // 0 .. 15 in 1/256
++    const std::uint32_t full_width = state.width * static_cast<std::uint32_t>(scale);
++    const std::uint32_t full_height = state.height * static_cast<std::uint32_t>(scale);
++    // The colour of each coverage value, worked out once (it was worked out for every texel).
++    std::uint32_t colors[256];
++    for (std::uint32_t value = 0; value < 256u; ++value) {
++        const std::uint32_t position = value * 15u * 256u / 255u;  // 0 .. 15 in 1/256
+         const std::uint32_t low = position >> 8u, fraction = position & 0xFFu;
+         const std::uint32_t a = palette[low], b = palette[std::min(low + 1u, 15u)];
+         std::uint32_t mixed = 0u;
+@@ -5395,11 +5449,41 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+             const std::uint32_t ca = (a >> shift) & 0xFFu, cb = (b >> shift) & 0xFFu;
+             mixed |= ((ca * (256u - fraction) + cb * fraction) >> 8u) << shift;
+         }
+-        image[i] = mixed;
+-    }
+-
+-    Texture fresh = create_texture(state.width * static_cast<std::uint32_t>(scale),
+-                                   state.height * static_cast<std::uint32_t>(scale), image.data());
++        colors[value] = mixed;
++    }
++    // The box that holds ink: a line is mostly empty, and only that box is uploaded (the rest is cleared on the GPU).
++    std::uint32_t ink_left = full_width, ink_top = full_height, ink_right = 0u, ink_bottom = 0u;
++    if (coverage.size() == static_cast<std::size_t>(full_width) * full_height) {
++        for (std::uint32_t row = 0; row < full_height; ++row) {
++            const std::uint8_t *line_pixels = coverage.data() + static_cast<std::size_t>(row) * full_width;
++            std::uint32_t first = 0u;
++            while (first < full_width && line_pixels[first] == 0u) ++first;
++            if (first == full_width) continue;
++            std::uint32_t last = full_width - 1u;
++            while (line_pixels[last] == 0u) --last;
++            ink_left = std::min(ink_left, first);
++            ink_right = std::max(ink_right, last + 1u);
++            ink_top = std::min(ink_top, row);
++            ink_bottom = row + 1u;
++        }
++    }
++    std::vector<std::uint32_t> ink;
++    std::uint32_t ink_width = 0u, ink_height = 0u;
++    if (ink_right > ink_left && ink_bottom > ink_top) {
++        ink_width = ink_right - ink_left;
++        ink_height = ink_bottom - ink_top;
++        ink.resize(static_cast<std::size_t>(ink_width) * ink_height);
++        for (std::uint32_t row = 0; row < ink_height; ++row) {
++            const std::uint8_t *from = coverage.data() + static_cast<std::size_t>(ink_top + row) * full_width + ink_left;
++            std::uint32_t *to = ink.data() + static_cast<std::size_t>(row) * ink_width;
++            for (std::uint32_t column = 0; column < ink_width; ++column) to[column] = colors[from[column]];
++        }
++    }
++
++    Texture fresh = create_texture_image(full_width, full_height);
++    if (fresh.descriptor != VK_NULL_HANDLE)
++        upload_texture_region(fresh.image, full_width, full_height, colors[0], ink_left, ink_top, ink_width, ink_height,
++                              ink.empty() ? nullptr : ink.data());
+     if (fresh.descriptor == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+     if (line.texture.descriptor != VK_NULL_HANDLE) {
+         if (async_uploads()) {
+-- 
+2.54.0.windows.1
+

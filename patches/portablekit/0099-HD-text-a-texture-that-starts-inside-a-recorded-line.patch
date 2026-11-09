@@ -1,0 +1,134 @@
+From 9f980744f343d11d0be3537ee3955c069d0faa6c Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Mon, 9 Nov 2026 19:16:21 +0100
+Subject: [PATCH] HD text: a texture that starts inside a recorded line's
+ buffer (the later piece of a line wider than 512 texels) gets that line's HD
+ image, shifted by where it starts
+
+---
+ host/fonts/game_font.cpp     | 43 ++++++++++++++++++++++++++++++++++--
+ host/fonts/game_font.hpp     |  6 ++++-
+ host/gpu/vulkan_renderer.cpp |  2 +-
+ host/hle/hle_font.cpp        |  2 +-
+ 4 files changed, 48 insertions(+), 5 deletions(-)
+
+diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
+index 3f85756..be5d78c 100644
+--- a/host/fonts/game_font.cpp
++++ b/host/fonts/game_font.cpp
+@@ -648,6 +648,7 @@ namespace {
+ struct LineRecord {
+     std::vector<LineGlyph> glyphs;
+     std::uint64_t version{};
++    std::uint32_t bytes_per_line{};  // a row of the line's buffer, as the game's glyph images give it (0: not known)
+ };
+ std::mutex &lines_mutex() {
+     static std::mutex value;
+@@ -659,9 +660,10 @@ std::unordered_map<std::uint32_t, LineRecord> &lines() {
+ }
+ } // namespace
+ 
+-void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64) {
++void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64, std::uint32_t bytes_per_line) {
+     std::lock_guard lock(lines_mutex());
+     LineRecord &line = lines()[buffer];
++    if (bytes_per_line != 0u) line.bytes_per_line = bytes_per_line;
+     // A glyph that starts left of the last one begins a new line in the same buffer, unless it is the same glyph drawn
+     // again a little to the left (the game's second, bolder pass).
+     if (!line.glyphs.empty()) {
+@@ -697,9 +699,46 @@ std::string describe_lines() {
+     return text;
+ }
+ 
++namespace {
++// The record whose buffer a texture starting at `address` lies in, past the buffer's first byte and within its first row:
++// the later piece of a line too wide for one texture. Null when there is none. The lock is held by the caller.
++const LineRecord *containing_line(std::uint32_t address, std::uint32_t &start) {
++    for (const auto &entry : lines()) {
++        const LineRecord &record = entry.second;
++        if (record.bytes_per_line == 0u || record.glyphs.empty()) continue;
++        if (address > entry.first && address - entry.first < record.bytes_per_line) {
++            start = entry.first;
++            return &record;
++        }
++    }
++    return nullptr;
++}
++} // namespace
++
+ bool line_known(std::uint32_t buffer) {
+     std::lock_guard lock(lines_mutex());
+-    return lines().find(buffer) != lines().end();
++    if (lines().find(buffer) != lines().end()) return true;
++    std::uint32_t start = 0u;
++    return containing_line(buffer, start) != nullptr;
++}
++
++bool line_glyphs_at(std::uint32_t address, std::vector<LineGlyph> &out, std::uint64_t &version) {
++    std::lock_guard lock(lines_mutex());
++    const auto exact = lines().find(address);
++    if (exact != lines().end() && !exact->second.glyphs.empty()) {
++        out = exact->second.glyphs;
++        version = exact->second.version;
++        return true;
++    }
++    std::uint32_t start = 0u;
++    const LineRecord *record = containing_line(address, start);
++    if (record == nullptr) return false;
++    // Four bits a texel: the texture starts 2 texels per byte along the row.
++    const int shift = static_cast<int>((address - start) * 2u) * 64;
++    out = record->glyphs;
++    for (LineGlyph &glyph : out) glyph.x64 -= shift;
++    version = record->version;
++    return true;
+ }
+ 
+ bool line_glyphs(std::uint32_t buffer, std::vector<LineGlyph> &out, std::uint64_t &version) {
+diff --git a/host/fonts/game_font.hpp b/host/fonts/game_font.hpp
+index e4e5819..b1ba973 100644
+--- a/host/fonts/game_font.hpp
++++ b/host/fonts/game_font.hpp
+@@ -96,9 +96,13 @@ struct LineGlyph {
+     int y64{};
+ };
+ // Called for every glyph blitted into the buffer at guest address `buffer`.
+-void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64);
++void note_line_glyph(std::uint32_t buffer, std::uint32_t code, int x64, int y64, std::uint32_t bytes_per_line = 0u);
+ // The glyphs of the line last drawn into `buffer` and a number that changes when they do; false: none known.
+ bool line_glyphs(std::uint32_t buffer, std::vector<LineGlyph> &out, std::uint64_t &version);
++// The glyphs of the line a texture shows: the line recorded at this very address, or, when the texture starts inside a
++// recorded line's buffer (a line wider than the 512 texels of a texture is drawn in pieces, the later ones starting part
++// way along the row), that line with its glyphs moved left by how far along the row the texture starts.
++bool line_glyphs_at(std::uint32_t address, std::vector<LineGlyph> &out, std::uint64_t &version);
+ // Whether glyphs have been written into the buffer at `buffer`.
+ [[nodiscard]] bool line_known(std::uint32_t buffer);
+ // One text row per recorded line (buffer address, glyph count, the span of their x positions): for the text trace.
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 0217168..a1ca26d 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5418,7 +5418,7 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+ 
+     std::vector<fonts::LineGlyph> glyphs;
+     std::uint64_t version = 0;
+-    if (!fonts::line_glyphs(address, glyphs, version)) return VK_NULL_HANDLE;
++    if (!fonts::line_glyphs_at(address, glyphs, version)) return VK_NULL_HANDLE;
+     std::uint32_t palette[16];
+     std::uint64_t palette_hash = 1469598103934665603ull;
+     for (std::uint32_t i = 0; i < 16u; ++i) {
+diff --git a/host/hle/hle_font.cpp b/host/hle/hle_font.cpp
+index 1d5bb85..238dc6e 100644
+--- a/host/hle/hle_font.cpp
++++ b/host/hle/hle_font.cpp
+@@ -214,7 +214,7 @@ void blit_glyph(psprecomp::GuestMemory &memory, std::uint32_t image_address, std
+     const std::uint32_t buffer = memory.load32(image_address + 20u);
+     if (buffer == 0u) return;
+ 
+-    fonts::note_line_glyph(buffer, code, x64, y64);
++    fonts::note_line_glyph(buffer, code, x64, y64, bytes_per_line);
+     const std::int32_t x_whole = floor_div64(x64);
+     const std::int32_t y_whole = floor_div64(y64);
+     const fonts::GlyphBitmap glyph = fonts::render(code, static_cast<float>(x64 - x_whole * 64) / 64.0f,
+-- 
+2.54.0.windows.1
+
