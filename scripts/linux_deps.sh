@@ -61,18 +61,18 @@ d012_install_build() {
   local pm; pm="$(d012_pm)"
   case "$pm" in
     apt-get) d012_install_list "$pm" git build-essential cmake ninja-build make nasm pkg-config python3 curl xz-utils ccache \
-      libvulkan-dev glslang-tools glslang-dev libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev \
+      libvulkan-dev glslang-tools glslang-dev libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev libxtst-dev libxfixes-dev \
       libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev libdbus-1-dev libegl-dev ;;
     dnf)     d012_install_list "$pm" git gcc gcc-c++ cmake ninja-build make nasm pkgconf-pkg-config python3 curl xz ccache \
-      vulkan-loader-devel glslang libX11-devel libXext-devel libXcursor-devel libXi-devel libXrandr-devel libXScrnSaver-devel \
+      vulkan-loader-devel glslang libX11-devel libXext-devel libXcursor-devel libXi-devel libXrandr-devel libXScrnSaver-devel libXtst-devel libXfixes-devel \
       wayland-devel libxkbcommon-devel libdrm-devel mesa-libgbm-devel alsa-lib-devel pulseaudio-libs-devel pipewire-devel systemd-devel dbus-devel mesa-libEGL-devel ;;
     pacman)  d012_install_list "$pm" git base-devel cmake ninja nasm pkgconf python curl xz ccache vulkan-headers vulkan-icd-loader glslang \
-      libx11 libxext libxcursor libxi libxrandr libxss wayland libxkbcommon libdrm mesa alsa-lib libpulse pipewire systemd-libs dbus ;;
+      libx11 libxext libxcursor libxi libxrandr libxss libxtst libxfixes wayland libxkbcommon libdrm mesa alsa-lib libpulse pipewire systemd-libs dbus ;;
     zypper)  d012_install_list "$pm" git gcc gcc-c++ cmake ninja make nasm pkg-config python3 curl xz ccache vulkan-devel glslang-devel \
-      libX11-devel libXext-devel libXcursor-devel libXi-devel libXrandr-devel libXss-devel wayland-devel libxkbcommon-devel libdrm-devel \
+      libX11-devel libXext-devel libXcursor-devel libXi-devel libXrandr-devel libXss-devel libXtst-devel libXfixes-devel wayland-devel libxkbcommon-devel libdrm-devel \
       Mesa-libgbm-devel alsa-devel libpulse-devel pipewire-devel libudev-devel dbus-1-devel Mesa-libEGL-devel ;;
     apk)     d012_install_list "$pm" git build-base cmake samurai make nasm pkgconf python3 curl xz ccache vulkan-headers vulkan-loader-dev glslang \
-      libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxscrnsaver-dev wayland-dev libxkbcommon-dev libdrm-dev mesa-dev alsa-lib-dev pulseaudio-dev pipewire-dev eudev-dev dbus-dev ;;
+      libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxscrnsaver-dev libxtst-dev libxfixes-dev wayland-dev libxkbcommon-dev libdrm-dev mesa-dev alsa-lib-dev pulseaudio-dev pipewire-dev eudev-dev dbus-dev ;;
     *) echo "Unknown package manager. Install a C/C++ toolchain, cmake, ninja, nasm, pkg-config, python3, Vulkan + glslang dev files, X11/Wayland/ALSA/Pulse/udev dev files." ;;
   esac
   d012_install_runtime

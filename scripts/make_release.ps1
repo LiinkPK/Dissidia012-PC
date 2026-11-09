@@ -25,10 +25,13 @@ $stage = Join-Path $root "$Out\$name"
 $playerFolders = "data\mods", "data\ms0\PSP\GAME", "data\ms0\PSP\SAVEDATA", "game"
 # Made on this machine while testing: the game writes them again on the player's first run.
 $localFiles = "data\settings.ini", "data\pipeline_cache.bin", "data\pipeline_keys.bin"
-# The logs are the player's own (running the game from the build folder makes data\logs): they never ship.
-$localFolders = "data\logs"
+# The logs and the screenshots are the player's own (running the game from the build folder makes data\logs, F9 makes
+# data\screenshots): they never ship.
+$localFolders = "data\logs", "data\screenshots"
 # Test leftovers and old copies that must not ship.
-$junk = "*.stale*", "*.old", "*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak"
+$junk = "*.stale*", "*.old", "*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak",
+    # what the test switches write beside the exe: traces, crash dumps and trigger files
+    "roster_*.txt", "roster_trigger", "text_trace.txt", "text_trigger", "live.txt", "crash_report.txt", "*.dmp"
 # Linux and macOS files never go in the Windows zip: the shell scripts, the Linux binary and libraries, the .dylib files, and the Carlito font
 # (the Linux package takes release\linux\ and scriptsuild_linux.sh; this script only ever copies release\*.* files).
 $linuxOnly = "*.sh", "*.so", "*.so.*", "*.dylib", "d012_native", "Carlito*", "linux_deps*", "run.sh"
@@ -73,8 +76,8 @@ if (Test-Path $cheatsSrc) {
     New-Item -ItemType Directory -Force $cheatsDst | Out-Null
     Copy-Item (Join-Path $cheatsSrc "*") $cheatsDst -Recurse -Force
 }
-# data\logs is never packed, whichever way it got in.
-Remove-Item -Recurse -Force (Join-Path $stage "data\logs") -ErrorAction SilentlyContinue
+# data\logs and data\screenshots are never packed, whichever way they got in.
+foreach ($folder in $localFolders) { Remove-Item -Recurse -Force (Join-Path $stage $folder) -ErrorAction SilentlyContinue }
 # Sweep: whatever Linux file got in by another way is removed before zipping.
 Get-ChildItem $stage -Recurse -File -Include $linuxOnly | Remove-Item -Force
 Write-Host "Done!"

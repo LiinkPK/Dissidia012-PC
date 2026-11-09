@@ -70,6 +70,10 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: macos
+      - name: Disk space
+        run: |
+          rm -rf "$HOME/Library/Android" "$HOME/.dotnet" 2>/dev/null || true
+          df -h / | tail -1
       - name: Tools
         run: brew install cmake ninja python || true
       - name: SDL3 source (the script reads SDL_SRC)
@@ -85,7 +89,17 @@ jobs:
           app="$(ls -d *.app | head -1)"
           bin="$app/Contents/MacOS/$(ls "$app/Contents/MacOS" | head -1)"
           sudo "./$bin" --root "$HOME/VulkanSDK/ci" --accept-licenses --default-answer --confirm-command install
-          ls "$HOME/VulkanSDK/ci"
+          # Wherever the installer put it: the folder that holds lib/libMoltenVK.dylib is the SDK the script is told about.
+          moltenvk="$(find "$HOME/VulkanSDK/ci" -name libMoltenVK.dylib 2>/dev/null | head -1)"
+          if [ -z "$moltenvk" ]; then
+            echo "libMoltenVK.dylib not found after the install; what is there:"
+            find "$HOME/VulkanSDK/ci" -maxdepth 3 | head -40
+            exit 1
+          fi
+          sdk="$(dirname "$(dirname "$moltenvk")")"
+          echo "Vulkan SDK: $sdk"
+          echo "VULKAN_SDK=$sdk" >> "$GITHUB_ENV"
+          ls "$sdk/lib" | head -20
       - name: Data pack (textures and cheats)
         run: |
           df -h . | tail -1
