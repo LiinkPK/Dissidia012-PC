@@ -42,13 +42,16 @@ jobs:
         with:
           key: linux
       - name: Data pack (textures and cheats)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download data-pack --repo "$GITHUB_REPOSITORY" --pattern data.zip --dir "$RUNNER_TEMP"
+          df -h . | tail -1
+          curl -fL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/data.zip" "https://github.com/$GITHUB_REPOSITORY/releases/download/data-pack/data.zip"
+          ls -la "$RUNNER_TEMP/data.zip"
           mkdir -p release/data
-          unzip -q "$RUNNER_TEMP/data.zip" -d release/data
+          # unzip exits 1 for a mere warning; anything above is a real failure
+          unzip -q -o "$RUNNER_TEMP/data.zip" -d release/data || [ $? -eq 1 ]
+          rm -f "$RUNNER_TEMP/data.zip"
           ls release/data
+          test -d release/data/textures && test -d release/data/ms0/PSP/CHEATS
       - name: Build and package
         run: bash scripts/build_linux.sh
       - uses: actions/upload-artifact@v4
@@ -60,7 +63,7 @@ jobs:
 
   macos:
     needs: check
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -84,13 +87,16 @@ jobs:
           sudo "./$bin" --root "$HOME/VulkanSDK/ci" --accept-licenses --default-answer --confirm-command install
           ls "$HOME/VulkanSDK/ci"
       - name: Data pack (textures and cheats)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download data-pack --repo "$GITHUB_REPOSITORY" --pattern data.zip --dir "$RUNNER_TEMP"
+          df -h . | tail -1
+          curl -fL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/data.zip" "https://github.com/$GITHUB_REPOSITORY/releases/download/data-pack/data.zip"
+          ls -la "$RUNNER_TEMP/data.zip"
           mkdir -p release/data
-          unzip -q "$RUNNER_TEMP/data.zip" -d release/data
+          # unzip exits 1 for a mere warning; anything above is a real failure
+          unzip -q -o "$RUNNER_TEMP/data.zip" -d release/data || [ $? -eq 1 ]
+          rm -f "$RUNNER_TEMP/data.zip"
           ls release/data
+          test -d release/data/textures && test -d release/data/ms0/PSP/CHEATS
       - name: "Build and package (universal, Intel and Apple Silicon)"
         run: UNIVERSAL=1 bash scripts/build_macos.sh
       - uses: actions/upload-artifact@v4
