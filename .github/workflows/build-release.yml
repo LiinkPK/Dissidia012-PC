@@ -52,6 +52,12 @@ jobs:
           rm -f "$RUNNER_TEMP/data.zip"
           ls release/data
           test -d release/data/textures && test -d release/data/ms0/PSP/CHEATS
+      - name: Newer Vulkan headers (Ubuntu 22.04's are too old; this keeps its older C library, so the build runs on more distros)
+        run: |
+          git clone --depth 1 --branch v1.4.363 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
+          echo "C_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+          grep -m1 'VK_HEADER_VERSION ' "$RUNNER_TEMP/vulkan-headers/include/vulkan/vulkan_core.h"
       - name: Build and package
         run: bash scripts/build_linux.sh
       - uses: actions/upload-artifact@v4
