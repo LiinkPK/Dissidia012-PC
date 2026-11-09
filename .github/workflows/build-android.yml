@@ -31,7 +31,9 @@ jobs:
           echo "C_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
       - name: Tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build zip
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build zip glslang-tools python3
+          command -v glslangValidator && python3 --version
       - name: Where the Android SDK and NDK are
         run: |
           echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
