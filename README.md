@@ -19,7 +19,7 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 # System Support
 
 - Windows 10 or 11, 64-bit
-- macOS `(both Apple Silicon and Intel chips)` _(to be uploaed)_
+- macOS `(both Apple Silicon and Intel chips)`
 - Linux distros `(tested on Ubuntu, Mint, Kali and SteamOS)`
 
 >[!IMPORTANT]
