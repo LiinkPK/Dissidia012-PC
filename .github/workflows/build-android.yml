@@ -1,0 +1,62 @@
+# Builds the Android APK (arm64-v8a, Android 10 and up) on GitHub's Linux machines with scripts/build_android.sh.
+# Run it from the Actions tab: "Build Android" -> "Run workflow". It is separate from "Build release" on purpose, so a
+# problem with Android never stops a Linux, macOS or Windows release. The APK is an artifact of the run (Artifacts, at the
+# bottom of the run's page); attach it to a release by hand once it works on a phone.
+#
+# Signing: with the secrets ANDROID_KEYSTORE_BASE64 (the keystore file, base64), ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS
+# the APK is signed with your key. Without them a throwaway key is used: fine for testing, but updates signed by another key
+# do not install over it.
+name: Build Android
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (not the Android SDK and NDK, which this job uses)
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android
+      - name: Newer Vulkan headers (the renderer uses extensions that older headers lack)
+        run: |
+          git clone --depth 1 --branch v1.4.363 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
+          echo "C_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build zip
+      - name: Where the Android SDK and NDK are
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK=${ANDROID_NDK_LATEST_HOME:-$(ls -d /usr/local/lib/android/sdk/ndk/* | sort -V | tail -1)}" >> "$GITHUB_ENV"
+          ls "${ANDROID_NDK_LATEST_HOME:-/usr/local/lib/android/sdk/ndk}" | head -5
+      - name: Signing key (optional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "Signing with the release key."
+          else
+            echo "No signing secrets: the APK gets a throwaway key (testing only)."
+          fi
+      - name: Build and package
+        run: bash scripts/build_android.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: dist/d012_native-android.apk
+          if-no-files-found: error
+          compression-level: 0
