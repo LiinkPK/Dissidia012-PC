@@ -120,8 +120,57 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  android:
+    needs: check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space (not the Android SDK and NDK, which this job uses)
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL || true
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android
+      - name: Newer Vulkan headers
+        run: |
+          git clone --depth 1 --branch v1.4.363 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
+          echo "C_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
+      - name: Tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build zip glslang-tools python3
+          command -v glslangValidator && python3 --version
+      - name: Where the Android SDK and NDK are
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK=${ANDROID_NDK_LATEST_HOME:-$(ls -d /usr/local/lib/android/sdk/ndk/* | sort -V | tail -1)}" >> "$GITHUB_ENV"
+      - name: Signing key (optional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          else
+            echo "No signing secrets: throwaway key (testing only)."
+          fi
+      - name: Build and package
+        run: bash scripts/build_android.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/d012_native-android.apk
+          if-no-files-found: error
+          compression-level: 0
+
   release:
-    needs: [linux, macos]
+    # Android is optional: if it fails, Linux and macOS are still attached.
+    needs: [linux, macos, android]
+    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.macos.result == 'success' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
