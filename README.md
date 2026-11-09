@@ -8,6 +8,7 @@
 
 **_Early BETA_**
 
+[![Build release](https://github.com/LiinkPK/Dissidia012-PC/actions/workflows/build-release.yml/badge.svg)](https://github.com/LiinkPK/Dissidia012-PC/actions/workflows/build-release.yml)
 </div>
 
 # PSPRecomp — Dissidia 012 PC Port
