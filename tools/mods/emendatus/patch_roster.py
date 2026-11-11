@@ -21,6 +21,10 @@ def replace_once(text, old, new, what):
     return text.replace(old, new)
 
 
+def with_cstdio(text):
+    return text if "#include <cstdio>" in text else text.replace("#include <atomic>", "#include <atomic>\n#include <cstdio>", 1)
+
+
 def apply(corpus):
     corpus = Path(corpus)
     unit40 = next(corpus.glob("generated_unit_0040.cpp"))
@@ -34,14 +38,30 @@ def apply(corpus):
         "    if (!g_d012_grid_party && ctx.gpr[16] == 33u) {  // the mod's new character: the empty 17th cell of the first row\n"
         "        ctx.gpr[5] = 16u;\n"
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
+        "        { static bool traced = false; if (!traced) { traced = true; std::fprintf(stderr, \"[roster-mod] position 33 -> slot 16\\n\"); } }\n"
         "    }\n"
         "    ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);", "slot of position 33 in unit 0040")
-    unit40.write_text(text, encoding="utf-8", newline="\n")
+    unit40.write_text(with_cstdio(text), encoding="utf-8", newline="\n")
 
     text = unit41.read_text(encoding="utf-8")
     text = replace_once(text, "constexpr std::uint32_t kTable = 0x08A864D0u;", "constexpr std::uint32_t kTable = 0x0BFEB200u;  // the mod's table (stock 0x08A864D0)", "table address")
     text = replace_once(text, "static std::int16_t original[33][6];", "static std::int16_t original[34][6];", "original copy size")
     text = replace_once(text, "for (int r = 0; r < 33; ++r)\n            for (int c = 0; c < 6; ++c)\n                original[r][c]",
                         "for (int r = 0; r < 34; ++r)\n            for (int c = 0; c < 6; ++c)\n                original[r][c]", "copy loop")
-    unit41.write_text(text, encoding="utf-8", newline="\n")
+    # a trace of what the grid builder sees (run the program with its output redirected to a file)
+    text = replace_once(
+        text, "            break;\n        }\n    }\n}\nvoid ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(",
+        "            break;\n        }\n    }\n"
+        "    std::fprintf(stderr, \"[roster-mod] table 0x%08X ids:\", kTable);\n"
+        "    for (int r = 0; r < 34; ++r) std::fprintf(stderr, \" %02X\", static_cast<unsigned>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + 8)) & 0xFFFFu));\n"
+        "    std::fprintf(stderr, \" (screen %08X mode %u)\\n\", screen, mode);\n"
+        "}\n"
+        "void ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(", "roster trace")
+    # the port's character description on hover reads the table by slot: the mod's table, 34 rows, ids up to 0x21
+    text = replace_once(text, "d_slot < 33u ? static_cast<std::int16_t>(aot_mem.aot_load16(0x08A864D0u + d_slot * 12u + 8u))",
+                        "d_slot < 34u ? static_cast<std::int16_t>(aot_mem.aot_load16(0x0BFEB200u + d_slot * 12u + 8u))", "description lookup")
+    text = replace_once(text, "aot_mem.aot_load16(0x08A864D0u + d_r * 12u + 8u)", "aot_mem.aot_load16(0x0BFEB200u + d_r * 12u + 8u)", "party description lookup")
+    text = replace_once(text, "d_id >= 1 && d_id <= 0x20;", "d_id >= 1 && d_id <= 0x21;", "description id range")
+    text = replace_once(text, "d_r < 32u && d_member >= 1", "d_r < 34u && d_member >= 1", "party description rows")
+    unit41.write_text(with_cstdio(text), encoding="utf-8", newline="\n")
     print("patch_roster: the mod's roster row is placed in", corpus.name)

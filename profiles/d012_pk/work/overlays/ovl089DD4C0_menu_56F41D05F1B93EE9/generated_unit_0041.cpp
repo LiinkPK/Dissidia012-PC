@@ -175,6 +175,9 @@ static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std:
             break;
         }
     }
+    std::fprintf(stderr, "[roster-mod] table 0x%08X ids:", kTable);
+    for (int r = 0; r < 34; ++r) std::fprintf(stderr, " %02X", static_cast<unsigned>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + 8)) & 0xFFFFu));
+    std::fprintf(stderr, " (screen %08X mode %u)\n", screen, mode);
 }
 void ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(CorpusRuntime &rt, AllegrexContext &ctx, std::uint16_t direct_entry_id, AotFastView &aot_mem) {
     std::uint32_t jump_target = 0u;
@@ -15844,7 +15847,7 @@ L_08A84464:
       if (d_w != 0u) {
         static std::uint32_t d_last_slot = 0xFFFFFFFFu;
         std::uint32_t d_slot = aot_mem.aot_load32(d_w + 1532u);
-        int d_id = d_slot < 33u ? static_cast<std::int16_t>(aot_mem.aot_load16(0x08A864D0u + d_slot * 12u + 8u)) : -1;
+        int d_id = d_slot < 34u ? static_cast<std::int16_t>(aot_mem.aot_load16(0x0BFEB200u + d_slot * 12u + 8u)) : -1;
         // Party screen, cursor on the party slots (W+1508 == 0x6E): the party list is at W-0x2F4 (8 bytes per slot: the
         // character id, 0 or -1 when empty) and the slot cursor at W-0x2C8 (the words at
         // W-0x2F4+40 == 8 and +64 == -1 are constant there and tell this layout from other screens). The description is that
@@ -15855,11 +15858,11 @@ L_08A84464:
           const int d_member = d_cursor < 5u ? static_cast<std::int32_t>(aot_mem.aot_load32(d_w - 0x2F4u + 8u * d_cursor)) : -1;
           d_id = -1;
           d_slot = 0xFFFFFFFFu;
-          for (std::uint32_t d_r = 0; d_r < 32u && d_member >= 1; ++d_r)
-            if (static_cast<std::int16_t>(aot_mem.aot_load16(0x08A864D0u + d_r * 12u + 8u)) == d_member) { d_slot = d_r; d_id = d_member; break; }
+          for (std::uint32_t d_r = 0; d_r < 34u && d_member >= 1; ++d_r)
+            if (static_cast<std::int16_t>(aot_mem.aot_load16(0x0BFEB200u + d_r * 12u + 8u)) == d_member) { d_slot = d_r; d_id = d_member; break; }
           if (d_id >= 1) aot_mem.aot_store32(d_w + 1532u, d_slot);
         }
-        const bool d_character = d_id >= 1 && d_id <= 0x20;
+        const bool d_character = d_id >= 1 && d_id <= 0x21;
         std::uint32_t d_new = aot_mem.aot_load32(d_w + 1520u);
         d_new = d_character ? (d_new | 0x10000u) : (d_new & ~0x10000u);
         aot_mem.aot_store32(d_w + 1520u, d_new);

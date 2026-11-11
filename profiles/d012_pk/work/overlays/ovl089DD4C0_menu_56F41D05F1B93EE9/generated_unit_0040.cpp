@@ -1,6 +1,7 @@
 #include "psprecomp/corpus_abi.hpp"
 #include "ovl089DD4C0_menu_56F41D05F1B93EE9_units.hpp"
 #include <atomic>
+#include <cstdio>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -13698,6 +13699,7 @@ L_08A7FBB8:
     if (!g_d012_grid_party && ctx.gpr[16] == 33u) {  // the mod's new character: the empty 17th cell of the first row
         ctx.gpr[5] = 16u;
         aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
+        { static bool traced = false; if (!traced) { traced = true; std::fprintf(stderr, "[roster-mod] position 33 -> slot 16\n"); } }
     }
     ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);
     goto L_08A7FBBC;
