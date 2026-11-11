@@ -13669,7 +13669,7 @@ L_08A7FB98:
     ctx.gpr[4] = (0u + static_cast<std::uint32_t>(-2));
     goto L_08A7FB9C;
 L_08A7FB9C:
-    ctx.gpr[5] = (ctx.gpr[5] + (g_d012_grid_party ? 2u : 0u));
+    ctx.gpr[5] = (ctx.gpr[5] + (g_d012_grid_party ? 2u : 1u));
     goto L_08A7FBA0;
 L_08A7FBA0:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
@@ -13695,6 +13695,10 @@ L_08A7FBB4:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
     goto L_08A7FBB8;
 L_08A7FBB8:
+    if (!g_d012_grid_party && ctx.gpr[16] == 33u) {  // the mod's new character: the empty 17th cell of the first row
+        ctx.gpr[5] = 16u;
+        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
+    }
     ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);
     goto L_08A7FBBC;
 L_08A7FBBC:
