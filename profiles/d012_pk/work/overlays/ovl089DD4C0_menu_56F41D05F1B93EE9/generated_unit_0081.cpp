@@ -14113,25 +14113,23 @@ L_08B24324:
     (void)(ctx.hi);
     goto L_08B24328;
 L_08B24328:
-    // vflush: architectural no-op that retains VFPU prefixes
+    (void)(0u + 0u);
     goto L_08B2432C;
 L_08B2432C:
-    // nop
+    // vflush: architectural no-op that retains VFPU prefixes
     goto L_08B24330;
 L_08B24330:
-    // nop
+    (void)(static_cast<std::uint32_t>(std::countl_one(ctx.gpr[2])));
     goto L_08B24334;
 L_08B24334:
-    // nop
+    // vflush: architectural no-op that retains VFPU prefixes
     goto L_08B24338;
 L_08B24338:
-    // nop
-    goto L_08B2433C;
+    rt.unsupported(0x08B24338u, 0x0054FFFFu, "special? not lowered yet"); return;
 L_08B2433C:
-    // nop
-    goto L_08B24340;
+    rt.unsupported(0x08B2433Cu, 0x0017FFFFu, "special? not lowered yet"); return;
 L_08B24340:
-    // nop
+    (void)(ctx.gpr[21] << (ctx.gpr[2] & 31u));
     goto L_08B24344;
 L_08B24344:
     // nop

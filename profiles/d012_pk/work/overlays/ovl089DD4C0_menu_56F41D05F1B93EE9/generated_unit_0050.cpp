@@ -7336,7 +7336,7 @@ L_08AA6158:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(24), ctx.gpr[22]);
     goto L_08AA615C;
 L_08AA615C:
-    ctx.gpr[22] = (2219u << 16u);
+    ctx.gpr[22] = (3071u << 16u);
     goto L_08AA6160;
 L_08AA6160:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(4), ctx.gpr[17]);
@@ -7369,7 +7369,7 @@ L_08AA6184:
     ctx.gpr[17] = (ctx.gpr[5] | 0u);
     goto L_08AA6188;
 L_08AA6188:
-    ctx.gpr[22] = (ctx.gpr[22] + static_cast<std::uint32_t>(-30620));
+    ctx.gpr[22] = (ctx.gpr[22] + static_cast<std::uint32_t>(-18944));
     goto L_08AA618C;
 L_08AA618C:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(8), ctx.gpr[18]);
@@ -7614,8 +7614,11 @@ L_08AA629C:
     ctx.gpr[4] = (aot_mem.aot_load8(ctx.gpr[4] + static_cast<std::uint32_t>(10)));
     goto L_08AA62A0;
 L_08AA62A0:
-    ctx.gpr[6] = (ctx.gpr[6] + ctx.gpr[21]);
-    goto L_08AA62A4;
+    ctx.gpr[31] = (0x08AA62A8u);
+    ctx.gpr[7] = (ctx.gpr[6] & 65535u);
+    ctx.pc = 0x0BFE9EA8u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AA62A8u) goto L_08AA62A8;
+    return;
 L_08AA62A4:
     ctx.gpr[7] = (ctx.gpr[6] & 65535u);
     goto L_08AA62A8;
@@ -7686,8 +7689,11 @@ L_08AA62F4:
     ctx.gpr[4] = (aot_mem.aot_load8(ctx.gpr[4] + static_cast<std::uint32_t>(10)));
     goto L_08AA62F8;
 L_08AA62F8:
-    ctx.gpr[6] = (ctx.gpr[6] + ctx.gpr[21]);
-    goto L_08AA62FC;
+    ctx.gpr[31] = (0x08AA6300u);
+    ctx.gpr[7] = (ctx.gpr[6] & 65535u);
+    ctx.pc = 0x0BFE9EC8u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AA6300u) goto L_08AA6300;
+    return;
 L_08AA62FC:
     ctx.gpr[7] = (ctx.gpr[6] & 65535u);
     goto L_08AA6300;

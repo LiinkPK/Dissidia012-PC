@@ -15355,8 +15355,11 @@ L_08AAC360:
     ctx.gpr[5] = (aot_mem.aot_load32(ctx.gpr[5] + static_cast<std::uint32_t>(4)));
     goto L_08AAC364;
 L_08AAC364:
-    ctx.gpr[6] = (ctx.gpr[6] + ctx.gpr[17]);
-    goto L_08AAC368;
+    ctx.gpr[31] = (0x08AAC36Cu);
+    ctx.gpr[4] = (aot_mem.aot_load8(ctx.gpr[4] + static_cast<std::uint32_t>(10)));
+    ctx.pc = 0x0BFE9DF4u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AAC36Cu) goto L_08AAC36C;
+    return;
 L_08AAC368:
     ctx.gpr[4] = (aot_mem.aot_load8(ctx.gpr[4] + static_cast<std::uint32_t>(10)));
     goto L_08AAC36C;
@@ -15637,8 +15640,11 @@ L_08AAC4A4:
     ctx.gpr[6] = (ctx.gpr[7] & 255u);
     goto L_08AAC4A8;
 L_08AAC4A8:
-    ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(-1));
-    goto L_08AAC4AC;
+    ctx.gpr[31] = (0x08AAC4B0u);
+    ctx.gpr[7] = (2205u << 16u);
+    ctx.pc = 0x0BFE9E10u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AAC4B0u) goto L_08AAC4B0;
+    return;
 L_08AAC4AC:
     ctx.gpr[7] = (2205u << 16u);
     goto L_08AAC4B0;
@@ -17633,8 +17639,11 @@ L_08AACCD8:
     ctx.gpr[5] = (aot_mem.aot_load32(ctx.gpr[5] + static_cast<std::uint32_t>(44)));
     goto L_08AACCDC;
 L_08AACCDC:
-    ctx.gpr[6] = (ctx.gpr[6] + ctx.gpr[16]);
-    goto L_08AACCE0;
+    ctx.gpr[31] = (0x08AACCE4u);
+    ctx.gpr[4] = (aot_mem.aot_load8(ctx.gpr[4] + static_cast<std::uint32_t>(10)));
+    ctx.pc = 0x0BFE9E30u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AACCE4u) goto L_08AACCE4;
+    return;
 L_08AACCE0:
     ctx.gpr[4] = (aot_mem.aot_load8(ctx.gpr[4] + static_cast<std::uint32_t>(10)));
     goto L_08AACCE4;
@@ -18044,8 +18053,11 @@ L_08AACE88:
     ctx.gpr[6] = (aot_mem.aot_load8(ctx.gpr[4] + static_cast<std::uint32_t>(10)));
     goto L_08AACE8C;
 L_08AACE8C:
-    ctx.gpr[4] = (ctx.gpr[7] + ctx.gpr[5]);
-    goto L_08AACE90;
+    ctx.gpr[31] = (0x08AACE94u);
+    ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(-1));
+    ctx.pc = 0x0BFE9E4Cu;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AACE94u) goto L_08AACE94;
+    return;
 L_08AACE90:
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(-1));
     goto L_08AACE94;

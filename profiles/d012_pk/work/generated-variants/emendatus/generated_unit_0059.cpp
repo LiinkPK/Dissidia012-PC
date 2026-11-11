@@ -17792,8 +17792,11 @@ L_088F390C:
     ctx.gpr[6] = (0u | 0u);
     goto L_088F3910;
 L_088F3910:
-    ctx.gpr[7] = (aot_mem.aot_load32(ctx.gpr[5] + static_cast<std::uint32_t>(24)));
-    goto L_088F3914;
+    ctx.gpr[31] = (0x088F3918u);
+    ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(-1));
+    ctx.pc = 0x0BFEDCA4u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x088F3918u) goto L_088F3918;
+    return;
 L_088F3914:
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(-1));
     goto L_088F3918;

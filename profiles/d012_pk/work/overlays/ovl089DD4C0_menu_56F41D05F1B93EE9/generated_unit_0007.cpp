@@ -9850,8 +9850,11 @@ L_089FAD04:
     ctx.gpr[16] = (0u | 1u);
     goto L_089FAD08;
 L_089FAD08:
-    ctx.gpr[8] = (aot_mem.aot_load32(ctx.gpr[4] + static_cast<std::uint32_t>(24)));
-    goto L_089FAD0C;
+    ctx.gpr[31] = (0x089FAD10u);
+    ctx.gpr[6] = (ctx.gpr[6] + static_cast<std::uint32_t>(-1));
+    ctx.pc = 0x0BFEBEB8u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x089FAD10u) goto L_089FAD10;
+    return;
 L_089FAD0C:
     ctx.gpr[6] = (ctx.gpr[6] + static_cast<std::uint32_t>(-1));
     goto L_089FAD10;

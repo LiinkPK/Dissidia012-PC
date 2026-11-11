@@ -13,7 +13,8 @@
 param(
     [string]$Build = "out\d012_vk\bin\Release",
     [string]$Out = "dist",
-    [string]$Name = "d012_native-windows"
+    [string]$Name = "d012_native-windows",
+    [switch]$WithEmendatus
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -79,7 +80,7 @@ if (Test-Path $cheatsSrc) {
 # The Emendatus mod's new data (338 MB, made by tools/mods/emendatus/make_mod_data.py --tail-out) goes in mods\ next to the
 # exe: the updater unpacks everything outside data\ and game\, so it travels with every release.
 $modsSrc = Join-Path $root "release\mods"
-if (Test-Path $modsSrc) {
+if ($WithEmendatus -and (Test-Path $modsSrc)) {
     $modsDst = Join-Path $stage "mods"
     New-Item -ItemType Directory -Force $modsDst | Out-Null
     Copy-Item (Join-Path $modsSrc "*") $modsDst -Recurse -Force

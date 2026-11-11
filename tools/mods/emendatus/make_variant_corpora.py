@@ -15,6 +15,7 @@ What it writes, all under --work (default profiles/d012_pk/work, the folder the 
 It stops before touching overlays/ when a merge has a conflict. psp_recomp takes about a minute for all of it.
 """
 import argparse
+import hashlib
 import os
 import re
 import shutil
@@ -28,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[3]
 TOOLS = ROOT / "third_party" / "dissidia012-pc" / "tools" / "port"
 sys.path.insert(0, str(TOOLS))
 import overlay_meta  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import patch_roster  # noqa: E402
 
 SECTOR = 2048
 MAIN_BASE = "0x08804000"
@@ -186,6 +189,9 @@ def main():
     parser.add_argument("--stock-iso", required=True, type=Path)
     parser.add_argument("--recompiler", type=Path, default=ROOT / "out" / "d012_vk" / "portablekit" / "Release" / "psp_recomp.exe")
     parser.add_argument("--work", type=Path, default=ROOT / "profiles" / "d012_pk" / "work")
+    parser.add_argument("--executable-elf", type=Path, help="the executable as the game runs it (EBOOT.ELF of the patched disc): its hash is the one the "
+                        "corpus is checked against, when --patched-dir holds images with the plugin's runtime patches baked in (apply_runtime_patches.py)")
+    parser.add_argument("--battle-code-size", type=int, help="hash this many bytes of the battle overlay after its header (the older Emendatus mod\'s battle overlay shares its first 4 KB; 20416 tells them apart)")
     parser.add_argument("--main-only", action="store_true", help="only make the executable's corpus again (the overlay corpora stay as they are)")
     options = parser.parse_args()
     if not options.recompiler.is_file():
@@ -203,6 +209,15 @@ def main():
         # told that range is code, as it is for the menu overlay's added code.
         run([options.recompiler, elves["EBOOT.ELF"], "--auto", main_out, MAIN_BASE] + overlay_meta.dispatch_calls("main")
             + ["--code", MAIN_CODE])
+        if options.executable_elf:
+            registry = main_out / "generated_registry.cpp"
+            text = registry.read_text(encoding="utf-8")
+            own = hashlib.sha256(elves["EBOOT.ELF"].read_bytes()).hexdigest()
+            real = hashlib.sha256(options.executable_elf.read_bytes()).hexdigest()
+            if own not in text:
+                raise SystemExit("the generated registry does not name the executable it was made from")
+            registry.write_text(text.replace(own, real), encoding="utf-8", newline="\n")
+            print(f"the corpus is checked against {real[:16]}... (the executable as it runs)")
         if options.main_only:
             variant = options.work / "generated-variants" / "emendatus"
             if variant.exists():
@@ -217,10 +232,7 @@ def main():
         stock_battle = staging / "stock" / "OVL_BATTLE_APP.ELF"
         stock_battle.parent.mkdir(exist_ok=True)
         stock_battle.write_bytes(iso_file(options.stock_iso, "/PSP_GAME/USRDIR/DATA/OVL_BATTLE_APP.ELF"))
-        older_battle = staging / "older_mod" / "OVL_BATTLE_APP.ELF"
-        older_battle.parent.mkdir()
-        older_battle.write_bytes(old_mod_battle(stock_battle.read_bytes(), ROOT / "profiles" / "d012_vk" / "d012_emendatus_data.inc"))
-        battle_size = distinguishing_code_size(battle_elf, [stock_battle, older_battle])
+        battle_size = (options.battle_code_size or distinguishing_code_size(battle_elf, [stock_battle]))
         print(f"battle overlay: code size {battle_size}")
         run([sys.executable, TOOLS / "overlay_meta.py", "--recompile", "--recompiler", options.recompiler, "--out", new,
              "--code-size", battle_size, battle_elf])
@@ -254,6 +266,7 @@ def main():
                   f"The merged files are in {staging}; fix the <<<<<<< markers there and copy them over by hand.")
             keep = True
             return 1
+        patch_roster.apply(corpus_dir(new, "menu"))  # the port's roster grid for the mod's 34-row table
         # 4. install (nothing is written until it is clear that no existing overlay corpus would be overwritten)
         for source in new.iterdir():
             if (options.work / "overlays" / source.name).exists():

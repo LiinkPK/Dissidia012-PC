@@ -18784,7 +18784,9 @@ L_08AF9000:
 L_08AF9004:
     ctx.gpr[31] = (0x08AF900Cu);
     ctx.gpr[5] = (ctx.gpr[16] | 0u);
-    goto L_08AF8E14;
+    ctx.pc = 0x0BFEA560u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AF900Cu) goto L_08AF900C;
+    return;
 L_08AF9008:
     ctx.gpr[5] = (ctx.gpr[16] | 0u);
     goto L_08AF900C;

@@ -305,6 +305,7 @@ void mod_rows() {
     static bool target = false;           // what the open question would set
     static bool asking = false;
     const bool have_assets = assets_present();
+    if (!have_assets && !read_setting()) return;  // the mod's data is not here: no row
     if (const char *text = std::getenv("D012_EMENDATUS"); text != nullptr && *text != 0) {
         options.disabled = true;
         options.note = "Set by D012_EMENDATUS";

@@ -155,20 +155,18 @@ static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std:
     g_d012_grid_party = 0u;
     g_d012_grid_cols = g_d012_grid_party ? 10u : 17u;
     g_d012_grid_rows = g_d012_grid_party ? 4u : 2u;
-    constexpr std::uint32_t kTable = 0x08A864D0u;
-    static std::int16_t original[33][6];
+    constexpr std::uint32_t kTable = 0x0BFEB200u;  // the mod's table (stock 0x08A864D0)
+    static std::int16_t original[34][6];
     static bool have = false;
     if (!have) {
-        for (int r = 0; r < 33; ++r)
+        for (int r = 0; r < 34; ++r)
             for (int c = 0; c < 6; ++c)
                 original[r][c] = static_cast<std::int16_t>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + c * 2)));
         have = true;
     }
-    static const std::int16_t order[32] = {
-        0x01, 0x03, 0x05, 0x07, 0x18, 0x09, 0x0B, 0x0D, 0x1A, 0x0F, 0x1B, 0x11, 0x13, 0x1C, 0x1E, 0x1F,
-        0x02, 0x04, 0x06, 0x08, 0x0A, 0x0C, 0x0E, 0x10, 0x12, 0x14, 0x16, 0x19, 0x20, 0x15, 0x1D, 0x17};
-    for (int r = 0; r < 32; ++r) {
-        for (int src = 0; src < 32; ++src) {
+    static const std::int16_t order[34] = {0x01, 0x03, 0x05, 0x07, 0x18, 0x09, 0x0B, 0x0D, 0x1A, 0x0F, 0x1B, 0x11, 0x13, 0x1C, 0x1E, 0x1F, 0x21, 0x02, 0x04, 0x06, 0x08, 0x0A, 0x0C, 0x0E, 0x10, 0x12, 0x14, 0x16, 0x19, 0x20, 0x15, 0x1D, 0x17, 0x00};
+    for (int r = 0; r < 34; ++r) {
+        for (int src = 0; src < 34; ++src) {
             if (original[src][4] != order[r]) continue;
             for (int c = 0; c < 6; ++c)
                 m.aot_store16(kTable + static_cast<std::uint32_t>(r * 12 + c * 2), static_cast<std::uint16_t>(original[src][c]));
@@ -19017,7 +19015,7 @@ L_08A850FC:
     ctx.gpr[20] = (ctx.gpr[20] + static_cast<std::uint32_t>(1));
     goto L_08A85100;
 L_08A85100:
-    ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[20]) < 32 ? 1u : 0u);
+    ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[20]) < 34 ? 1u : 0u);
     goto L_08A85104;
 L_08A85104:
     { const bool branch_taken = ctx.gpr[4] != 0u;

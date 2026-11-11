@@ -6541,17 +6541,17 @@ L_08A85EC8:
     ctx.gpr[2] = (ctx.gpr[2] + static_cast<std::uint32_t>(25640));
     goto L_08A85ECC;
 L_08A85ECC:
-    ctx.gpr[2] = (2216u << 16u);
+    ctx.gpr[2] = (3071u << 16u);
     goto L_08A85ED0;
 L_08A85ED0:
     jump_target = ctx.gpr[31];
-    ctx.gpr[2] = (ctx.gpr[2] + static_cast<std::uint32_t>(25808));
+    ctx.gpr[2] = (ctx.gpr[2] + static_cast<std::uint32_t>(-19968));
     local_pc = jump_target;
     if (++local_transfers < 2048u) { entry_id = 0u; goto LOCAL_DISPATCH; }
     ctx.pc = jump_target;
     return;
 L_08A85ED4:
-    ctx.gpr[2] = (ctx.gpr[2] + static_cast<std::uint32_t>(25808));
+    ctx.gpr[2] = (ctx.gpr[2] + static_cast<std::uint32_t>(-19968));
     goto L_08A85ED8;
 L_08A85ED8:
     ctx.gpr[2] = (2216u << 16u);

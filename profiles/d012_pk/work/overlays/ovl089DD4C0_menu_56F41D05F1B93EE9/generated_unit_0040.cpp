@@ -11646,7 +11646,7 @@ L_08A7F308:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[11]);
     goto L_08A7F30C;
 L_08A7F30C:
-    ctx.gpr[3] = (static_cast<std::int32_t>(ctx.gpr[11]) < 33 ? 1u : 0u);
+    ctx.gpr[3] = (static_cast<std::int32_t>(ctx.gpr[11]) < 34 ? 1u : 0u);
     goto L_08A7F310;
 L_08A7F310:
     { const bool branch_taken = ctx.gpr[3] == 0u;
@@ -13669,7 +13669,7 @@ L_08A7FB98:
     ctx.gpr[4] = (0u + static_cast<std::uint32_t>(-2));
     goto L_08A7FB9C;
 L_08A7FB9C:
-    ctx.gpr[5] = (ctx.gpr[5] + (g_d012_grid_party ? 2u : 1u));
+    ctx.gpr[5] = (ctx.gpr[5] + (g_d012_grid_party ? 2u : 0u));
     goto L_08A7FBA0;
 L_08A7FBA0:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
@@ -15148,14 +15148,14 @@ L_08A80194:
     goto L_08A80198;
 L_08A80198:
     { const bool branch_taken = static_cast<std::int32_t>(ctx.gpr[16]) < 0;
-    ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[16]) < 33 ? 1u : 0u);
+    ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[16]) < 34 ? 1u : 0u);
       if (branch_taken) {
           goto L_08A802C4;
       }
       goto L_08A801A0;
     }
 L_08A8019C:
-    ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[16]) < 33 ? 1u : 0u);
+    ctx.gpr[4] = (static_cast<std::int32_t>(ctx.gpr[16]) < 34 ? 1u : 0u);
     goto L_08A801A0;
 L_08A801A0:
     { const bool branch_taken = ctx.gpr[4] == 0u;
