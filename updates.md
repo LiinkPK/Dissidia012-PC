@@ -619,6 +619,11 @@ Untested at the time of writing
 - Skill description box at the right (shrunk, under the skill list, follows a sixth skill); the EX Finisher input of every character (only Squall's and one mash gauge were captured).
 - The sync-uploads rule for new NVIDIA cards (only one card seen), and other centred 18-pixel text near the bottom of the screen that the subtitle rule would take for a subtitle.
 
+Emendatus with a new character (not in v1.0.6; the patched disc is installed as it is, nothing is embedded)
+- The patched disc's EBOOT.BIN is a plain ELF with MIPS patches and its PACKAGE.BIN is 322 MB larger, so the port runs it as the profile edition `emendatus` (the EBOOT's hash is in `d012_profile.cpp`) with corpora of its own; the older Emendatus switch stays off for it.
+- `python tools/mods/emendatus/make_variant_corpora.py --patched-dir <folder with the patched EBOOT.ELF and the two overlays> --stock-iso <unmodified US iso>` writes `work/generated-variants/emendatus/` and the patched overlays' corpora, with the roster hand edits of the stock menu merged in by a three-way merge (it stops on a conflict). Then build as usual.
+- Not tried on the game yet: the corpora are not generated, and who the new character is and how the roster looks are not known.
+
 Known problems
 - A stray number under the item stats in the shop (below the HP, BRV and DEF changes), only with HD text on: the game draws a small window of a line buffer and the HD line draws more of its recorded glyphs. Not fixed.
 - The NEW markers on the Customization roster are placed at the game's own grid positions, not the port's two rows, so with new characters bought they sit on the wrong cell. Not fixed.

@@ -47,6 +47,7 @@ SAVEDATA/
 .venv/
 pyvenv.cfg
 *.py
+!/tools/mods/**/*.py
 .vs/
 .vscode/
 .idea/

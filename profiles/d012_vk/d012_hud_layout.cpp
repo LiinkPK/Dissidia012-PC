@@ -63,7 +63,7 @@ constexpr HudPiece kPieces[] = {
     {1, 0x021A, true, "HUD, 5 sprites at the left and right bottom corners. Sure it is HUD; what it draws exactly: not named"},
     {1, 0x0216, true, "HUD, 2 layouts of 1 sprite each, one per side, y = 288 (just below the screen, so it slides in). Sure it is HUD; not named"},
     {1, 0x0256, true, "HUD, 16 sprites around (413,257), the bottom right. Sure it is HUD; not named"},
-    {1, 0x0220, true, "3 sprites at (0,0), hidden with the HUD. Probably HUD; not named"},
+    {1, 0x0220, true, "The on-screen tutorial pop-up (window frame pieces and one quad per letter, e.g. \"Press R while holding L to Change Paradigms!\"); scaled quad by quad it comes apart, so it shrinks as one piece about the top-left corner", false, 0x1F},
     // Found in battle captures: these draw the BRV numbers and a bottom strip.
     // Found in the second round of captures: the summon stone and the AP Chance and Save Replay messages.
     {1, 0x0204, true, "Summon stone frame (x 311..334, y 223..245 in a capture)"},
@@ -72,6 +72,9 @@ constexpr HudPiece kPieces[] = {
     {1, 0x0254, true, "Save Replay bar and its text: scaled about the left edge, keeping its height", false, 0x13},
     {0xFE, 0x1002, true, "The HP numbers (6999 / 1000 at the bottom): a layout without a resource, 2 to 24 slots behind 0x0256. After a few battles the skill-name message sits at that distance too (frame, caps and text, x 177..303), so it takes the same mode as 0x1010..0x1FFE: digits low on the screen, and the message as one piece", false, 0x18},
     // These also draw message boxes ("Cross-Slash", "Skip cutscene?"), so only their small digits low on the screen scale.
+    // After many battles the pool's order shifts and the HP numbers sit exactly 1 slot behind 0x0256 (seen at frame 37934 of a
+    // long session, with no 0x1002 in the list): unlisted, they stayed where the game puts them while the rest of the HUD shrank.
+    {0xFE, 0x1001, true, "Resource-less layout 1 slot behind 0x0256: the HP numbers after many battles; only digits low on the screen", false, 0x18},
     {0xFE, 0x1010, true, "Resource-less layout 25..64 slots behind 0x0256: only digits low on the screen", false, 0x18},
     {0xFE, 0x1020, true, "Resource-less layout ahead of 0x0256: only digits low on the screen", false, 0x18},
     {0xFE, 0x1FFE, true, "Other resource-less layouts: the skill-name message at the top (x 176..304, y 8..40); only that scales, in place", false, 0x18},
@@ -288,6 +291,7 @@ constexpr std::uint32_t kMarkerHudBeginBox = 0x00A5001Bu;
 constexpr std::uint32_t kMarkerHudBeginBanner = 0x00A5001Cu;
 constexpr std::uint32_t kMarkerHudBeginNotice = 0x00A5001Du;
 constexpr std::uint32_t kMarkerHudBeginKeepBig = 0x00A5001Eu;
+constexpr std::uint32_t kMarkerHudBeginTopLeft = 0x00A5001Fu;
 constexpr std::uint32_t kMarkerHudBeginRosterHand = 0x00A50017u;
 constexpr std::uint32_t kCallbackLayoutDraw = 0x088DB318u;  // FUN_088DB318(layout, index)
 struct MarkState {
@@ -383,7 +387,7 @@ void mark_layout(Guest *g, std::uint32_t layout) {
     if (role_kind == 0u && role_id == 0xFFFFu && mode_final == 0u && !left && g_limit_prompt) mode_final = 0x1Eu;
     const bool scaled = left || mode_final != 0u || (!is_roster_layout && markers_wanted() && is_hud_layout(g, layout));
     if (!scaled) return;
-    emit_word(g, mode_final == 0x13u ? kMarkerHudBeginLeftMid : mode_final == 0x14u ? kMarkerHudBeginRightSplit : mode_final == 0x15u ? kMarkerHudBeginBigLow : mode_final == 0x16u ? kMarkerHudBeginRosterFrame : mode_final == 0x17u ? kMarkerHudBeginRosterHand : mode_final == 0x18u ? kMarkerHudBeginSmallLow : mode_final == 0x19u ? kMarkerHudBeginPanelRight : mode_final == 0x1Au ? kMarkerHudBeginCorner : mode_final == 0x1Bu ? kMarkerHudBeginBox : mode_final == 0x1Cu ? kMarkerHudBeginBanner : mode_final == 0x1Du ? kMarkerHudBeginNotice : mode_final == 0x1Eu ? kMarkerHudBeginKeepBig : left ? kMarkerHudBeginLeft : kMarkerHudBegin);
+    emit_word(g, mode_final == 0x13u ? kMarkerHudBeginLeftMid : mode_final == 0x14u ? kMarkerHudBeginRightSplit : mode_final == 0x15u ? kMarkerHudBeginBigLow : mode_final == 0x16u ? kMarkerHudBeginRosterFrame : mode_final == 0x17u ? kMarkerHudBeginRosterHand : mode_final == 0x18u ? kMarkerHudBeginSmallLow : mode_final == 0x19u ? kMarkerHudBeginPanelRight : mode_final == 0x1Au ? kMarkerHudBeginCorner : mode_final == 0x1Bu ? kMarkerHudBeginBox : mode_final == 0x1Cu ? kMarkerHudBeginBanner : mode_final == 0x1Du ? kMarkerHudBeginNotice : mode_final == 0x1Eu ? kMarkerHudBeginKeepBig : mode_final == 0x1Fu ? kMarkerHudBeginTopLeft : left ? kMarkerHudBeginLeft : kMarkerHudBegin);
     state.open = true;
     // For the quad dump (hud_quads.txt): which layout this span is. Two extra markers, only while tracing.
     static const bool tracing = std::getenv("D012_TRACE_HUD_LAYOUTS") != nullptr;

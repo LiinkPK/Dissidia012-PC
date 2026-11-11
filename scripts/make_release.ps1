@@ -76,6 +76,14 @@ if (Test-Path $cheatsSrc) {
     New-Item -ItemType Directory -Force $cheatsDst | Out-Null
     Copy-Item (Join-Path $cheatsSrc "*") $cheatsDst -Recurse -Force
 }
+# The Emendatus mod's new data (338 MB, made by tools/mods/emendatus/make_mod_data.py --tail-out) goes in mods\ next to the
+# exe: the updater unpacks everything outside data\ and game\, so it travels with every release.
+$modsSrc = Join-Path $root "release\mods"
+if (Test-Path $modsSrc) {
+    $modsDst = Join-Path $stage "mods"
+    New-Item -ItemType Directory -Force $modsDst | Out-Null
+    Copy-Item (Join-Path $modsSrc "*") $modsDst -Recurse -Force
+}
 # data\logs and data\screenshots are never packed, whichever way they got in.
 foreach ($folder in $localFolders) { Remove-Item -Recurse -Force (Join-Path $stage $folder) -ErrorAction SilentlyContinue }
 # Sweep: whatever Linux file got in by another way is removed before zipping.

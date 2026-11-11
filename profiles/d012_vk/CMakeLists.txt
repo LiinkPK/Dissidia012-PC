@@ -90,3 +90,20 @@ if(D012_OVERLAY_TARGETS AND D012_MULTI_CONFIG)
         COMMENT "Copying the overlay libraries next to the executable")
     add_dependencies(d012_copy_overlays ${D012_OVERLAY_TARGETS})
 endif()
+# An edition's corpus library (corpora/<key>.dll, such as the Emendatus mod's) is looked for next to the executable; the
+# multi-config generators write it to bin/corpora/<config>, so it is copied beside the executable the same way.
+file(GLOB D012_CORPUS_TARGETS_DIRS CONFIGURE_DEPENDS LIST_DIRECTORIES true "${D012_WORK_DIR}/generated-variants/*")
+set(D012_CORPUS_TARGETS "")
+foreach(variant_dir IN LISTS D012_CORPUS_TARGETS_DIRS)
+    get_filename_component(variant_key "${variant_dir}" NAME)
+    if(TARGET d012_native_corpus_${variant_key})
+        list(APPEND D012_CORPUS_TARGETS d012_native_corpus_${variant_key})
+    endif()
+endforeach()
+if(D012_CORPUS_TARGETS AND D012_MULTI_CONFIG)
+    add_custom_target(d012_copy_corpora ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:d012_native>/corpora"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/bin/corpora/$<CONFIG>" "$<TARGET_FILE_DIR:d012_native>/corpora"
+        COMMENT "Copying the edition corpora next to the executable")
+    add_dependencies(d012_copy_corpora ${D012_CORPUS_TARGETS})
+endif()

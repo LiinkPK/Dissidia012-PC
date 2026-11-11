@@ -1,4 +1,4 @@
-From 544cff786bcecfcc3dd863ab57228a5fd4ff8002 Mon Sep 17 00:00:00 2001
+From 7f5e9fc66d7c0e3015bf2ceccf66af5909e8824c Mon Sep 17 00:00:00 2001
 From: LiinkPK <linkgarciafiverr@gmail.com>
 Date: Wed, 11 Nov 2026 02:33:15 +0100
 Subject: [PATCH] HUD scaling fixes for Story Mode, notices, gauges and the
@@ -20,10 +20,12 @@ Subject: [PATCH] HUD scaling fixes for Story Mode, notices, gauges and the
 ---
  host/fonts/game_font.cpp     |   5 +-
  host/fonts/game_font.hpp     |   3 +-
- host/gpu/vulkan_renderer.cpp | 392 +++++++++++++++++++++++++++++++----
- host/gpu/vulkan_renderer.hpp |   5 +
+ host/gpu/vulkan_renderer.cpp | 402 +++++++++++++++++++++++++++++++----
+ host/gpu/vulkan_renderer.hpp |   6 +
+ host/main.cpp                |   4 +-
+ host/profile.hpp             |   5 +
  host/ui/font_menu.cpp        |   6 +-
- 5 files changed, 365 insertions(+), 46 deletions(-)
+ 7 files changed, 384 insertions(+), 47 deletions(-)
 
 diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
 index be5d78c..4b795f6 100644
@@ -63,7 +65,7 @@ index b1ba973..33c9bcc 100644
  // Rereads the font settings and clears every cached glyph, so the next glyph
  // the game asks for comes from the new font, then runs the hook.
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index 8a6184a..c1fd0fd 100644
+index 8a6184a..e596957 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -83,6 +83,15 @@ std::atomic<float> g_d012_model_dx{0.0f};     // and its shift in game pixels (4
@@ -333,7 +335,7 @@ index 8a6184a..c1fd0fd 100644
      if (marker == kMarkerSplitLeft) impl.take_split_left(target_address);
      if (marker == kMarkerSplitCompose) impl.compose_split(target_address);
      if (marker == kMarkerHudBegin) impl.in_hud_layout = impl.in_layout_span = true;
-+    if (marker == kMarkerHudBegin || marker == kMarkerHudBeginLeft || (marker >= kMarkerHudBeginLeftMid && marker <= kMarkerHudBeginKeepBig))
++    if (marker == kMarkerHudBegin || marker == kMarkerHudBeginLeft || (marker >= kMarkerHudBeginLeftMid && marker <= kMarkerHudBeginTopLeft))
 +        ++impl.hud_span;
 +    if (marker >= 0x3000u && marker < 0x3100u) impl.hud_kind = marker & 0xFFu;
 +    if (marker >= 0x4000u && marker < 0x8000u) impl.hud_id = marker & 0x3FFFu;
@@ -342,7 +344,7 @@ index 8a6184a..c1fd0fd 100644
      if (marker == kMarkerHudBeginLeftMid || marker == kMarkerHudBeginRightSplit || marker == kMarkerHudBeginBigLow ||
          marker == kMarkerHudBeginRosterFrame || marker == kMarkerHudBeginRosterHand ||
 -        marker == kMarkerHudBeginSmallLow || marker == kMarkerHudBeginPanelRight) {
-+        marker == kMarkerHudBeginSmallLow || marker == kMarkerHudBeginPanelRight || marker == kMarkerHudBeginCorner || marker == kMarkerHudBeginBox || marker == kMarkerHudBeginBanner || marker == kMarkerHudBeginNotice || marker == kMarkerHudBeginKeepBig) {
++        marker == kMarkerHudBeginSmallLow || marker == kMarkerHudBeginPanelRight || marker == kMarkerHudBeginCorner || marker == kMarkerHudBeginBox || marker == kMarkerHudBeginBanner || marker == kMarkerHudBeginNotice || marker == kMarkerHudBeginKeepBig || marker == kMarkerHudBeginTopLeft) {
          impl.in_hud_layout = impl.in_layout_span = true;
          impl.hud_mode = marker;
 +        impl.corner_valid = false;
@@ -448,7 +450,7 @@ index 8a6184a..c1fd0fd 100644
                              }
                          }
                          continue;
-@@ -8856,6 +9014,36 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8856,6 +9014,46 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  }
                  if (impl.hud_mode == kMarkerHudBeginBigLow && (x1 - x0 < 40.0f || y1 - y0 < 18.0f || (y0 + y1) * 0.5f < 200.0f))
                      continue;
@@ -470,6 +472,16 @@ index 8a6184a..c1fd0fd 100644
 +                // The ASSIST bar (layout kind 1 id 0x0258, kMarkerHudBeginNotice): end caps, bar and edge lines are separate quads,
 +                // and anchored one by one by their centres they come apart. All of them shrink about the middle of the screen,
 +                // vertically about the centre line of the layout's first tall piece (an end cap).
++                // The on-screen tutorial (layout kind 1 id 0x0220, kMarkerHudBeginTopLeft): its window frame pieces and one
++                // quad per letter come apart when each is scaled about its own corner, so all of them shrink about the
++                // screen's top-left corner, where the pop-up sits, and it stays one piece.
++                if (impl.hud_mode == kMarkerHudBeginTopLeft) {
++                    for (std::size_t i = first; i < first + group; ++i) {
++                        impl.scratch[i].x *= hud_scale;
++                        impl.scratch[i].y *= hud_scale;
++                    }
++                    continue;
++                }
 +                if (impl.hud_mode == kMarkerHudBeginNotice) {
 +                    if (!impl.corner_valid) {
 +                        if (y1 - y0 < 18.0f) continue;
@@ -485,7 +497,7 @@ index 8a6184a..c1fd0fd 100644
                  // The health bars end at about x = 207 and start at about 273: the centre band must not cut
                  // through them, or their pieces anchor to different places and come apart.
                  const float anchor_x = impl.hud_anchor_left ? 0.0f : centre_x < 212.0f ? 0.0f : centre_x > 268.0f ? 480.0f : 240.0f;
-@@ -8988,11 +9176,102 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8988,11 +9186,102 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                      }
                      continue;
                  }
@@ -588,7 +600,7 @@ index 8a6184a..c1fd0fd 100644
          }
          if (trace_roster && !impl.scratch.empty()) {
              static unsigned trace_lines = 0;
-@@ -9021,7 +9300,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -9021,7 +9310,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                                trace_pre[3], post[0], post[1], post[2], post[3],
                                static_cast<unsigned>(call.viewport.scissor_x1), static_cast<unsigned>(call.viewport.scissor_y1),
                                static_cast<unsigned>(call.viewport.scissor_x2), static_cast<unsigned>(call.viewport.scissor_y2));
@@ -597,7 +609,7 @@ index 8a6184a..c1fd0fd 100644
                      std::fprintf(out, "%s\n", line);
                      std::fclose(out);
                  }
-@@ -9072,24 +9351,36 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -9072,24 +9361,36 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      }
  
      // Subtitles: a text line (a texture the font hook has written glyphs into) drawn centred on the screen near its bottom,
@@ -638,7 +650,7 @@ index 8a6184a..c1fd0fd 100644
              for (std::size_t i = first; i < first + 6u; ++i) {
                  impl.scratch[i].x = 240.0f + (impl.scratch[i].x - 240.0f) * size;
                  impl.scratch[i].y = 272.0f + (impl.scratch[i].y - 272.0f) * size - lift;
-@@ -9097,6 +9388,27 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -9097,6 +9398,27 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
          }
      }
  
@@ -667,14 +679,15 @@ index 8a6184a..c1fd0fd 100644
          const GpuVertex &first = impl.scratch.front();
          const GpuVertex &second = impl.scratch[std::min<std::size_t>(1u, impl.scratch.size() - 1u)];
 diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
-index 35724d9..3c9a750 100644
+index 35724d9..f3ccbf2 100644
 --- a/host/gpu/vulkan_renderer.hpp
 +++ b/host/gpu/vulkan_renderer.hpp
-@@ -172,6 +172,11 @@ public:
+@@ -172,6 +172,12 @@ public:
      // Only small quads (digits, 14 pixels or less) low on the screen scale: the HP numbers, in layouts that also
      // hold message boxes and other text, which must be left alone.
      static constexpr std::uint32_t kMarkerHudBeginSmallLow = 0x18u;
 +    static constexpr std::uint32_t kMarkerHudBeginKeepBig = 0x1Eu;  // the layout is left as the game draws it (the profile picks it: the EX Finisher gauges and inputs)
++    static constexpr std::uint32_t kMarkerHudBeginTopLeft = 0x1Fu;  // the layout is one piece shrunk about the screen's top-left corner (the on-screen tutorial)
 +    static constexpr std::uint32_t kMarkerHudBeginNotice = 0x1Du;  // a centred message bar (ASSIST): shrinks about the middle of the screen
 +    static constexpr std::uint32_t kMarkerHudBeginBanner = 0x1Cu;  // top message bar: moved down a little
 +    static constexpr std::uint32_t kMarkerHudBeginBox = 0x1Bu;  // map description box: top-left, or under the skill list at the right
@@ -682,6 +695,45 @@ index 35724d9..3c9a750 100644
      // The Party roster's right panel (layouts 0x722a / 0x722e): shrunk to 85% about the middle of its right edge.
      static constexpr std::uint32_t kMarkerHudBeginPanelRight = 0x19u;
      static constexpr std::uint32_t kMarkerHudBeginRosterFrame = 0x16u;
+diff --git a/host/main.cpp b/host/main.cpp
+index 31e3300..f90612b 100644
+--- a/host/main.cpp
++++ b/host/main.cpp
+@@ -359,8 +359,10 @@ int main(int argc, char **argv) {
+         }
+ #endif
+ 
+-        const std::optional<GameFiles> files = locate_game(options);
++        std::optional<GameFiles> files = locate_game(options);
+         if (!files) return 1;
++        if (portablekit::game().redirect_game_files != nullptr)
++            portablekit::game().redirect_game_files(files->executable, files->disc_image);
+         // The disc says which edition's identity (saves, textures, cheats) the profile answers with.
+         if (!files->disc_image.empty()) {
+             try {
+diff --git a/host/profile.hpp b/host/profile.hpp
+index 97e51c9..1452d5d 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -15,6 +15,7 @@
+ 
+ #include <array>
+ #include <cstdint>
++#include <filesystem>
+ #include <span>
+ #include <string>
+ #include <string_view>
+@@ -190,6 +191,10 @@ struct GameProfile {
+     // version nobody listed yet): true installs and runs it under the
+     // interpreter, with a warning; false refuses it at setup.
+     bool run_unknown_executables = false;
++    // Called once the installed game is found, before anything reads the disc: the profile may point this run at
++    // another disc image and executable (a companion disc an edition needs). Both are in and out; leave them alone
++    // to run what was installed. Null: unused.
++    void (*redirect_game_files)(std::filesystem::path &executable, std::filesystem::path &disc_image) = nullptr;
+ 
+     // --- How the game sits in guest memory ---------------------------------
+     std::uint32_t load_base;
 diff --git a/host/ui/font_menu.cpp b/host/ui/font_menu.cpp
 index 7d9edf0..4835429 100644
 --- a/host/ui/font_menu.cpp

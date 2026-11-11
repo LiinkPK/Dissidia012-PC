@@ -25,6 +25,7 @@ void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image
 }
 namespace d012_emendatus {
 void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_vk/d012_emendatus.cpp (runs Braviest Turning's first)
+void redirect_game_files(std::filesystem::path &executable, std::filesystem::path &disc_image);  // d012_vk/d012_emendatus.cpp
 }
 
 namespace portablekit {
@@ -65,6 +66,13 @@ constexpr ProfileVariant kVariants[] = {
      // No executable hash of its own: it runs the profile's executable and corpus (the installer falls back to
      // the profile's hash). Naming one here makes the runtime look for a separate "usa" corpus.
      "8fbf3541ab121aff85aae72795760736dfe37706996b2b0f9b81d36fc98f3394", nullptr},
+    // The executable of the newer Emendatus mod (the one that adds a character): the plain executable with MIPS patches (new
+    // code at 0x089CB0A0). The port makes it from the disc's own executable when the mod's switch is on (d012_emendatus.cpp),
+    // or finds it on a disc patched by the mod, and runs a corpus of its own
+    // (profiles/d012_pk/work/generated-variants/emendatus/, made by tools/mods/emendatus/make_variant_corpora.py).
+    {"emendatus", "Emendatus mod, with its new character",
+     "832063088cf2dd3b4c064cb06a9c2d1a6c8eb74bfabfbdd0a7a79b5c0c894572",
+     "832063088cf2dd3b4c064cb06a9c2d1a6c8eb74bfabfbdd0a7a79b5c0c894572"},
 };
 
 // Frame interpolation's distances, in the game's world units. Battle's world is in metres or close to it: the
@@ -107,6 +115,7 @@ GameProfile build(const Release &r) {
         .decryption_key = {0xEB, 0xFF, 0x40, 0xD8, 0xB4, 0x1A, 0xE1, 0x66,
                            0x91, 0x3B, 0x8F, 0x64, 0xB6, 0xFC, 0xB7, 0x12},
         .variants = kVariants,
+        .redirect_game_files = &::d012_emendatus::redirect_game_files,
 
         .load_base = 0x08804000u,
         .guest_ram_bytes = 64u * 1024u * 1024u,  // the PSP slim's

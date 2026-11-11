@@ -1,23 +1,28 @@
 // The Emendatus mod (by the Emendatus community), built in as a switch like Braviest Turning.
 //
-// The mod changes five files of the disc and nothing of the executable: DATA/PACKAGE.BIN (48 entries of the archive),
-// DATA/PACKAGE_INFO.BIN (three size fields), and the code of OVL_BATTLE_APP.ELF and OVL_MENU_APP.ELF (the menu overlay also
-// grows by 3820 bytes). This file serves those five files with the mod's bytes put over the disc's own, through the host's
-// file provider, when the switch is on. The disc's files are never replaced as a whole: only the changed bytes are in
-// d012_emendatus_data.inc (tools/mods/emendatus/make_mod_data.py), and the US and EUR discs hold the same entries at other
-// archive offsets, so each has its own table. The modded overlays run from corpora of their own (work/overlays: the
-// libraries are picked by the hash of the image the game loads).
+// The mod changes the disc's executable (small MIPS patches and a code cave), DATA/PACKAGE_INFO.BIN (three size fields),
+// the code of OVL_BATTLE_APP.ELF and OVL_MENU_APP.ELF (the menu overlay also grows), DATA/PACKAGE.BIN (about 325 KB of edits
+// in existing entries) and appends 338 MB of new data (the new character) to PACKAGE.BIN. With the switch on, the port runs
+// its own patched copy of the decrypted executable (its own corpus, the profile's "emendatus" edition) and serves the four
+// files with the mod's bytes put over the disc's own, through the host's file provider; the appended data is read from
+// mods/emendatus_assets.bin next to the program. The disc's files are never replaced as a whole: only the changed bytes are in
+// d012_emendatus_data.inc (tools/mods/emendatus/make_mod_data.py). The US and EUR discs hold the same entries at other
+// archive offsets, so each has its own table. The new data is placed after the end of the disc's own PACKAGE.BIN.
 //
 // The switch is read once at start-up, so it takes effect at the next start: settings.ini's game.emendatus (the menu's Mods
 // page writes it), or D012_EMENDATUS=0/1 for a run.
 #include "../../third_party/dissidia012-pc/port/host/d012_decomp_harness.hpp"
 
+#include "app_paths.hpp"
 #include "hle/hle_common.hpp"
 #include "install/installer.hpp"
 #include "install/user_data.hpp"
+#include "kernel/iso_image.hpp"
 #include "portablekit/hle_extension.hpp"
+#include "profile.hpp"
 #include "psprecomp/elf32.hpp"
 #include "psprecomp/runtime.hpp"
+#include "psprecomp/sha256.hpp"
 #if defined(PORTABLEKIT_HAS_RENDERER)
 #include "ui/ui.hpp"
 #include "ui/widgets.hpp"
@@ -28,14 +33,21 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace d012_braviest_turning {
 void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_braviest_turning.cpp
@@ -62,6 +74,23 @@ bool read_setting() {
         std::cerr << "[mod] settings.ini not read for " << kKey << ": " << e.what() << "\n";
     }
     return false;
+}
+
+// The newer mod (it adds a character) also patches the executable and appends the new character's data to PACKAGE.BIN.
+// The port patches its own decrypted executable (the regions in kEmEboot) into a file of its own and runs that one, which
+// has a corpus of its own (the profile's "emendatus" edition); the new data is the file mods/emendatus_assets.bin next to
+// the program, served after the end of PACKAGE.BIN.
+constexpr const char *kStockExecutableSha256 = "0bc8e779aad2814a3d1bd77346f69ca5e16665845ed053cd0ad44a9cbfaefe6d";
+constexpr const char *kPatchedExecutableSha256 = "832063088cf2dd3b4c064cb06a9c2d1a6c8eb74bfabfbdd0a7a79b5c0c894572";
+constexpr const char *kPatchedExecutableFile = "EBOOT_EMENDATUS.ELF";
+
+bool g_applied = false;  // the switch's value this run started with
+
+std::filesystem::path assets_path() { return portablekit::executable_directory() / "mods" / "emendatus_assets.bin"; }
+
+bool assets_present() {
+    std::error_code ec;
+    return std::filesystem::file_size(assets_path(), ec) == kEmTailSize && !ec;
 }
 
 enum class Release { Unknown, US, EUR };
@@ -114,6 +143,52 @@ private:
     std::size_t count_;
 };
 
+// PACKAGE.BIN with the mod's edits over the disc's bytes, then the new character's data after the disc's own end.
+class PackageFile final : public ext::FileFilter {
+public:
+    PackageFile(std::uint32_t fd, std::uint64_t disc_size, const EmRegion *regions, std::size_t count)
+        : fd_(fd), disc_size_(disc_size), regions_(regions), count_(count), assets_(assets_path(), std::ios::binary) {}
+    std::uint64_t size() const override { return disc_size_ + kEmTailSize; }
+    std::size_t read(std::uint64_t offset, std::uint8_t *destination, std::size_t length) override {
+        if (offset >= size()) return 0u;
+        length = static_cast<std::size_t>(std::min<std::uint64_t>(length, size() - offset));
+        std::size_t done = 0u;
+        if (offset < disc_size_) {
+            const std::size_t head = static_cast<std::size_t>(std::min<std::uint64_t>(length, disc_size_ - offset));
+            done = portablekit::read_open_file(fd_, offset, destination, head);
+            apply(regions_, count_, offset, destination, done);
+            if (done < head) return done;
+        }
+        if (done < length) {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            assets_.clear();
+            assets_.seekg(static_cast<std::streamoff>(offset + done - disc_size_));
+            assets_.read(reinterpret_cast<char *>(destination + done), static_cast<std::streamsize>(length - done));
+            done += static_cast<std::size_t>(std::max<std::streamsize>(assets_.gcount(), 0));
+        }
+        return done;
+    }
+
+private:
+    std::uint32_t fd_;
+    std::uint64_t disc_size_;
+    const EmRegion *regions_;
+    std::size_t count_;
+    std::mutex mutex_;
+    std::ifstream assets_;
+};
+
+// The decrypted executable with the mod's patches, or empty when `stock` is not the executable they are made for.
+std::vector<std::uint8_t> patched_executable(const std::filesystem::path &stock) {
+    std::ifstream in(stock, std::ios::binary);
+    std::vector<std::uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (bytes.size() != kEmEbootStock || psprecomp::sha256_bytes(bytes) != kStockExecutableSha256) return {};
+    bytes.resize(kEmEbootSize);
+    apply(kEmEboot, sizeof kEmEboot / sizeof kEmEboot[0], 0u, bytes.data(), bytes.size());
+    if (psprecomp::sha256_bytes(bytes) != kPatchedExecutableSha256) return {};
+    return bytes;
+}
+
 // The menu overlay: the disc's bytes up to kEmMenuKeep with the regions over them, then the mod's added code.
 class MenuOverlay final : public ext::FileFilter {
 public:
@@ -159,8 +234,8 @@ std::shared_ptr<ext::FileFilter> serve(std::string_view path, std::uint32_t fd) 
     if (disc == Release::Unknown) return nullptr;
     std::cout << "[mod] The Emendatus Mod: " << path << " is served with the mod's changes\n";
     if (package) {
-        return disc == Release::US ? std::make_shared<RegionFile>(fd, kPackageSizeUS, kEmPackageUS, sizeof kEmPackageUS / sizeof kEmPackageUS[0])
-                                   : std::make_shared<RegionFile>(fd, kPackageSizeEUR, kEmPackageEUR, sizeof kEmPackageEUR / sizeof kEmPackageEUR[0]);
+        return disc == Release::US ? std::make_shared<PackageFile>(fd, kPackageSizeUS, kEmPackageUS, sizeof kEmPackageUS / sizeof kEmPackageUS[0])
+                                   : std::make_shared<PackageFile>(fd, kPackageSizeEUR, kEmPackageEUR, sizeof kEmPackageEUR / sizeof kEmPackageEUR[0]);
     }
     if (info) return std::make_shared<RegionFile>(fd, kInfoSize, kEmIndex, sizeof kEmIndex / sizeof kEmIndex[0]);
     if (battle) return std::make_shared<RegionFile>(fd, kBattleSize, kEmBattle, sizeof kEmBattle / sizeof kEmBattle[0]);
@@ -223,14 +298,18 @@ void mod_rows() {
     namespace ui = portablekit::ui;
     ui::section("Emendatus");
     ui::RowOptions options;
-    options.description = "The Emendatus balance and content mod, by the Emendatus community. Works with the US and EUR discs. The game restarts to apply it.";
+    options.description = "The Emendatus balance and content mod, by the Emendatus community, with its new character. Works with the US and EUR discs. The game restarts to apply it.";
     static bool wanted = read_setting();  // the setting as saved
     static bool target = false;           // what the open question would set
     static bool asking = false;
+    const bool have_assets = assets_present();
     if (const char *text = std::getenv("D012_EMENDATUS"); text != nullptr && *text != 0) {
         options.disabled = true;
         options.note = "Set by D012_EMENDATUS";
-    } else if (wanted != g_on) {
+    } else if (!have_assets && !wanted) {
+        options.disabled = true;
+        options.note = "mods/emendatus_assets.bin is missing";
+    } else if (wanted != g_applied) {
         options.note = "restart to apply";
     }
     if (ui::toggle_row("Emendatus Mod", wanted, options)) {
@@ -278,16 +357,55 @@ struct Install {
 
 namespace d012_emendatus {
 
+namespace {
+bool g_redirected = false;  // this run is the mod's executable (redirect_game_files)
+}
+
 // The profile's patch_loaded_image: Braviest Turning's (and the port's), then this mod's switch and file provider.
 void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf) {
     d012_braviest_turning::patch_loaded_image(runtime, elf);
     static bool installed = false;
     if (installed) return;
     installed = true;
-    g_on = read_setting();
-    if (!g_on) return;
+    g_applied = read_setting();
+    if (!g_redirected) {
+        if (g_applied) std::cout << "[mod] The Emendatus Mod is on, but its executable was not set up; it is not used\n";
+        return;
+    }
+    g_on = true;
     portablekit::add_file_provider(&serve);
     std::cout << "[mod] The Emendatus Mod is on\n";
+}
+
+// While the switch is on, runs the mod's executable (the disc's own with the mod's patches, kept in the data folder) instead
+// of the installed one; the disc image stays the player's own. Nothing changes when the switch is off, the mod's assets
+// file is missing, or the installed executable is not the stock one the patches are made for.
+void redirect_game_files(std::filesystem::path &executable, std::filesystem::path &) {
+    if (!read_setting()) return;
+    if (!assets_present()) {
+        std::cerr << "[mod] The Emendatus Mod is not used: " << portablekit::install::path_to_utf8(assets_path()) << " is missing\n";
+        return;
+    }
+    try {
+        if (psprecomp::sha256_file(executable) != kStockExecutableSha256) return;
+        const std::filesystem::path prepared = portablekit::install::user_data_directory() / kPatchedExecutableFile;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(prepared, ec) || psprecomp::sha256_file(prepared) != kPatchedExecutableSha256) {
+            const std::vector<std::uint8_t> bytes = patched_executable(executable);
+            if (bytes.empty()) {
+                std::cerr << "[mod] The Emendatus Mod is not used: the executable could not be patched\n";
+                return;
+            }
+            std::ofstream out(prepared, std::ios::binary | std::ios::trunc);
+            out.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            out.close();
+            if (!out) throw std::runtime_error("cannot write " + portablekit::install::path_to_utf8(prepared));
+        }
+        executable = prepared;
+        g_redirected = true;
+    } catch (const std::exception &e) {
+        std::cerr << "[mod] The Emendatus Mod is not used: " << e.what() << "\n";
+    }
 }
 
 } // namespace d012_emendatus
