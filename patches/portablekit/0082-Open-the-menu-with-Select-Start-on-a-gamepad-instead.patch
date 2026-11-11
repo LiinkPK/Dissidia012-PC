@@ -432,7 +432,7 @@ index d440b66..a4a3b1e 100644
 -            ImGui::Dummy({0.0f, font() * 0.3f});
 -            paragraph(std::string(portablekit::game().project_name) + " plays " + portablekit::game().game_title +
 -                      " from your own copy of the game. It needs the disc image of the game's PSP disc, " +
--                      portablekit::game().disc_id_display + ", as an .iso file: the PlayStation 3 release carries it.");
+-                      portablekit::game().disc_id_display + ", as an .iso file.");
 -            ImGui::Dummy({0.0f, font() * 0.4f});
 -#if defined(PORTABLEKIT_ANDROID_APP)
 -            paragraph(std::string("Choose the image next, in Android's file picker. ") + portablekit::game().project_name + " copies it into its own storage (an "

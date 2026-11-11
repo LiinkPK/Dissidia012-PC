@@ -1,0 +1,383 @@
+From 995afea52006a412621e6f7a88cb70c4c9fe3cab Mon Sep 17 00:00:00 2001
+From: LiinkPK <linkgarciafiverr@gmail.com>
+Date: Wed, 11 Nov 2026 02:33:15 +0100
+Subject: [PATCH] HUD scaling fixes for Story Mode, notices, gauges and the
+ Chess and Open World screens; the HUD settings section is named HUD
+
+- New marker modes for the profile's layouts: corner (Chess and Open World corner HUD), box (map description window), banner,
+  notice (ASSIST bar) and keep (EX Finisher gauges and inputs left as drawn).
+- The skill-name message box scales as one piece wherever it sits; the assist gauge's masks and sweep strips take their side.
+- Subtitle rule ignores text inside a marked HUD layout; the outline copies keep their 1-pixel offset.
+- A debug dump of what the HUD rule does to each piece (hud_quads.txt) with <prefix>_TRACE_HUD_LAYOUTS set and F10.
+---
+ host/gpu/vulkan_renderer.cpp | 214 ++++++++++++++++++++++++++++++++---
+ host/gpu/vulkan_renderer.hpp |   5 +
+ host/ui/font_menu.cpp        |   6 +-
+ 3 files changed, 204 insertions(+), 21 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 8a6184a..6c37842 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1064,6 +1064,15 @@ struct VulkanRenderer::Impl {
+     std::uint64_t roster_frame_stamp = ~0ull;  // the frame number of the last frame quad mapped
+     bool roster_hand_flip{};                   // the frame is on the first column: the hand points from the right
+     float roster_tile_cx{};                    // the frame's tile centre on screen
++    std::uint32_t hud_kind{0xFFu}, hud_id{0x3FFFu};  // the layout of the current span, for the dump (markers 0x3000+kind, 0x4000+id)
++    std::uint32_t hud_span{};  // how many HUD layout spans began this frame (dump only: matches the layout log's order)
++    bool corner_valid{};  // kMarkerHudBeginCorner: the anchor of the layout span, taken at its first quad
++    float corner_ax{}, corner_ay{}, corner_cx{}, corner_cy{};
++    float list_bottom{};  // lowest edge of the skill list this frame (after scaling), for the box under it
++    bool box_frame_ok{};  // kMarkerHudBeginBox, right side: the frame has been found this frame
++    float box_fx0{}, box_fy0{}, box_fx1{}, box_fy1{};
++    bool box_valid{};  // the frame's origin is taken once per frame and shared by the box's layouts (frame, text)
++    float box_x0{}, box_y0{}, box_x1{};  // kMarkerHudBeginBox: the first quad of the span (the box frame)
+     std::uint32_t hud_mode{};  // 0 normal, 0x13 left keeping y, 0x14 right with the upper part at the top
+     // Inside any marked layout, and which one.
+     bool in_layout_span{};
+@@ -5395,7 +5404,7 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+     // Every line is an image and a descriptor set of the pool the texture cache shares, and scrolling a long list makes new
+     // lines faster than the 4 seconds above free the old ones. A cap, least recently used out first (never a line drawn in
+     // this very frame), keeps the pool from running out.
+-    constexpr std::size_t kMaxTextLines = 256u, kEvictBatch = 48u;
++    constexpr std::size_t kMaxTextLines = 512u, kEvictBatch = 48u;
+     if (text_lines.size() >= kMaxTextLines && text_lines.find(address) == text_lines.end()) {
+         std::vector<std::pair<std::uint64_t, std::uint32_t>> oldest;
+         oldest.reserve(text_lines.size());
+@@ -7297,6 +7306,9 @@ bool VulkanRenderer::pump_events() {
+         // F10: asks for the text trace (text_trace.txt, two frames); the draw code looks for this file.
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F10 && !event.key.repeat)
+             if (std::FILE *trigger = std::fopen("text_trigger", "wb")) std::fclose(trigger);
++        // (the HUD quad dump is a debugging tool: only with <prefix>_TRACE_HUD_LAYOUTS set)
++        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F10 && !event.key.repeat && portablekit::env("TRACE_HUD_LAYOUTS") != nullptr)
++            if (std::FILE *trigger = std::fopen("hud_quad_trigger", "wb")) std::fclose(trigger);
+         // F9: a screenshot of the window as PNG in <data folder>/screenshots, made when the first one is taken.
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F9 && !event.key.repeat && impl_->ready &&
+             impl_->capture_path.empty() && (impl_->swapchain_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u) {
+@@ -8297,6 +8309,10 @@ void VulkanRenderer::begin_display_list() {
+     // A layout's markers never reach across display lists: one whose end was lost must not leak into the next.
+     impl_->in_hud_layout = impl_->in_layout_span = impl_->hud_anchor_left = false;
+     impl_->hud_mode = 0;
++    impl_->box_valid = false;
++    impl_->hud_span = 0u;
++    impl_->box_frame_ok = false;
++    impl_->list_bottom = 0.0f;
+     impl_->list_texture_keys.clear();
+     impl_->last_texture = nullptr;
+ }
+@@ -8347,13 +8363,18 @@ void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address)
+     if (marker == kMarkerSplitLeft) impl.take_split_left(target_address);
+     if (marker == kMarkerSplitCompose) impl.compose_split(target_address);
+     if (marker == kMarkerHudBegin) impl.in_hud_layout = impl.in_layout_span = true;
++    if (marker == kMarkerHudBegin || marker == kMarkerHudBeginLeft || (marker >= kMarkerHudBeginLeftMid && marker <= kMarkerHudBeginKeepBig))
++        ++impl.hud_span;
++    if (marker >= 0x3000u && marker < 0x3100u) impl.hud_kind = marker & 0xFFu;
++    if (marker >= 0x4000u && marker < 0x8000u) impl.hud_id = marker & 0x3FFFu;
+     if (marker == kMarkerHudEnd) impl.hud_mode = 0;
+     if (marker == kMarkerHudEnd) impl.in_hud_layout = impl.in_layout_span = impl.hud_anchor_left = false;
+     if (marker == kMarkerHudBeginLeftMid || marker == kMarkerHudBeginRightSplit || marker == kMarkerHudBeginBigLow ||
+         marker == kMarkerHudBeginRosterFrame || marker == kMarkerHudBeginRosterHand ||
+-        marker == kMarkerHudBeginSmallLow || marker == kMarkerHudBeginPanelRight) {
++        marker == kMarkerHudBeginSmallLow || marker == kMarkerHudBeginPanelRight || marker == kMarkerHudBeginCorner || marker == kMarkerHudBeginBox || marker == kMarkerHudBeginBanner || marker == kMarkerHudBeginNotice || marker == kMarkerHudBeginKeepBig) {
+         impl.in_hud_layout = impl.in_layout_span = true;
+         impl.hud_mode = marker;
++        impl.corner_valid = false;
+     }
+     if (marker == kMarkerHudBeginLeft) {
+         impl.in_hud_layout = impl.in_layout_span = impl.hud_anchor_left = true;
+@@ -8796,6 +8817,20 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+             // so no part of a marked layout is left at its old place.
+             const bool by_quad = quads || (call.primitive == PrimitiveType::Triangles && impl.scratch.size() % 6u == 0u);
+             const std::size_t group = by_quad ? 6u : impl.scratch.size();
++            // hud_quads.txt: with a file "hud_quad_trigger" in the working directory (F10 makes it), one frame of what the HUD
++            // rule did to each piece: the layout mode, the texture, and the piece's bounds before and after.
++            static std::uint64_t dump_checked = ~0ull, dump_until = 0;
++            if (impl.frames != dump_checked) {
++                dump_checked = impl.frames;
++                if (std::FILE *trigger = std::fopen("hud_quad_trigger", "rb")) {
++                    std::fclose(trigger);
++                    std::remove("hud_quad_trigger");
++                    dump_until = impl.frames + 1u;
++                }
++            }
++            const bool dumping = impl.frames < dump_until;
++            std::vector<GpuVertex> before;
++            if (dumping) before = impl.scratch;
+             for (std::size_t first = 0; first + group <= impl.scratch.size(); first += group) {
+                 float x0 = impl.scratch[first].x, x1 = x0;
+                 float y0 = impl.scratch[first].y, y1 = y0;
+@@ -8814,22 +8849,34 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                     // is hundreds of pixels wide and its centre has nothing to do with the bar it cuts, so it would anchor
+                     // to another side than the bar and the cut would land in the wrong place (the bar then looks full again).
+                     // Anchor it by where its edges cross the bar's row (y = 252), which is where the cut is seen.
+-                    float sum = 0.0f;
+-                    int hits = 0;
+-                    static constexpr float kBarRow = 252.0f;
+-                    for (std::size_t t = first; t < first + group; t += 3) {
+-                        for (int e = 0; e < 3; ++e) {
+-                            const GpuVertex &a = impl.scratch[t + static_cast<std::size_t>(e)];
+-                            const GpuVertex &b = impl.scratch[t + static_cast<std::size_t>((e + 1) % 3)];
+-                            if ((a.y - kBarRow) * (b.y - kBarRow) > 0.0f || a.y == b.y) continue;
+-                            const float x = a.x + (b.x - a.x) * (kBarRow - a.y) / (b.y - a.y);
+-                            if (x > 50.0f && x < 430.0f) {
+-                                sum += x;
+-                                ++hits;
++                    // The assist gauge's sweep strips (256 wide, y 257..267, four copies 19 units apart) are wider than the gauge
++                    // and their centres fall in the middle band, so they shrank toward the middle of the screen while the
++                    // gauge's own pieces shrank toward the side: a grey border past the gauge. They take the side of their left
++                    // edge, like the gauge.
++                    const bool gauge_strip = y0 >= 250.0f && y1 <= 272.0f && x1 - x0 > 150.0f;
++                    // The lifebar's row is y = 252; the assist gauge under it has its own masks, cut at y = 262 (they end
++                    // at 267, so they never cross 252): when nothing crosses the first row, try the second.
++                    for (const float bar_row : {252.0f, 262.0f}) {
++                        float sum = 0.0f;
++                        int hits = 0;
++                        for (std::size_t t = first; t < first + group; t += 3) {
++                            for (int e = 0; e < 3; ++e) {
++                                const GpuVertex &a = impl.scratch[t + static_cast<std::size_t>(e)];
++                                const GpuVertex &b = impl.scratch[t + static_cast<std::size_t>((e + 1) % 3)];
++                                if ((a.y - bar_row) * (b.y - bar_row) > 0.0f || a.y == b.y) continue;
++                                const float x = a.x + (b.x - a.x) * (bar_row - a.y) / (b.y - a.y);
++                                if (x > 50.0f && x < 430.0f) {
++                                    sum += x;
++                                    ++hits;
++                                }
+                             }
+                         }
++                        if (hits > 0) {
++                            centre_x = sum / static_cast<float>(hits);
++                            break;
++                        }
+                     }
+-                    if (hits > 0) centre_x = sum / static_cast<float>(hits);
++                    if (gauge_strip) centre_x = x0 < 160.0f ? 50.0f : 430.0f;
+                 }
+                 if (impl.hud_mode == kMarkerHudBeginPanelRight) {
+                     // Party roster panel: x 347..480, y 28..274 in the box trace; its middle is y = 151.
+@@ -8845,10 +8892,15 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                         // Not a digit. The skill-name message (layout kind 0xFE id 0x1FFE: a box x 176..304, y 8..40 and its
+                         // text, y 17..31, in the box trace) shrinks in place about the middle of the box; anything else in
+                         // these layouts stays as drawn.
+-                        if (y1 <= 46.0f && y0 >= 0.0f && centre_x > 120.0f && centre_x < 360.0f) {
++                        // Every piece of the box (end caps, middle bar, text) has to scale, or the caps stay at the old
++                        // width while the bar shrinks. The box is as wide as its text ("Class Change!" is wider than
++                        // "Cross-Slash"), its frame is taller than its bar, and it is not always at the very top, so
++                        // the test is a wide band and each piece scales vertically about its own centre line (all the
++                        // pieces share that line), horizontally about the middle of the screen.
++                        if (y1 <= 215.0f && y0 >= 0.0f && centre_x > 40.0f && centre_x < 440.0f) {  // the box also shows near y 110..126 (Holy Strength!) and 156..174 (ASSIST)
+                             for (std::size_t i = first; i < first + group; ++i) {
+                                 impl.scratch[i].x = 240.0f + (impl.scratch[i].x - 240.0f) * hud_scale;
+-                                impl.scratch[i].y = 24.0f + (impl.scratch[i].y - 24.0f) * hud_scale;
++                                impl.scratch[i].y = cy + (impl.scratch[i].y - cy) * hud_scale;
+                             }
+                         }
+                         continue;
+@@ -8856,6 +8908,36 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 }
+                 if (impl.hud_mode == kMarkerHudBeginBigLow && (x1 - x0 < 40.0f || y1 - y0 < 18.0f || (y0 + y1) * 0.5f < 200.0f))
+                     continue;
++                // The EX Finisher / Limit gauge: boxes at the middle height of the left and right screen edges (x 3..73,
++                // y 84..186 and x 408..478, y 148..240; they come with small arrows and ticks at the same edges). They are
++                // not the HUD's bottom row: scaled about the bottom they land 70 units lower than the rest of the effect.
++                // They stay as the game draws them.
++                // The EX gauge shares the layout: a bar along the very edge (x 0..16 on the left, from about 464 on the right, from y 175
++                // down to 277), whose top part also ends above y = 215, so the edge itself is not part of this.
++                if (impl.hud_mode == 0u && !impl.hud_anchor_left && y0 >= 60.0f && y1 <= 215.0f &&
++                    ((x1 > 17.0f && x1 <= 90.0f) || (x0 >= 390.0f && x0 < 464.0f))) continue;
++                // kMarkerHudBeginKeepBig: a layout the profile decided is left as the game draws it (the EX Finisher gauges and
++                // command inputs, drawn by layout kind 0 id 0xFFFF with many sprites: partly scaled they come apart).
++                // The status icons (64x32 textures in the captures, animated or not) are drawn by the same layout as the finisher's
++                // pieces, so a debuff would jump to its unscaled place under the gauge for as long as the finisher lasts: they keep
++                // scaling.
++                if (impl.hud_mode == kMarkerHudBeginKeepBig && !(call.texture.enabled && call.texture.width == 64u && call.texture.height == 32u))
++                    continue;
++                // The ASSIST bar (layout kind 1 id 0x0258, kMarkerHudBeginNotice): end caps, bar and edge lines are separate quads,
++                // and anchored one by one by their centres they come apart. All of them shrink about the middle of the screen,
++                // vertically about the centre line of the layout's first tall piece (an end cap).
++                if (impl.hud_mode == kMarkerHudBeginNotice) {
++                    if (!impl.corner_valid) {
++                        if (y1 - y0 < 18.0f) continue;
++                        impl.corner_valid = true;
++                        impl.corner_cy = (y0 + y1) * 0.5f;
++                    }
++                    for (std::size_t i = first; i < first + group; ++i) {
++                        impl.scratch[i].x = 240.0f + (impl.scratch[i].x - 240.0f) * hud_scale;
++                        impl.scratch[i].y = impl.corner_cy + (impl.scratch[i].y - impl.corner_cy) * hud_scale;
++                    }
++                    continue;
++                }
+                 // The health bars end at about x = 207 and start at about 273: the centre band must not cut
+                 // through them, or their pieces anchor to different places and come apart.
+                 const float anchor_x = impl.hud_anchor_left ? 0.0f : centre_x < 212.0f ? 0.0f : centre_x > 268.0f ? 480.0f : 240.0f;
+@@ -8988,11 +9070,102 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                     }
+                     continue;
+                 }
++                if (impl.hud_mode == kMarkerHudBeginBanner) {
++                    // "Cannot hold more skills..." bar at the top: only moved down, for a margin.
++                    if (y1 < 60.0f)
++                        for (std::size_t i = first; i < first + group; ++i) impl.scratch[i].y += 4.0f;
++                    continue;
++                }
++                if (impl.hud_mode == kMarkerHudBeginBox) {
++                    // Gate description box of the map: shrinks in place about its top-left corner (the first quad of
++                    // the layout is the frame). Anything at the right (the skill list and its description) is left as
++                    // the game draws it.
++                    if (!impl.box_valid) {
++                        impl.box_valid = true;
++                        impl.box_x0 = x0;
++                        impl.box_y0 = y0;
++                    }
++                    if (impl.box_x0 > 200.0f) {
++                        // Skill description / replace window at the right: the same scale as the gate box, put under the skill
++                        // list. Every quad of the box moves, whatever order the game draws its frame and fill in (a quad left
++                        // out is a frame torn from its fill); the skill list's own rows, small quads at the top right, are
++                        // the only ones left alone. The right edge of the box is x = 472 in the game; its top is the first
++                        // quad's top.
++                        if (x0 >= 400.0f && y1 <= 76.0f && x1 - x0 < 60.0f) {
++                            impl.list_bottom = std::max(impl.list_bottom, y1);
++                            continue;
++                        }
++                        if (!impl.box_frame_ok) {
++                            impl.box_frame_ok = true;
++                            impl.box_fy0 = y0;
++                        }
++                        const float nx = 474.0f - hud_side;
++                        const float ny = std::max(70.0f, impl.list_bottom + 4.0f) + 6.0f;  // under the list, a little down
++                        for (std::size_t i = first; i < first + group; ++i) {
++                            impl.scratch[i].x = nx + (impl.scratch[i].x - 472.0f) * hud_scale;
++                            impl.scratch[i].y = ny + (impl.scratch[i].y - impl.box_fy0) * hud_scale;
++                        }
++                        continue;
++                    }
++                    for (std::size_t i = first; i < first + group; ++i) {
++                        impl.scratch[i].x = impl.box_x0 + (impl.scratch[i].x - impl.box_x0) * hud_scale;
++                        impl.scratch[i].y = impl.box_y0 + (impl.scratch[i].y - impl.box_y0) * hud_scale;
++                    }
++                    continue;
++                }
++                if (impl.hud_mode == kMarkerHudBeginCorner) {
++                    // Chess / Open World corner HUD: shrinks about the screen corner it sits in, and the side and lift
++                    // space do not move it.
++                    const float cx = (x0 + x1) * 0.5f, cy = (y0 + y1) * 0.5f;
++                    // One anchor for the whole layout, taken at its first quad: pieces that belong together (a title, its
++                    // shadow and its glow underline; the rows of the inventory list) must shrink about the same point.
++                    if (!impl.corner_valid) {
++                        impl.corner_valid = true;
++                        impl.corner_cx = cx;
++                        impl.corner_cy = cy;
++                        impl.corner_ax = cx < 160.0f ? 0.0f : cx > 320.0f ? 480.0f : 240.0f;  // a centred piece (the Rift title) stays centred
++                        impl.corner_ay = (cx < 160.0f && cy >= 100.0f && cy <= 172.0f) ? cy : cy < 136.0f ? 0.0f : 272.0f;  // a piece at mid-height (the chain icon) stays at its height
++                    }
++                    float ax = impl.corner_ax, ay = impl.corner_ay;
++                    if ((std::fabs(cx - impl.corner_cx) > 140.0f || std::fabs(cy - impl.corner_cy) > 80.0f) && x1 - x0 < 60.0f && y1 - y0 < 30.0f) {
++                        // Text (the KP count) is drawn while the span of the layout before it is still open: a quad far from
++                        // the layout's first quad takes the corner it sits in, not the layout's. Only small quads (glyphs): a bar or a frame
++                        // (the KP bonus bar) always keeps the layout's anchor, or its ends would shrink toward different corners.
++                        ax = cx < 160.0f ? 0.0f : cx > 320.0f ? 480.0f : 240.0f;
++                        ay = cy < 136.0f ? 0.0f : 272.0f;
++                    }
++                    for (std::size_t i = first; i < first + group; ++i) {
++                        impl.scratch[i].x = ax + (impl.scratch[i].x - ax) * hud_scale;
++                        impl.scratch[i].y = ay + (impl.scratch[i].y - ay) * hud_scale;
++                    }
++                    if (cx > 400.0f && y1 < 120.0f) impl.list_bottom = std::max(impl.list_bottom, ay + (y1 - ay) * hud_scale);
++                    continue;
++                }
+                 for (std::size_t i = first; i < first + group; ++i) {
+                     impl.scratch[i].x = target_x + (impl.scratch[i].x - anchor_x_mode) * hud_scale;
+                     impl.scratch[i].y = bottom + (impl.scratch[i].y - anchor_y) * hud_scale;
+                 }
+             }
++            if (dumping) {
++                if (std::FILE *out = std::fopen("hud_quads.txt", "ab")) {
++                    for (std::size_t first = 0; first + group <= impl.scratch.size() && first + group <= before.size(); first += group) {
++                        float bx0 = 1e9f, bx1 = -1e9f, by0 = 1e9f, by1 = -1e9f, ax0 = 1e9f, ax1 = -1e9f, ay0 = 1e9f, ay1 = -1e9f;
++                        for (std::size_t i = first; i < first + group; ++i) {
++                            bx0 = std::min(bx0, before[i].x); bx1 = std::max(bx1, before[i].x);
++                            by0 = std::min(by0, before[i].y); by1 = std::max(by1, before[i].y);
++                            ax0 = std::min(ax0, impl.scratch[i].x); ax1 = std::max(ax1, impl.scratch[i].x);
++                            ay0 = std::min(ay0, impl.scratch[i].y); ay1 = std::max(ay1, impl.scratch[i].y);
++                        }
++                        std::fprintf(out, "f%llu span %u kind %u id 0x%04X mode 0x%02X tex 0x%08X %ux%u fmt %d prim %d blend %d/%d before (%.0f,%.0f)-(%.0f,%.0f) after (%.0f,%.0f)-(%.0f,%.0f)%s\n",
++                                     static_cast<unsigned long long>(impl.frames), static_cast<unsigned>(impl.hud_span), static_cast<unsigned>(impl.hud_kind), static_cast<unsigned>(impl.hud_id), static_cast<unsigned>(impl.hud_mode),
++                                     static_cast<unsigned>(call.texture.address & 0x0FFFFFFFu), static_cast<unsigned>(call.texture.width), static_cast<unsigned>(call.texture.height),
++                                     static_cast<int>(call.texture.format), static_cast<int>(call.primitive), call.blend.enabled ? static_cast<int>(call.blend.source_factor) : -1, call.blend.enabled ? static_cast<int>(call.blend.destination_factor) : -1,
++                                     bx0, by0, bx1, by1, ax0, ay0, ax1, ay1,
++                                     (bx0 == ax0 && by0 == ay0 && bx1 == ax1 && by1 == ay1) ? " UNCHANGED" : "");
++                    }
++                    std::fclose(out);
++                }
++            }
+         }
+         if (trace_roster && !impl.scratch.empty()) {
+             static unsigned trace_lines = 0;
+@@ -9076,6 +9249,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     // and the letters in the middle, so every quad takes the same shrink about the bottom centre and the same lift:
+     // Text > Subtitle size and Subtitle height.
+     if (call.through && call.texture.enabled && call.texture.format == TextureFormat::Clut4 && !impl.scratch.empty() &&
++        !impl.in_hud_layout &&  // text inside a marked layout (a notice, a box) is the HUD's, not a subtitle
+         (call.primitive == PrimitiveType::Sprites || ((call.primitive == PrimitiveType::TriangleStrip ||
+                                                        call.primitive == PrimitiveType::TriangleFan) && impl.scratch.size() == 6u)) &&
+         (call.texture.address & 0x0FFFFFFFu) < 0x09600000u && fonts::line_known(call.texture.address & 0x0FFFFFFFu)) {
+@@ -9090,8 +9264,12 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 y1 = std::max(y1, impl.scratch[i].y);
+             }
+             if (std::fabs(0.5f * (x0 + x1) - 240.0f) > 3.0f || y1 < 190.0f || y1 > 272.0f || x1 - x0 < 16.0f) continue;
++            // The line is centred at x = 240 and its four outline copies sit 1 pixel to each side of the letters: each quad
++            // shrinks about its own centre, so the copies keep their 1-pixel offset (shrunk to 0.8, the outline closes up
++            // into a blur).
++            const float own_centre = 0.5f * (x0 + x1);
+             for (std::size_t i = first; i < first + 6u; ++i) {
+-                impl.scratch[i].x = 240.0f + (impl.scratch[i].x - 240.0f) * size;
++                impl.scratch[i].x = own_centre + (impl.scratch[i].x - own_centre) * size;
+                 impl.scratch[i].y = 272.0f + (impl.scratch[i].y - 272.0f) * size - lift;
+             }
+         }
+diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
+index 35724d9..3c9a750 100644
+--- a/host/gpu/vulkan_renderer.hpp
++++ b/host/gpu/vulkan_renderer.hpp
+@@ -172,6 +172,11 @@ public:
+     // Only small quads (digits, 14 pixels or less) low on the screen scale: the HP numbers, in layouts that also
+     // hold message boxes and other text, which must be left alone.
+     static constexpr std::uint32_t kMarkerHudBeginSmallLow = 0x18u;
++    static constexpr std::uint32_t kMarkerHudBeginKeepBig = 0x1Eu;  // the layout is left as the game draws it (the profile picks it: the EX Finisher gauges and inputs)
++    static constexpr std::uint32_t kMarkerHudBeginNotice = 0x1Du;  // a centred message bar (ASSIST): shrinks about the middle of the screen
++    static constexpr std::uint32_t kMarkerHudBeginBanner = 0x1Cu;  // top message bar: moved down a little
++    static constexpr std::uint32_t kMarkerHudBeginBox = 0x1Bu;  // map description box: top-left, or under the skill list at the right
++    static constexpr std::uint32_t kMarkerHudBeginCorner = 0x1Au;  // scaled about the nearest screen corner, no side or lift space
+     // The Party roster's right panel (layouts 0x722a / 0x722e): shrunk to 85% about the middle of its right edge.
+     static constexpr std::uint32_t kMarkerHudBeginPanelRight = 0x19u;
+     static constexpr std::uint32_t kMarkerHudBeginRosterFrame = 0x16u;
+diff --git a/host/ui/font_menu.cpp b/host/ui/font_menu.cpp
+index 7d9edf0..4835429 100644
+--- a/host/ui/font_menu.cpp
++++ b/host/ui/font_menu.cpp
+@@ -204,7 +204,7 @@ void font_rows() {
+         const std::string subtitle_text = std::to_string(s.subtitle_size) + "%";
+         if (const int delta = choice_row("Subtitle size", subtitle_text,
+                                          options_for("text.subtitle_size", "Size of the subtitles in cutscenes and "
+-                                                                           "battles, on top of the Battle HUD size."))) {
++                                                                           "battles, on top of the HUD size."))) {
+             const int next = static_cast<int>(s.subtitle_size) + delta * 5;
+             s.subtitle_size = static_cast<std::uint32_t>(std::clamp(next, 50, 100));
+             settings::save();
+@@ -217,12 +217,12 @@ void font_rows() {
+             settings::save();
+         }
+     }
+-    section("Battle HUD");
++    section("HUD");
+     {
+         // Applied by the renderer on the next frame; no reload needed.
+         const std::string size_text = std::to_string(s.hud_scale) + "%";
+         if (const int delta = choice_row("HUD size", size_text,
+-                                         options_for("hud.scale", "Size of the character HUD in battle (gauges, "
++                                         options_for("hud.scale", "Size of the HUD (battle gauges, "
+                                                                   "portraits, BRV and HP numbers). 100% is the "
+                                                                   "game's own size."))) {
+             const int next = static_cast<int>(s.hud_scale) + delta * 5;
+-- 
+2.54.0.windows.1
+

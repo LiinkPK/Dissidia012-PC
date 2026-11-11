@@ -59,6 +59,17 @@ PROGRESS.json
 reasoning_trace.json
 discord.md
 Roadmap.*
+# Debug output (F10 traces, triggers, terminal captures) goes in logs/; these patterns catch strays at any level.
+/logs/
+logs/
+*_trigger
+*_trace.txt
+*_quads.txt
+text_trace*
+live.txt
+crash_report.txt
+*.dmp
+*.stackdump
 
 # --- Dependencies fetched at setup, never stored here --------------------------------------------------------------
 # PortableKit (TeamGDB, MIT) is cloned and patched by scripts/setup_portablekit.ps1 / .sh; only the patches live in

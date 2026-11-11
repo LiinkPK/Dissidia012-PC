@@ -10,6 +10,8 @@
 //
 // The switch is read once at start-up, so it takes effect at the next start: settings.ini's game.emendatus (the menu's Mods
 // page writes it), or D012_EMENDATUS=0/1 for a run.
+#include "../../third_party/dissidia012-pc/port/host/d012_decomp_harness.hpp"
+
 #include "hle/hle_common.hpp"
 #include "install/installer.hpp"
 #include "install/user_data.hpp"
@@ -165,6 +167,36 @@ std::shared_ptr<ext::FileFilter> serve(std::string_view path, std::uint32_t fd) 
     return std::make_shared<MenuOverlay>(fd);
 }
 
+// The Manikin outfit (MNKN). The mod's menu offers it as costume slot 12 of a character, but the object table has no row for
+// (character, 12), so the game's scan finds nothing and the battle falls back to costume 1 (the default skin). Costume 0 of
+// every character is its manikin (the _ZAKO row), so a scan for slot 12 that finds nothing answers with the scan for slot 0.
+// The menu's own check (is there a row for slot 12) then offers the outfit too. Only while the mod is on.
+constexpr std::uint32_t kObjectScan = 0x088470DCu;  // main: (character, costume, assist) -> row of objentry.bin, or 0
+constexpr std::uint32_t kManikinSlot = 12u;
+
+void run_object_scan(Guest *g, const d012::decomp::CallState &in, GuestRegs &out) {
+    GuestRegs regs{};
+    for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
+    d012::decomp::call_original(g, kObjectScan, regs);
+    if (regs.v0 == 0u && g_on && in.gpr[5] == kManikinSlot) {
+        GuestRegs manikin{};
+        for (int i = 0; i < 8; ++i) manikin.a[i] = in.gpr[4 + i];
+        manikin.a[1] = 0u;
+        d012::decomp::call_original(g, kObjectScan, manikin);
+        if (manikin.v0 != 0u) regs = manikin;
+    }
+    out = regs;
+}
+
+struct ScanInstall {
+    ScanInstall() {
+        static const d012::decomp::Override overrides[] = {
+            {kObjectScan, "emendatus_manikin_slot", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_object_scan},
+        };
+        d012::decomp::add_overrides(overrides, 1, true);
+    }
+} scan_install;
+
 #if defined(PORTABLEKIT_HAS_RENDERER)
 void save_setting(bool on) {
     try {
@@ -189,7 +221,7 @@ void restart_game() {
 
 void mod_rows() {
     namespace ui = portablekit::ui;
-    ui::section("Emendatus Mod");
+    ui::section("Emendatus");
     ui::RowOptions options;
     options.description = "The Emendatus balance and content mod, by the Emendatus community. Works with the US and EUR discs. The game restarts to apply it.";
     static bool wanted = read_setting();  // the setting as saved

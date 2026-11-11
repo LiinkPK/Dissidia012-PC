@@ -53,7 +53,7 @@ constexpr std::uint32_t kSceCtrlReadBufferPositive = 0x1F803938u;
 constexpr std::uint32_t kSelect = 0x0001u;
 constexpr std::uint32_t kHold = 0x00020000u;
 // The PSP buttons the battle shortcuts below press (SceCtrlButtons).
-constexpr std::uint32_t kDpadUp = 0x0010u, kDpadDown = 0x0040u, kL1 = 0x0100u, kR1 = 0x0200u;
+constexpr std::uint32_t kDpadUp = 0x0010u, kDpadDown = 0x0040u, kDpadLeft = 0x0080u, kL1 = 0x0100u, kR1 = 0x0200u;
 constexpr std::uint32_t kTriangle = 0x1000u, kCircle = 0x2000u, kCross = 0x4000u, kSquare = 0x8000u;
 // A battle camera must have taken input within this many pad reads for R3
 // to press SELECT (one read a frame).
@@ -432,7 +432,9 @@ void install(portablekit::HleRegistrar &hle) {
         //   R2 (right trigger) dash to the target    R1 + Triangle
         //   D-pad up          call an Assist         L1 + Circle
         //   D-pad down        call a BRV Assist      L1 + Square
-        // D-pad up and down no longer move the camera closer or away (the right stick does that); left and right still turn it.
+        //   D-pad left        manual Summon          R1 + Circle
+        // D-pad up and down no longer move the camera closer or away (the right stick does that), and D-pad left no longer
+        // turns it (the right stick does that too); D-pad right still turns it.
         if (live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             std::uint32_t add = 0u;
@@ -444,6 +446,7 @@ void install(portablekit::HleRegistrar &hle) {
                 std::uint32_t buttons = rt.memory().load32(at);
                 if ((buttons & kDpadUp) != 0u) buttons = (buttons & ~kDpadUp) | kL1 | kCircle;
                 if ((buttons & kDpadDown) != 0u) buttons = (buttons & ~kDpadDown) | kL1 | kSquare;
+                if ((buttons & kDpadLeft) != 0u) buttons = (buttons & ~kDpadLeft) | kR1 | kCircle;
                 rt.memory().store32(at, buttons | add);
             }
         }

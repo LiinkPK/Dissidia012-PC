@@ -15,6 +15,10 @@
 #include "settings/settings.hpp"
 #include "kernel/kernel.hpp"
 
+#if __has_include(<SDL3/SDL.h>)
+#include <SDL3/SDL.h>
+#endif
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -25,6 +29,7 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -62,10 +67,10 @@ constexpr HudPiece kPieces[] = {
     // Found in battle captures: these draw the BRV numbers and a bottom strip.
     // Found in the second round of captures: the summon stone and the AP Chance and Save Replay messages.
     {1, 0x0204, true, "Summon stone frame (x 311..334, y 223..245 in a capture)"},
-    {0, 0xFFFF, true, "Buff bar and shield icon over the HP bar (x 58..171, y 208..250) and the summon stone icon (x 312..331)"},
+    {0, 0xFFFF, true, "Status icons over the HP bar and, while an EX Finisher input is up (layout 0x0248 has a sprite), that finisher's gauge or command input (left unscaled, see mark_layout)"},
     {1, 0x0224, true, "AP Chance (bottom right) and RULES (upper right, scaled about the top right)", false, 0x14},
     {1, 0x0254, true, "Save Replay bar and its text: scaled about the left edge, keeping its height", false, 0x13},
-    {0xFE, 0x1002, true, "The HP numbers (6999 / 1000 at the bottom): a layout without a resource, 2 to 24 slots behind 0x0256"},
+    {0xFE, 0x1002, true, "The HP numbers (6999 / 1000 at the bottom): a layout without a resource, 2 to 24 slots behind 0x0256. After a few battles the skill-name message sits at that distance too (frame, caps and text, x 177..303), so it takes the same mode as 0x1010..0x1FFE: digits low on the screen, and the message as one piece", false, 0x18},
     // These also draw message boxes ("Cross-Slash", "Skip cutscene?"), so only their small digits low on the screen scale.
     {0xFE, 0x1010, true, "Resource-less layout 25..64 slots behind 0x0256: only digits low on the screen", false, 0x18},
     {0xFE, 0x1020, true, "Resource-less layout ahead of 0x0256: only digits low on the screen", false, 0x18},
@@ -89,7 +94,26 @@ constexpr HudPiece kPieces[] = {
     // for the scaling to move here.
     {1, 0x0208, true, "No sprites, hidden with the HUD (drawn by a callback of its own): part of the HUD"},
     {1, 0x0212, true, "Hidden with the HUD, and 2 sprites that come and go on their own at times: part of the HUD"},
-    {1, 0x0258, true, "No sprites, hidden with the HUD (drawn by a callback of its own): part of the HUD"},
+    {1, 0x0258, true, "The ASSIST bar when an assist is called (a sprite at the middle of the screen then; none otherwise)", false, 0x1D},
+    // Story Mode Chess and Open World screens: the corner HUD (found with the layout log). Only while that HUD is
+    // on screen (g_corner_hud); the map splash uses the same ids at a large sprite scale.
+    {4, 0x1208, true, "Chess / Open World corner HUD", false, 0x1A}, {4, 0x120A, true, "Chess / Open World corner HUD", false, 0x1A},
+    {4, 0x120C, true, "Chess / Open World corner HUD", false, 0x1A}, {4, 0x120E, true, "Map description box", false, 0x1B},
+    {4, 0x1212, true, "Chess / Open World corner HUD", false, 0x1A}, {4, 0x1214, true, "Chess / Open World corner HUD", false, 0x1A},
+    {4, 0x121A, true, "Chess / Open World corner HUD", false, 0x1A}, {4, 0x121C, true, "Chess / Open World corner HUD", false, 0x1A},
+    {4, 0x122C, true, "Chess / Open World corner HUD", false, 0x1A},
+    {36, 0x8A08, true, "Open World corner HUD", false, 0x1A}, {36, 0x8A0A, true, "Open World corner HUD", false, 0x1A},
+    {36, 0x8A0C, true, "Open World corner HUD", false, 0x1A}, {36, 0x8A12, true, "Open World corner HUD", false, 0x1A},
+    {36, 0x8A14, true, "Open World corner HUD", false, 0x1A}, {36, 0x8A16, true, "Open World corner HUD", false, 0x1A},
+    {36, 0x8A1E, true, "Open World corner HUD", false, 0x1A},
+    // Kind 4 0x1216 (Chess only: the KP gained banner with its "2 KP" and the chain icon) is left as the game draws it: the
+    // banner is a band across the whole screen made of several quads, and scaling them about a corner broke it apart.
+    // The map's description boxes (gate / skill): drawn by one layout whose place changes (left or right).
+    {4, 0x1210, true, "Map description box (text part)", false, 0x1B}, {36, 0x8A10, true, "Map description box", false, 0x1B},
+    {36, 0x8A0E, true, "Map description box", false, 0x1B},
+    // The top message bar ("Cannot hold more skills. Select a skill to discard."): moved down a little.
+    {36, 0x8A00, true, "Top message bar", false, 0x1C}, {36, 0x8A18, true, "Top message bar", false, 0x1C},
+    {4, 0x1200, true, "Top message bar", false, 0x1C}, {4, 0x1218, true, "Top message bar", false, 0x1C},
     // Never scaled.
     {1, 0x0222, false, "The lock-on cursor: pinned to the world, not to the screen"},
     {1, 0x0226, false, "3 sprites at the screen centre (240,136): a centre banner, shown while the HUD is"},
@@ -166,13 +190,27 @@ int roster_role(std::uint8_t kind, std::uint16_t id) {
     return 0;
 }
 
+// What the menu manager is drawing, set at the start of each draw: the battle HUD (a kind 1 layout 0x0218 or 0x0256
+// is drawn) or the Chess / Open World corner HUD. Resource-less layouts (kind 0 and 0xFE) also draw Story Mode
+// dialogue, the Skip Cutscene menu and the Limit bar outside battle, so they only scale in battle; the corner
+// layouts (kind 4 and 36) only while their sprites are at normal size (the map splash draws them at 7x).
+bool g_battle_hud = false;
+bool g_corner_hud = false;
+bool g_limit_prompt = false;  // an EX Finisher input is up (kind 1 layout 0x0248 has a sprite on screen)
+
+bool piece_active(std::uint8_t kind) {
+    if (kind == 0u || kind == 0xFEu) return g_battle_hud;
+    if (kind == 4u || kind == 36u) return g_corner_hud;
+    return true;
+}
+
 // Is `layout` one of the scaled pieces? Looked up by its resource, so it holds across runs.
 bool is_hud_layout(Guest *g, std::uint32_t layout) {
     std::uint8_t kind;
     std::uint16_t id;
     layout_name(g, layout, kind, id);
     for (const HudPiece &piece : kPieces)
-        if (piece.kind == kind && piece.id == id) return piece.scale && !piece.left;
+        if (piece.kind == kind && piece.id == id) return piece.scale && !piece.left && piece_active(kind);
     return false;
 }
 
@@ -182,7 +220,7 @@ std::uint8_t layout_mode(Guest *g, std::uint32_t layout) {
     std::uint16_t id;
     layout_name(g, layout, kind, id);
     for (const HudPiece &piece : kPieces)
-        if (piece.kind == kind && piece.id == id) return piece.scale ? piece.mode : 0u;
+        if (piece.kind == kind && piece.id == id) return piece.scale && piece_active(kind) ? piece.mode : 0u;
     // The Story Mode party panel (kind 30) is known by the low 13 bits of its ids only.
     for (const HudPiece &piece : kPieces)
         if (piece.mode == 0x19u && piece.kind == kind && (piece.id & 0x1FFFu) == (static_cast<unsigned>(id) & 0x1FFFu)) return piece.mode;
@@ -245,6 +283,11 @@ constexpr std::uint32_t kMarkerHudBeginBigLow = 0x00A50015u;
 constexpr std::uint32_t kMarkerHudBeginRosterFrame = 0x00A50016u;
 constexpr std::uint32_t kMarkerHudBeginSmallLow = 0x00A50018u;
 constexpr std::uint32_t kMarkerHudBeginPanelRight = 0x00A50019u;
+constexpr std::uint32_t kMarkerHudBeginCorner = 0x00A5001Au;
+constexpr std::uint32_t kMarkerHudBeginBox = 0x00A5001Bu;
+constexpr std::uint32_t kMarkerHudBeginBanner = 0x00A5001Cu;
+constexpr std::uint32_t kMarkerHudBeginNotice = 0x00A5001Du;
+constexpr std::uint32_t kMarkerHudBeginKeepBig = 0x00A5001Eu;
 constexpr std::uint32_t kMarkerHudBeginRosterHand = 0x00A50017u;
 constexpr std::uint32_t kCallbackLayoutDraw = 0x088DB318u;  // FUN_088DB318(layout, index)
 struct MarkState {
@@ -274,6 +317,29 @@ void mark_end(Guest *g) {
     MarkState &state = mark_state();
     if (state.open) emit_word(g, kMarkerHudEnd);
     state.open = false;
+}
+
+std::uint32_t layout_kind_for_marker(Guest *g, std::uint32_t layout) {
+    std::uint8_t kind;
+    std::uint16_t id;
+    layout_name(g, layout, kind, id);
+    return kind;
+}
+std::uint32_t layout_id_for_marker(Guest *g, std::uint32_t layout) {
+    std::uint8_t kind;
+    std::uint16_t id;
+    layout_name(g, layout, kind, id);
+    return id;
+}
+
+// Sprites of a layout that are on screen (scale above 0): the sprite chain starts at the layout's first word and is linked
+// through +0x3C.
+unsigned active_sprites(Guest *g, std::uint32_t layout) {
+    unsigned count = 0;
+    const std::uint32_t first = in_guest(g, layout, 0x30u) ? g_ld32(g, layout) : 0u;
+    for (std::uint32_t s = first, n = 0; s != 0u && n < 64u && in_guest(g, s, 0x40u); s = g_ld32(g, s + 0x3Cu), ++n)
+        if (load_float(g, s + 0x18u) > 0.0f) ++count;
+    return count;
 }
 
 // A call of the layout draw functions for `layout`: the first one for a layout ends the last one's span and,
@@ -311,10 +377,20 @@ void mark_layout(Guest *g, std::uint32_t layout) {
     std::uint16_t role_id;
     layout_name(g, layout, role_kind, role_id);
     const bool is_roster_layout = roster_role(role_kind, role_id) != 0;
+    // Layout kind 0 id 0xFFFF draws the status icons over the HP bars (also animated ones, with many quads) and, while an EX
+    // Finisher input is up, that finisher's gauge or command input (every character's own). During a finisher it is left as the
+    // game draws it; the rest of the time it scales.
+    if (role_kind == 0u && role_id == 0xFFFFu && mode_final == 0u && !left && g_limit_prompt) mode_final = 0x1Eu;
     const bool scaled = left || mode_final != 0u || (!is_roster_layout && markers_wanted() && is_hud_layout(g, layout));
     if (!scaled) return;
-    emit_word(g, mode_final == 0x13u ? kMarkerHudBeginLeftMid : mode_final == 0x14u ? kMarkerHudBeginRightSplit : mode_final == 0x15u ? kMarkerHudBeginBigLow : mode_final == 0x16u ? kMarkerHudBeginRosterFrame : mode_final == 0x17u ? kMarkerHudBeginRosterHand : mode_final == 0x18u ? kMarkerHudBeginSmallLow : mode_final == 0x19u ? kMarkerHudBeginPanelRight : left ? kMarkerHudBeginLeft : kMarkerHudBegin);
+    emit_word(g, mode_final == 0x13u ? kMarkerHudBeginLeftMid : mode_final == 0x14u ? kMarkerHudBeginRightSplit : mode_final == 0x15u ? kMarkerHudBeginBigLow : mode_final == 0x16u ? kMarkerHudBeginRosterFrame : mode_final == 0x17u ? kMarkerHudBeginRosterHand : mode_final == 0x18u ? kMarkerHudBeginSmallLow : mode_final == 0x19u ? kMarkerHudBeginPanelRight : mode_final == 0x1Au ? kMarkerHudBeginCorner : mode_final == 0x1Bu ? kMarkerHudBeginBox : mode_final == 0x1Cu ? kMarkerHudBeginBanner : mode_final == 0x1Du ? kMarkerHudBeginNotice : mode_final == 0x1Eu ? kMarkerHudBeginKeepBig : left ? kMarkerHudBeginLeft : kMarkerHudBegin);
     state.open = true;
+    // For the quad dump (hud_quads.txt): which layout this span is. Two extra markers, only while tracing.
+    static const bool tracing = std::getenv("D012_TRACE_HUD_LAYOUTS") != nullptr;
+    if (tracing) {
+        emit_word(g, 0x00A50000u | (0x3000u + layout_kind_for_marker(g, layout)));
+        emit_word(g, 0x00A50000u | (0x4000u + (layout_id_for_marker(g, layout) & 0x3FFFu)));
+    }
 }
 
 void run_callback_layout_draw(Guest *g, const CallState &in, GuestRegs &out) {
@@ -443,8 +519,93 @@ void order_roster_table(Guest *g) {
         for (unsigned c = 0; c < 6u; ++c) g_st16(g, kTable + r * 12u + c * 2u, static_cast<std::uint16_t>(sorted[r][c]));
 }
 
+// D012_TRACE_HUD_LAYOUTS=1: each press of F10 appends one block to d012_hud_layouts.log (the file is never rewritten)
+// with the layouts the menu manager draws at that moment: kind, id, whether kPieces scales it, and the first sprite's
+// position and scale. To name what a screen (a Story Mode dialogue, a splash image, the Skip Cutscene menu) is made of,
+// press F10 while it is on screen.
+void trace_layouts(Guest *g, std::uint32_t manager) {
+    static const bool enabled = std::getenv("D012_TRACE_HUD_LAYOUTS") != nullptr;
+    static unsigned frame = 0, blocks = 0;
+    static bool was_down = false;
+    ++frame;
+    if (!enabled) return;
+    bool down = false;
+#if __has_include(<SDL3/SDL.h>)
+    if (const bool *keys = SDL_GetKeyboardState(nullptr)) down = keys[SDL_SCANCODE_F10];
+#endif
+    const bool pressed = down && !was_down;
+    was_down = down;
+    if (!pressed || !in_guest(g, manager, 0x28u)) return;
+    std::string text;
+    char line[200];
+    unsigned layouts = 0;
+    for (std::uint32_t layout = g_ld32(g, manager + 0x24u); layout != 0u && layouts < 512u && in_guest(g, layout, 0x30u);
+         layout = g_ld32(g, layout + 0x24u), ++layouts) {
+        const std::uint8_t flags = g_ld8(g, layout + 0x14u);
+        if ((flags & 1u) == 0u || (flags & 0x2Cu) != 0u) continue;  // the draw's own test: not drawn
+        std::uint8_t kind;
+        std::uint16_t id;
+        layout_name(g, layout, kind, id);
+        bool scaled = false;
+        for (const HudPiece &piece : kPieces)
+            if (piece.kind == kind && piece.id == id && piece.scale) scaled = true;
+        float x = 0, y = 0, sx = 0, sy = 0;
+        const std::uint32_t sprite = g_ld32(g, layout);
+        if (sprite != 0u && in_guest(g, sprite, 0x40u)) {
+            x = load_float(g, sprite + 0x10u);
+            y = load_float(g, sprite + 0x14u);
+            sx = load_float(g, sprite + 0x18u);
+            sy = load_float(g, sprite + 0x1Cu);
+        }
+        std::snprintf(line, sizeof line, "  kind %u id 0x%04X %s mode 0x%02X sprites %u sprite0 (%.0f,%.0f) scale (%.2f,%.2f)\n",
+                      static_cast<unsigned>(kind), static_cast<unsigned>(id), scaled ? "SCALED" : "-     ",
+                      static_cast<unsigned>(layout_mode(g, layout)), active_sprites(g, layout), x, y, sx, sy);
+        text += line;
+    }
+    ++blocks;
+    std::error_code logs_error;
+    std::filesystem::create_directories("logs", logs_error);
+    if (std::FILE *out = std::fopen("logs/d012_hud_layouts.log", "ab")) {
+        std::fprintf(out, "snapshot %u, frame %u (%u layouts in the list)\n%s", blocks, frame, layouts, text.c_str());
+        std::fclose(out);
+    }
+}
+
+void detect_scene(Guest *g, std::uint32_t manager) {
+    g_battle_hud = false;
+    g_corner_hud = false;
+    g_limit_prompt = false;
+    if (!in_guest(g, manager, 0x28u)) return;
+    unsigned layouts = 0;
+    for (std::uint32_t layout = g_ld32(g, manager + 0x24u); layout != 0u && layouts < 512u && in_guest(g, layout, 0x30u);
+         layout = g_ld32(g, layout + 0x24u), ++layouts) {
+        const std::uint8_t flags = g_ld8(g, layout + 0x14u);
+        if ((flags & 1u) == 0u || (flags & 0x2Cu) != 0u) continue;
+        if (g_ld32(g, layout + 0x0Cu) == 0u) continue;
+        std::uint8_t kind;
+        std::uint16_t id;
+        layout_name(g, layout, kind, id);
+        if (kind == 1u && (id == 0x0218u || id == 0x0256u)) g_battle_hud = true;
+        // Layout kind 1 id 0x0248 has a sprite on screen (at 459,176 in captures) only while an EX Finisher input is up (every
+        // character's own: mash, commands): in all the captures of the finishers and in none of the ordinary battles.
+        if (kind == 1u && id == 0x0248u) {
+            const std::uint32_t sprite = g_ld32(g, layout);
+            if (sprite != 0u && in_guest(g, sprite, 0x40u) && load_float(g, sprite + 0x10u) > 0.0f) g_limit_prompt = true;
+        }
+        if ((kind == 4u && id == 0x120Cu) || (kind == 36u && id == 0x8A0Cu)) {
+            const std::uint32_t sprite = g_ld32(g, layout);
+            if (sprite != 0u && in_guest(g, sprite, 0x40u)) {
+                const float sx = load_float(g, sprite + 0x18u);
+                if (sx > 0.0f && sx < 2.0f) g_corner_hud = true;
+            }
+        }
+    }
+}
+
 void run_menu_draw(Guest *g, const CallState &in, GuestRegs &) {
     mark_state() = MarkState{};
+    detect_scene(g, in.gpr[4]);
+    trace_layouts(g, in.gpr[4]);
     order_roster_table(g);
     g_roster_active = false;
     std::vector<RosterSaved> roster_saved;
@@ -479,6 +640,22 @@ void run_sprite_draw(Guest *g, const CallState &in, GuestRegs &out) {
     out = regs;
 }
 
+// D012_TRACE_COSTUME=1: appends to d012_costume.log every call of the functions that pick a fighter's object by (character,
+// costume, assist), with the arguments and the answer, to see what costume number the menu hands the battle (the Emendatus
+// Manikin outfit is costume 0). 0x088FB934 is the battle setup's, 0x088470DC the scan, 0x088D5E0C the menu's costume mask.
+template <std::uint32_t Address>
+void run_trace(Guest *g, const CallState &in, GuestRegs &out) {
+    GuestRegs regs{};
+    for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
+    d012::decomp::call_original(g, Address, regs);
+    out = regs;
+    if (std::FILE *log = std::fopen("d012_costume.log", "ab")) {
+        std::fprintf(log, "function 0x%08X a0 %u a1 %u a2 %u -> %d\n", Address, in.gpr[4], in.gpr[5], in.gpr[6],
+                     static_cast<int>(regs.v0));
+        std::fclose(log);
+    }
+}
+
 struct Install {
     Install() {
         static const d012::decomp::Override overrides[] = {
@@ -489,6 +666,15 @@ struct Install {
              d012::decomp::Returns::Nothing, &run_callback_layout_draw},
         };
         d012::decomp::add_overrides(overrides, sizeof overrides / sizeof overrides[0], true);
+        if (std::getenv("D012_TRACE_COSTUME") != nullptr) {
+            static const d012::decomp::Override costume[] = {
+                {0x088FB934u, "trace_lookup_fb934", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_trace<0x088FB934u>},
+                {0x088D5E0Cu, "trace_mask_d5e0c", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_trace<0x088D5E0Cu>},
+                {0x088F98E0u, "trace_setup_f98e0", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_trace<0x088F98E0u>},
+            };
+            d012::decomp::add_overrides(costume, 3, true);
+            std::fprintf(stderr, "[costume] tracing costume lookups into d012_costume.log\n");
+        }
     }
 } install;
 

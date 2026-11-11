@@ -27,7 +27,7 @@ $playerFolders = "data\mods", "data\ms0\PSP\GAME", "data\ms0\PSP\SAVEDATA", "gam
 $localFiles = "data\settings.ini", "data\pipeline_cache.bin", "data\pipeline_keys.bin"
 # The logs and the screenshots are the player's own (running the game from the build folder makes data\logs, F9 makes
 # data\screenshots): they never ship.
-$localFolders = "data\logs", "data\screenshots"
+$localFolders = "data\logs", "data\screenshots", "logs"
 # Test leftovers and old copies that must not ship.
 $junk = "*.stale*", "*.old", "*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak",
     # what the test switches write beside the exe: traces, crash dumps and trigger files

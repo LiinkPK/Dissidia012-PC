@@ -596,3 +596,23 @@ Known problems
 - The Battle HUD shrink (it scales all 2D drawn after the last 3D draw) also hits story mode's dialogue boxes, the "Skip cutscene?" prompt, the portrait banners and images in cutscenes.
 - The subtitle rule can also catch other centred text near the bottom of the screen.
 - Still untested: the Text > Size and Subtitle rows in the menu on a clean install; HD textures that load instantly (Session 20).
+
+## Session 23 (10/11/2026 to 11/11/2026), release v1.0.6
+
+HUD scaling now stops hitting the screens it should not touch, and the screens it should scale are named by the layout or draw that makes them (never by screen position).
+- **Story Mode:** the resource-less layouts (dialogue, splash images, Skip Cutscene, Limit effects) scale only while a battle HUD layout is on screen (`g_battle_hud`, `detect_scene` in `d012_hud_layout.cpp`).
+- **Chess and Open World:** corner HUD layouts (kind 4 ids 0x1208..0x122C and kind 36 ids 0x8A08..0x8A1E) have the new corner mode (0x1A): one anchor per layout, taken at its first quad, with the three horizontal zones left / centre / right; small glyphs far from that anchor take their own corner (the KP count). The gate description box (0x120E / 0x8A0E, mode 0x1B) shrinks in place; the "Cannot hold more skills" bar (mode 0x1C) moves down 4. The post-battle "2 KP" band (kind 4 0x1216) is left as the game draws it.
+- **Notices:** the skill-name message scales as one piece wherever it sits (mode 0x18 now also on 0x1002: after a few battles the message's layout sits at the slot distance the HP numbers have); the ASSIST bar is layout kind 1 0x0258 (mode 0x1D, vertical centre line from its first tall quad).
+- **Gauges:** the assist gauge's big masks are anchored by where their edges cross y = 252, then y = 262; its 256-wide sweep strips take the side of their left edge. The EX Finisher gauges and command inputs are drawn by kind 0 0xFFFF while kind 1 layout 0x0248 has a sprite on screen (mode 0x1E: left as drawn); 64x32 textures (buffs and debuffs, animated or not) keep scaling.
+- **Subtitles:** the rule ignores text inside a marked HUD layout; each outline copy shrinks about its own centre so the 1-pixel offset stays.
+- **Emendatus MNKN:** the menu offers the Manikin outfit as costume slot 12 and the object table has no such row, so the lookup fell back to costume 1. `d012_emendatus.cpp` wraps the scan (main 0x088470DC): while the mod is on, a miss for slot 12 answers with the scan for slot 0, the manikin row.
+- **Battle shortcut:** D-pad Left is manual Summon (R1 + Circle) in `d012_camera.cpp` (D-pad left no longer turns the camera; the right stick and D-pad right do).
+- The settings section is named `HUD` (keys unchanged). The renderer changes are `patches/portablekit/0101-*.patch`.
+
+Debug tools (off unless asked for)
+- `D012_TRACE_HUD_LAYOUTS=1`: F10 appends the layouts the menu manager draws (kind, id, sprites, first sprite) to `d012_hud_layouts.log` and writes one frame of what the HUD rule did to each piece (layout kind and id, texture size, bounds before and after) to `hud_quads.txt`. Line N of the quads matches the Nth scaled layout of the log.
+- `D012_TRACE_COSTUME=1`: `d012_costume.log` with the calls of the object lookups 0x088FB934 / 0x088D5E0C / 0x088F98E0.
+
+Untested at the time of writing
+- Skill description box at the right (shrunk, under the skill list, follows a sixth skill); the EX Finisher input of every character (only Squall's and one mash gauge were captured); the subtitle outline below 100% (vertical offset still shrinks).
+- Position-based rules still in the renderer (to replace by layout rules when their layouts are found): the edge pieces left alone in `kMarkerHudBegin` spans (EX / mash), the assist sweep strips' side, and the skill description box area.
