@@ -143,12 +143,14 @@ private:
     std::size_t count_;
 };
 
-// PACKAGE.BIN with the mod's edits over the disc's bytes, then the new character's data after the disc's own end.
+// PACKAGE.BIN with the mod's edits over the disc's bytes, then the new character's data. The patched game reads it at the
+// offsets of the US layout (kPackageSizeUS and on), so on the EUR disc, whose file is longer, the part of it that falls
+// over the EUR file's own last bytes is not reachable; the disc's own bytes win there.
 class PackageFile final : public ext::FileFilter {
 public:
     PackageFile(std::uint32_t fd, std::uint64_t disc_size, const EmRegion *regions, std::size_t count)
         : fd_(fd), disc_size_(disc_size), regions_(regions), count_(count), assets_(assets_path(), std::ios::binary) {}
-    std::uint64_t size() const override { return disc_size_ + kEmTailSize; }
+    std::uint64_t size() const override { return kPackageSizeUS + kEmTailSize; }
     std::size_t read(std::uint64_t offset, std::uint8_t *destination, std::size_t length) override {
         if (offset >= size()) return 0u;
         length = static_cast<std::size_t>(std::min<std::uint64_t>(length, size() - offset));
@@ -162,7 +164,7 @@ public:
         if (done < length) {
             const std::lock_guard<std::mutex> lock(mutex_);
             assets_.clear();
-            assets_.seekg(static_cast<std::streamoff>(offset + done - disc_size_));
+            assets_.seekg(static_cast<std::streamoff>(offset + done - kPackageSizeUS));
             assets_.read(reinterpret_cast<char *>(destination + done), static_cast<std::streamsize>(length - done));
             done += static_cast<std::size_t>(std::max<std::streamsize>(assets_.gcount(), 0));
         }

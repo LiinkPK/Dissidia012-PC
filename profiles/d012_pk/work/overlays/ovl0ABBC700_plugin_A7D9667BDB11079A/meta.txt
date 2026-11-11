@@ -1,0 +1,6 @@
+base=0x0ABBC700
+name=plugin
+size=16384
+code_size=2080
+hash=0xA7D9667BDB11079A
+source=PLUGIN.ELF
