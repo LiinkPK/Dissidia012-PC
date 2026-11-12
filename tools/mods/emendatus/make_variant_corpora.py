@@ -34,6 +34,7 @@ import patch_roster  # noqa: E402
 
 SECTOR = 2048
 MAIN_BASE = "0x08804000"
+MOD_MENU_HASH = 0x56F41D05F1B93EE9  # the identity hash of the mod's menu overlay corpus (its first 4 KB)
 MAIN_CODE = "0x089CB080-0x089CB0C8"  # the mod's code cave in the executable (the patched runs end at 0x089CB0C6)
 HASH = re.compile(r"(ovl[0-9A-F]{8}_[a-z]+_)[0-9A-F]{16}")
 
@@ -249,6 +250,7 @@ def main():
         # 2. the overlays: battle as it is, menu with its added code named as code
         new = staging / "new"
         taken = taken_hashes(options.work / "overlays")
+        taken.discard(MOD_MENU_HASH)  # this mod's own menu corpus, made by an earlier run: made again, not a clash
         battle_elf = with_memsz_of_filesz(elves["OVL_BATTLE_APP.ELF"], staging / "patched" / "OVL_BATTLE_APP.ELF")
         stock_battle = staging / "stock" / "OVL_BATTLE_APP.ELF"
         stock_battle.parent.mkdir(exist_ok=True)

@@ -18899,6 +18899,14 @@ L_08A85080:
     ctx.gpr[5] = (ctx.gpr[5] + static_cast<std::uint32_t>(2));
     goto L_08A85084;
 L_08A85084:
+    if (!g_d012_grid_party && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21
+        const std::uint32_t list = aot_mem.aot_load32(ctx.gpr[19] + 32u);
+        if (list != 0u && aot_mem.aot_load32(list + (ctx.gpr[18] - 1u) * 8u) != 0x21u) {
+            aot_mem.aot_store32(list + ctx.gpr[18] * 8u, 0x21u);
+            aot_mem.aot_store32(list + ctx.gpr[18] * 8u + 4u, aot_mem.aot_load32(list + (ctx.gpr[18] - 1u) * 8u + 4u));
+            ctx.gpr[18] = ctx.gpr[18] + 1u;
+        }
+    }
     ctx.gpr[22] = (0u | 0u);
     goto L_08A85088;
 L_08A85088:
@@ -19316,6 +19324,14 @@ L_08A85228:
     goto L_08A8522C;
 L_08A8522C:
     // Two rows of 16 (the game split 6 / 10 / 10 / 6): the first row's cells are positions 0..15, the rest 16..31.
+    {
+        const std::uint32_t w = aot_mem.aot_load32(ctx.gpr[19] + 40u), list = aot_mem.aot_load32(ctx.gpr[19] + 32u);
+        std::fprintf(stderr, "[roster-mod] cells counted %u, list %08X count %u ids:", ctx.gpr[22], list, ctx.gpr[18]);
+        for (std::uint32_t i = 0; i < ctx.gpr[18] && i < 40u; ++i) std::fprintf(stderr, " %d", static_cast<int>(aot_mem.aot_load32(list + i * 8u)));
+        std::fprintf(stderr, "; 08B24328:");
+        for (std::uint32_t i = 0; i < 8u; ++i) std::fprintf(stderr, " %08X", aot_mem.aot_load32(0x08B24328u + i * 4u));
+        std::fprintf(stderr, " (W %08X)\n", w);
+    }
     if (!g_d012_grid_party) {
         if (ctx.gpr[22] >= 17u) { ctx.gpr[16] = 16u; ctx.gpr[22] = ctx.gpr[22] - 16u; }
         else { ctx.gpr[16] = ctx.gpr[22]; ctx.gpr[22] = 0u; }

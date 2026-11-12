@@ -15,6 +15,9 @@ it expects it, so a regenerated corpus never silently loses the roster.
 from pathlib import Path
 
 
+NL = chr(10)
+
+
 def replace_once(text, old, new, what):
     if text.count(old) != 1:
         raise SystemExit(f"patch_roster: {what}: expected one occurrence, found {text.count(old)}")
@@ -35,7 +38,7 @@ def apply(corpus):
     text = replace_once(
         text, "L_08A7FBB8:\n    ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);",
         "L_08A7FBB8:\n"
-        "    if (!g_d012_grid_party && ctx.gpr[16] == 33u) {  // the mod's new character: the empty 17th cell of the first row\n"
+        "    if (!g_d012_grid_party && ctx.gpr[17] == 33u) {  // the mod's new character: the empty 17th cell of the first row\n"
         "        ctx.gpr[5] = 16u;\n"
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
         "        { static bool traced = false; if (!traced) { traced = true; std::fprintf(stderr, \"[roster-mod] position 33 -> slot 16\\n\"); } }\n"
@@ -63,5 +66,32 @@ def apply(corpus):
     text = replace_once(text, "aot_mem.aot_load16(0x08A864D0u + d_r * 12u + 8u)", "aot_mem.aot_load16(0x0BFEB200u + d_r * 12u + 8u)", "party description lookup")
     text = replace_once(text, "d_id >= 1 && d_id <= 0x20;", "d_id >= 1 && d_id <= 0x21;", "description id range")
     text = replace_once(text, "d_r < 32u && d_member >= 1", "d_r < 34u && d_member >= 1", "party description rows")
+    # the select screen builds its cells from a list of character ids (W+32, 8 bytes each, count in s2); the stock list stops at
+    # id 32, so the new character's row (33, id 0x21) is never counted. Append her before the count.
+    text = replace_once(
+        text, "L_08A85084:" + NL + "    ctx.gpr[22] = (0u | 0u);",
+        NL.join([
+            "L_08A85084:",
+            "    if (!g_d012_grid_party && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21",
+            "        const std::uint32_t list = aot_mem.aot_load32(ctx.gpr[19] + 32u);",
+            "        if (list != 0u && aot_mem.aot_load32(list + (ctx.gpr[18] - 1u) * 8u) != 0x21u) {",
+            "            aot_mem.aot_store32(list + ctx.gpr[18] * 8u, 0x21u);",
+            "            aot_mem.aot_store32(list + ctx.gpr[18] * 8u + 4u, aot_mem.aot_load32(list + (ctx.gpr[18] - 1u) * 8u + 4u));",
+            "            ctx.gpr[18] = ctx.gpr[18] + 1u;",
+            "        }",
+            "    }",
+            "    ctx.gpr[22] = (0u | 0u);"]), "character list")
+    # trace: how many cells the builder counted, and the list of characters it picked them from
+    text = replace_once(
+        text, "    if (!g_d012_grid_party) {\n        if (ctx.gpr[22] >= 17u) {",
+        "    {\n"
+        "        const std::uint32_t w = aot_mem.aot_load32(ctx.gpr[19] + 40u), list = aot_mem.aot_load32(ctx.gpr[19] + 32u);\n"
+        "        std::fprintf(stderr, \"[roster-mod] cells counted %u, list %08X count %u ids:\", ctx.gpr[22], list, ctx.gpr[18]);\n"
+        "        for (std::uint32_t i = 0; i < ctx.gpr[18] && i < 40u; ++i) std::fprintf(stderr, \" %d\", static_cast<int>(aot_mem.aot_load32(list + i * 8u)));\n"
+        "        std::fprintf(stderr, \"; 08B24328:\");\n"
+        "        for (std::uint32_t i = 0; i < 8u; ++i) std::fprintf(stderr, \" %08X\", aot_mem.aot_load32(0x08B24328u + i * 4u));\n"
+        "        std::fprintf(stderr, \" (W %08X)\\n\", w);\n"
+        "    }\n"
+        "    if (!g_d012_grid_party) {\n        if (ctx.gpr[22] >= 17u) {", "builder trace")
     unit41.write_text(with_cstdio(text), encoding="utf-8", newline="\n")
     print("patch_roster: the mod's roster row is placed in", corpus.name)
