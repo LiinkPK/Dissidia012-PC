@@ -81,6 +81,30 @@ def corpus_dir(root, name):
     return found[0]
 
 
+def sync_tree(source, target):
+    """Makes target hold what source holds, writing only the files whose bytes differ and removing the ones that are gone.
+    A file written again with the same bytes would get a new modification time, and the build would compile it again: the
+    generated units take hours to compile, so the unchanged ones are left alone."""
+    target.mkdir(parents=True, exist_ok=True)
+    wanted = set()
+    changed = 0
+    for path in sorted(source.rglob("*")):
+        relative = path.relative_to(source)
+        wanted.add(relative)
+        destination = target / relative
+        if path.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+        elif not destination.is_file() or destination.read_bytes() != path.read_bytes():
+            shutil.copyfile(path, destination)
+            changed += 1
+    for path in sorted(target.rglob("*"), reverse=True):
+        relative = path.relative_to(target)
+        if relative not in wanted:
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+            changed += 1
+    return changed
+
+
 def read(path):
     with open(path, encoding="utf-8", newline="") as stream:
         return stream.read()
@@ -220,10 +244,7 @@ def main():
             print(f"the corpus is checked against {real[:16]}... (the executable as it runs)")
         if options.main_only:
             variant = options.work / "generated-variants" / "emendatus"
-            if variant.exists():
-                shutil.rmtree(variant)
-            shutil.copytree(main_out, variant)
-            print(f"main corpus written to {variant}")
+            print(f"main corpus: {sync_tree(main_out, variant)} file(s) changed in {variant}")
             return 0
         # 2. the overlays: battle as it is, menu with its added code named as code
         new = staging / "new"
@@ -267,19 +288,13 @@ def main():
             keep = True
             return 1
         patch_roster.apply(corpus_dir(new, "menu"))  # the port's roster grid for the mod's 34-row table
-        # 4. install (nothing is written until it is clear that no existing overlay corpus would be overwritten)
-        for source in new.iterdir():
-            if (options.work / "overlays" / source.name).exists():
-                raise SystemExit(f"{options.work / 'overlays' / source.name} already exists: it would be overwritten. Nothing was written.")
+        # 4. install: only the files whose bytes changed are written (see sync_tree); the stock overlay corpora have other
+        # hashes in their names, so nothing of the player's other corpora can be touched
         variant = options.work / "generated-variants" / "emendatus"
-        if variant.exists():
-            shutil.rmtree(variant)
-        shutil.copytree(main_out, variant)
+        print(f"main corpus: {sync_tree(main_out, variant)} file(s) changed in {variant}")
         for source in new.iterdir():
             target = options.work / "overlays" / source.name
-            shutil.copytree(source, target)
-            print(f"overlay corpus {source.name} written")
-        print(f"main corpus written to {variant}")
+            print(f"overlay corpus {source.name}: {sync_tree(source, target)} file(s) changed")
     finally:
         if not keep:
             shutil.rmtree(staging, ignore_errors=True)
