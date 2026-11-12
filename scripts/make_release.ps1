@@ -56,7 +56,11 @@ Write-Host "[3/6] Adding the build's overlays, FFmpeg and the setup files... " -
 $stageOverlays = Join-Path $stage "overlays"
 if (Test-Path $stageOverlays) { Remove-Item -Recurse -Force $stageOverlays }
 New-Item -ItemType Directory -Force $stageOverlays | Out-Null
-Get-ChildItem $overlaySrc -Filter "*.dll" | Where-Object { $_.Name -notlike "*.stale*" } | Copy-Item -Destination $stageOverlays
+# The Emendatus Mod's libraries (its overlays and corpora\emendatus.dll, hundreds of MB) travel only with -WithEmendatus.
+$modLibraries = "ovl089DD4C0_battle_85688873*", "ovl089DD4C0_menu_56F41D05*", "ovl0A601000_suppreacc_*", "ovl0ABBC700_plugin_*", "ovl0BFE8000_block2_*"
+Get-ChildItem $overlaySrc -Filter "*.dll" | Where-Object { $_.Name -notlike "*.stale*" } | Where-Object {
+    $dll = $_.Name; $WithEmendatus -or -not (@($modLibraries | Where-Object { $dll -like $_ }).Count)
+} | Copy-Item -Destination $stageOverlays
 # FFmpeg (LGPL): its DLLs and its licence text and source pointer travel together.
 Get-ChildItem $bin -Filter "*.dll" -File | Copy-Item -Destination $stage -Force
 foreach ($f in "FFmpeg-LICENSE.txt", "FFmpeg-SOURCE.txt") { $p = Join-Path $bin $f; if (Test-Path $p) { Copy-Item $p $stage -Force } }
@@ -85,6 +89,7 @@ if ($WithEmendatus -and (Test-Path $modsSrc)) {
     New-Item -ItemType Directory -Force $modsDst | Out-Null
     Copy-Item (Join-Path $modsSrc "*") $modsDst -Recurse -Force
 }
+if (-not $WithEmendatus) { Remove-Item -Recurse -Force (Join-Path $stage "corpora") -ErrorAction SilentlyContinue }
 # data\logs and data\screenshots are never packed, whichever way they got in.
 foreach ($folder in $localFolders) { Remove-Item -Recurse -Force (Join-Path $stage $folder) -ErrorAction SilentlyContinue }
 # Sweep: whatever Linux file got in by another way is removed before zipping.
