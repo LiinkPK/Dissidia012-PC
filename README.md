@@ -22,6 +22,9 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 - macOS `(both Apple Silicon and Intel chips)`
 - Linux distros `(tested on Ubuntu, Mint, Kali and SteamOS)`
 - Android
+>**Android known issue:** if the app is installed through Quiver or Recompa, the status bar blocks part of the picture. Installing the APK through [Obtainium](https://github.com/ImranR98/Obtainium) solves it.
+>
+<hr>
 
 >[!IMPORTANT]
 >**Just want to play?** Download the zip from the [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases/latest) page, run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
