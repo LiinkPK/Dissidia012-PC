@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_trace.log", "a"); if (f) std::setvbuf(f, nullptr, _IONBF, 0); return f ? f : stderr; }
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 
@@ -10650,7 +10652,7 @@ L_0BFEDC5C:
     goto L_0BFEDC60;
 L_0BFEDC60:
     { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
-      if (trace_hook && hook_lines < 60 && (ctx.gpr[18] == 33u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_5C60: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[18] == 33u)) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] hook_5C60: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[1] = (ctx.gpr[18] + static_cast<std::uint32_t>(-33));
     goto L_0BFEDC64;
 L_0BFEDC64:
@@ -10722,7 +10724,7 @@ L_0BFEDCA0:
     goto L_0BFEDCA4;
 L_0BFEDCA4:
     { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
-      if (trace_hook && hook_lines < 60 && (ctx.gpr[4] == 32u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_5CA4: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[4] == 32u)) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] hook_5CA4: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[1] = (ctx.gpr[4] + static_cast<std::uint32_t>(-32));
     goto L_0BFEDCA8;
 L_0BFEDCA8:

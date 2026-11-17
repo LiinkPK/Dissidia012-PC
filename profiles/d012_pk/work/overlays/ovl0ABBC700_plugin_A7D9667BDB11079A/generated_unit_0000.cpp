@@ -4,6 +4,8 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace psprecomp {
@@ -4252,6 +4254,8 @@ LOCAL_DISPATCH:
     }
     }
 L_0ABBC700:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
+      if (trace_hook && hook_lines < 8) { ++hook_lines; std::fprintf(stderr, "[mod-hook] plugin_entry: a0=%08X a1=%08X a2=%08X a3=%08X ra=%08X sp=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7], ctx.gpr[31], ctx.gpr[29]); } }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-32));
     goto L_0ABBC704;
 L_0ABBC704:

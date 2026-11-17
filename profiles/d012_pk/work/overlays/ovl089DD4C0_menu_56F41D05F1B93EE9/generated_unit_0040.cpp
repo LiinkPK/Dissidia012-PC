@@ -5,6 +5,8 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_trace.log", "a"); if (f) std::setvbuf(f, nullptr, _IONBF, 0); return f ? f : stderr; }
 #include <limits>
 
 namespace psprecomp {
@@ -12174,6 +12176,8 @@ L_08A7F534:
     ctx.gpr[8] = (0u | 0u);
     goto L_08A7F538;
 L_08A7F538:
+    { static const bool th = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (th && ctx.gpr[7] == 0x21u && n < 12) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] desc_call_08A7F538: a0=%08X a1=%08X a3=%08X sp0=%08X sp4=%08X sp8=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[7], aot_mem.aot_load32(ctx.gpr[29]), aot_mem.aot_load32(ctx.gpr[29] + 4u), aot_mem.aot_load32(ctx.gpr[29] + 8u)); } }
     ctx.gpr[31] = (0x08A7F540u);
     ctx.gpr[9] = (0u | 0u);
     ctx.pc = 0x0887B3ECu;

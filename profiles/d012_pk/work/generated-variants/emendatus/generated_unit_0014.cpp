@@ -4,6 +4,26 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+static inline bool d012_hook_ok(std::uint32_t a) {
+    // D012_NO_HOOKS=1 turns every Emendatus hook off; D012_HOOK_RANGE=lo-hi (hex) keeps only the hooks whose site is in that range.
+    static bool init = false, off = false;
+    static std::uint32_t lo = 0u, hi = 0xFFFFFFFFu;
+    if (!init) {
+        init = true;
+        off = std::getenv("D012_NO_HOOKS") != nullptr;
+        if (const char *r = std::getenv("D012_HOOK_RANGE")) {
+            unsigned long l = 0, h = 0;
+            if (std::sscanf(r, "%lx-%lx", &l, &h) == 2) { lo = static_cast<std::uint32_t>(l); hi = static_cast<std::uint32_t>(h); }
+        }
+    }
+    return !off && a >= lo && a <= hi;
+}
+static inline void d012_hook_trace(std::uint32_t a) {
+    static int total = 0;
+    if (total < 200) { ++total; std::fprintf(stderr, "[hook] %08X\n", a); }
+}
 #include <limits>
 
 namespace psprecomp {
@@ -14132,7 +14152,7 @@ L_0883EB70:
 L_0883EB74:
     ctx.gpr[31] = (0x0883EB7Cu);
     ctx.gpr[6] = (ctx.gpr[16] | 0u);
-    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x0883EB7Cu) goto L_0883EB7C;
+    if (((d012_hook_ok(0x0883EB74u) && aot_mem.aot_load32(0x0883EB74u) == 0x0EFFA808u && (d012_hook_trace(0x0883EB74u), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x0883EB7Cu) goto L_0883EB7C;
     return;
 L_0883EB78:
     ctx.gpr[6] = (ctx.gpr[16] | 0u);

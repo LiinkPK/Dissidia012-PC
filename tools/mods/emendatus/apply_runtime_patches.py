@@ -76,9 +76,15 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     images = {n: Image(source / n) for n in ("EBOOT.ELF", "OVL_MENU_APP.ELF", "OVL_BATTLE_APP.ELF")}
     entries = [(a, o, n, "swap") for a, o, n in swaps] + [(a, o, relocated(o, k, d), "reloc%d" % k) for a, o, k, d in relocs]
+    # Hooks the plugin writes with code of its own (not from the two tables): runtime_code_patches.txt, executable only.
+    code_patches = []
+    for line in (Path(__file__).parent / "runtime_code_patches.txt").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            a, o, n = (int(x, 16) for x in line.split())
+            code_patches.append((a, o, n, "code"))
     for name, image in images.items():
         applied = 0
-        for address, orig, new, kind in entries:
+        for address, orig, new, kind in entries + (code_patches if name == "EBOOT.ELF" else []):
             if image.word(address) == orig:
                 image.set(address, new)
                 applied += 1

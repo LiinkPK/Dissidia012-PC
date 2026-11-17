@@ -4,6 +4,26 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+static inline bool d012_hook_ok(std::uint32_t a) {
+    // D012_NO_HOOKS=1 turns every Emendatus hook off; D012_HOOK_RANGE=lo-hi (hex) keeps only the hooks whose site is in that range.
+    static bool init = false, off = false;
+    static std::uint32_t lo = 0u, hi = 0xFFFFFFFFu;
+    if (!init) {
+        init = true;
+        off = std::getenv("D012_NO_HOOKS") != nullptr;
+        if (const char *r = std::getenv("D012_HOOK_RANGE")) {
+            unsigned long l = 0, h = 0;
+            if (std::sscanf(r, "%lx-%lx", &l, &h) == 2) { lo = static_cast<std::uint32_t>(l); hi = static_cast<std::uint32_t>(h); }
+        }
+    }
+    return !off && a >= lo && a <= hi;
+}
+static inline void d012_hook_trace(std::uint32_t a) {
+    static int total = 0;
+    if (total < 200) { ++total; std::fprintf(stderr, "[hook] %08X\n", a); }
+}
 #include <limits>
 
 namespace psprecomp {
@@ -7424,7 +7444,7 @@ L_0882CDC4:
 L_0882CDC8:
     ctx.gpr[31] = (0x0882CDD0u);
     ctx.gpr[4] = (ctx.gpr[18] | 0u);
-    ctx.pc = 0x08B34FE4u;
+    ctx.pc = (d012_hook_ok(0x0882CDC8u) && aot_mem.aot_load32(0x0882CDC8u) == 0x0EFFA888u && (d012_hook_trace(0x0882CDC8u), true)) ? 0x0BFEA220u : 0x08B34FE4u;
     if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x0882CDD0u) goto L_0882CDD0;
     return;
 L_0882CDCC:
@@ -11818,7 +11838,7 @@ L_0882DFFC:
 L_0882E000:
     ctx.gpr[31] = (0x0882E008u);
     ctx.gpr[8] = (0u | 0u);
-    if (rt.invoke_chained_direct<&recomp_unit_0041_entry, 41u, 1899u, 0x088A9DE8u>(ctx, &aot_mem) && ctx.pc == 0x0882E008u) goto L_0882E008;
+    if (((d012_hook_ok(0x0882E000u) && aot_mem.aot_load32(0x0882E000u) == 0x0EFFA880u && (d012_hook_trace(0x0882E000u), true)) ? (ctx.pc = 0x0BFEA200u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0041_entry, 41u, 1899u, 0x088A9DE8u>(ctx, &aot_mem)) && ctx.pc == 0x0882E008u) goto L_0882E008;
     return;
 L_0882E004:
     ctx.gpr[8] = (0u | 0u);
@@ -16549,7 +16569,7 @@ L_0882F2D8:
 L_0882F2DC:
     ctx.gpr[31] = (0x0882F2E4u);
     ctx.gpr[9] = (ctx.gpr[20] | 0u);
-    if (rt.invoke_chained_direct<&recomp_unit_0009_entry, 9u, 929u, 0x08828EC0u>(ctx, &aot_mem) && ctx.pc == 0x0882F2E4u) goto L_0882F2E4;
+    if (((d012_hook_ok(0x0882F2DCu) && aot_mem.aot_load32(0x0882F2DCu) == 0x0EFFAFF6u && (d012_hook_trace(0x0882F2DCu), true)) ? (ctx.pc = 0x0BFEBFD8u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0009_entry, 9u, 929u, 0x08828EC0u>(ctx, &aot_mem)) && ctx.pc == 0x0882F2E4u) goto L_0882F2E4;
     return;
 L_0882F2E0:
     ctx.gpr[9] = (ctx.gpr[20] | 0u);
@@ -16878,7 +16898,7 @@ L_0882F440:
 L_0882F444:
     ctx.gpr[31] = (0x0882F44Cu);
     ctx.gpr[9] = (ctx.gpr[20] | 0u);
-    if (rt.invoke_chained_direct<&recomp_unit_0009_entry, 9u, 918u, 0x08828E94u>(ctx, &aot_mem) && ctx.pc == 0x0882F44Cu) goto L_0882F44C;
+    if (((d012_hook_ok(0x0882F444u) && aot_mem.aot_load32(0x0882F444u) == 0x0EFFAFF2u && (d012_hook_trace(0x0882F444u), true)) ? (ctx.pc = 0x0BFEBFC8u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0009_entry, 9u, 918u, 0x08828E94u>(ctx, &aot_mem)) && ctx.pc == 0x0882F44Cu) goto L_0882F44C;
     return;
 L_0882F448:
     ctx.gpr[9] = (ctx.gpr[20] | 0u);

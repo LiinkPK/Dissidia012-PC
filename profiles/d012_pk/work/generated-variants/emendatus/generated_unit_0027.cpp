@@ -4,6 +4,26 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+static inline bool d012_hook_ok(std::uint32_t a) {
+    // D012_NO_HOOKS=1 turns every Emendatus hook off; D012_HOOK_RANGE=lo-hi (hex) keeps only the hooks whose site is in that range.
+    static bool init = false, off = false;
+    static std::uint32_t lo = 0u, hi = 0xFFFFFFFFu;
+    if (!init) {
+        init = true;
+        off = std::getenv("D012_NO_HOOKS") != nullptr;
+        if (const char *r = std::getenv("D012_HOOK_RANGE")) {
+            unsigned long l = 0, h = 0;
+            if (std::sscanf(r, "%lx-%lx", &l, &h) == 2) { lo = static_cast<std::uint32_t>(l); hi = static_cast<std::uint32_t>(h); }
+        }
+    }
+    return !off && a >= lo && a <= hi;
+}
+static inline void d012_hook_trace(std::uint32_t a) {
+    static int total = 0;
+    if (total < 200) { ++total; std::fprintf(stderr, "[hook] %08X\n", a); }
+}
 #include <limits>
 
 namespace psprecomp {
@@ -9126,6 +9146,7 @@ L_088714B0:
     // nop
     goto L_088714B4;
 L_088714B4:
+    if (d012_hook_ok(0x088714B4u) && aot_mem.aot_load32(0x088714B4u) == 0x0AFFA830u && (d012_hook_trace(0x088714B4u), true)) { ctx.pc = 0x0BFEA0C0u; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }
     { const bool branch_taken = 0u == 0u;
     ctx.gpr[2] = (0u | 0u);
       if (branch_taken) {

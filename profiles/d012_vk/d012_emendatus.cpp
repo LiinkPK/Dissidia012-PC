@@ -235,7 +235,7 @@ void plan_layout(bool eur) {
     static std::once_flag once;
     std::call_once(once, [eur] {
         std::uint64_t next = (kPackageSizeUS + kEmTailSize + 2047u) / 2048u * 2048u;
-        if (eur && std::getenv("D012_EMENDATUS_NOMOVE") == nullptr) {  // NOMOVE: A/B test, the EUR entries stay where they are
+        if (eur && std::getenv("D012_EMENDATUS_NOMOVE") == nullptr && std::getenv("D012_EMENDATUS_RAW") == nullptr) {  // NOMOVE: A/B test, the EUR entries stay where they are
             for (const auto &row : kEurTail) {
                 g_moves.push_back({row[0], row[1], next});
                 next += (row[1] + 2047u) / 2048u * 2048u;
@@ -298,9 +298,10 @@ public:
                     break;
                 }
         }
-        for (const auto &replaced : kModReplace) add_row(replaced[0], replaced[1], replaced[2], true);  // the mod's packs replace the game's
-        for (const auto &mod_row : kModRows) add_row(mod_row[0], mod_row[1], mod_row[2]);  // the mod's own new rows
-        for (const Extra &extra : g_extras)  // then any of the repository's files the mod's rows do not cover
+        const bool raw = std::getenv("D012_EMENDATUS_RAW") != nullptr;  // A/B test: none of the rows added or replaced this session
+        if (!raw) for (const auto &replaced : kModReplace) add_row(replaced[0], replaced[1], replaced[2], true);  // the mod's packs replace the game's
+        if (!raw) for (const auto &mod_row : kModRows) add_row(mod_row[0], mod_row[1], mod_row[2]);  // the mod's own new rows
+        if (!raw) for (const Extra &extra : g_extras)  // then any of the repository's files the mod's rows do not cover
             if (extra.size != 0u)
                 add_row(extra.hash, static_cast<std::uint32_t>(extra.base / 2048u), 0x10000000u | static_cast<std::uint32_t>(extra.size));
         // D012_AERITH_CLONE=1 (debug): her model package is Warrior of Light's / Cloud's own (obj/p_sev100.objx), to tell a fault in her
@@ -450,6 +451,7 @@ public:
             const std::size_t head = static_cast<std::size_t>(std::min<std::uint64_t>(length, kEmMenuKeep - offset));
             done = portablekit::read_open_file(fd_, offset, destination, head);
             apply(kEmMenu, sizeof kEmMenu / sizeof kEmMenu[0], offset, destination, done);
+            apply_applier_data(offset, destination, done);
             if (done < head) return done;
         }
         if (done < length) {
@@ -461,6 +463,21 @@ public:
     }
 
 private:
+    // The one write of the mod's patch applier (block2 + 0x2F40, "ptr") that is not in the code: the fifth pointer of the menu's list of
+    // name codes ("ten110", "gst110", "gst120", "gst130", "org210") points at a new string "sev120", the new character's code, at
+    // 0x08B5803C. The applier runs at menu load in the patched game; the port never calls it, so it is done in the image it serves.
+    // File offset = 0x54 + (address - 0x089DD4C0).
+    static void apply_applier_data(std::uint64_t offset, std::uint8_t *data, std::size_t got) {
+        static const struct { std::uint64_t at; std::uint8_t bytes[8]; std::size_t count; } kPatches[] = {
+            {0x17ABCCu, {0x3C, 0x80, 0xB5, 0x08}, 4u},                              // word at 0x08B58038: 0x08B57DD8 -> 0x08B5803C
+            {0x17ABD0u, {'s', 'e', 'v', '1', '2', '0', 0, 0}, 8u},                  // the string at 0x08B5803C
+        };
+        for (const auto &patch : kPatches)
+            for (std::size_t i = 0; i < patch.count; ++i) {
+                const std::uint64_t position = patch.at + i;
+                if (position >= offset && position < offset + got) data[position - offset] = patch.bytes[i];
+            }
+    }
     std::uint32_t fd_;
 };
 

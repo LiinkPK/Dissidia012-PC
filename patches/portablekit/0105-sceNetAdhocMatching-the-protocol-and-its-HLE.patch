@@ -1,0 +1,1766 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Tue, 17 Nov 2026 23:00:00 +0100
+Subject: [PATCH] Ad hoc: sceNetAdhocMatching, and internet hosting with an opened router port
+
+sceNetAdhocMatching (the ten functions Dissidia 012 imports) on top of the ad hoc client's
+PDP sockets: host/adhoc/matching.* is the protocol, host/hle/hle_adhoc_matching*.cpp the glue.
+Hosting a session now asks the router to forward the two TCP ports (UPnP) and finds the
+public address (the router, or STUN) to copy from the Play together page; <PREFIX>_NO_PORT_MAPPING=1
+leaves the router alone. Not tested against a game or across two networks yet.
+---
+  cmake/PortableKit.cmake             |   9 ++
+  host/adhoc/host.cpp                 |   6 +
+  host/adhoc/matching.cpp             | 229 ++++++++++++++++++++++++++++++++++++
+  host/adhoc/matching.hpp             | 167 ++++++++++++++++++++++++++
+  host/adhoc/matching_receive.cpp     | 156 ++++++++++++++++++++++++
+  host/adhoc/matching_timers.cpp      | 118 +++++++++++++++++++
+  host/adhoc/portmap.cpp              |  99 ++++++++++++++++
+  host/adhoc/portmap.hpp              |  62 ++++++++++
+  host/adhoc/portmap_http.hpp         |  25 ++++
+  host/adhoc/portmap_soap.cpp         | 123 +++++++++++++++++++
+  host/adhoc/portmap_stun.cpp         |  95 +++++++++++++++
+  host/adhoc/portmap_upnp.cpp         | 112 ++++++++++++++++++
+  host/hle/hle_adhoc.cpp              |   5 +
+  host/hle/hle_adhoc_matching.cpp     | 124 +++++++++++++++++++
+  host/hle/hle_adhoc_matching.hpp     |  60 ++++++++++
+  host/hle/hle_adhoc_matching_api.cpp | 171 +++++++++++++++++++++++++++
+  host/ui/menu.cpp                    |  18 +++
+  17 files changed, 1579 insertions(+)
+
+diff --git a/cmake/PortableKit.cmake b/cmake/PortableKit.cmake
+index 9780d8a..7629c5b 100644
+--- a/cmake/PortableKit.cmake
++++ b/cmake/PortableKit.cmake
+@@ -73,6 +73,15 @@ set(PORTABLEKIT_HOST_SOURCES
+     host/hle/hle_utility.cpp
+     host/hle/hle_savedata.cpp
+     host/hle/hle_adhoc.cpp
++    host/hle/hle_adhoc_matching.cpp
++    host/hle/hle_adhoc_matching_api.cpp
++    host/adhoc/matching.cpp
++    host/adhoc/matching_receive.cpp
++    host/adhoc/matching_timers.cpp
++    host/adhoc/portmap.cpp
++    host/adhoc/portmap_soap.cpp
++    host/adhoc/portmap_stun.cpp
++    host/adhoc/portmap_upnp.cpp
+     host/hle/hle_extensions.cpp
+     host/hle/hle_extension_host.cpp
+     host/extension_keys.cpp
+diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
+index 5edd4b4..6bd8829 100644
+--- a/host/adhoc/host.cpp
++++ b/host/adhoc/host.cpp
+@@ -4,6 +4,7 @@
+ #include "../profile.hpp"
+ #include "adhoc/client.hpp"
+ #include "adhoc/discovery.hpp"
++#include "adhoc/portmap.hpp"
+ #include "adhoc/server.hpp"
+ #include "adhoc/session.hpp"
+ #include "settings/settings.hpp"
+@@ -81,6 +82,10 @@ bool adhoc_host_start() {
+     }
+     adhoc::Client::log("[adhoc] hosting a session", true);
+     adhoc_apply_settings(true);
++    // So that players on the internet can come straight to this computer: the router's ports, and the address to share.
++    // <PREFIX>_NO_PORT_MAPPING=1 leaves the router alone.
++    if (portablekit::env("NO_PORT_MAPPING") == nullptr)
++        adhoc::PortMapper::get().open(static_cast<std::uint16_t>(settings::current().adhoc_host_port));
+     return true;
+ }
+ 
+@@ -93,6 +98,7 @@ void adhoc_host_stop() {
+         state.server.stop();
+         state.port = 0u;
+     }
++    adhoc::PortMapper::get().close();
+     adhoc::Client::log("[adhoc] stopped hosting", true);
+     adhoc_apply_settings(true);
+ }
+diff --git a/host/adhoc/matching.cpp b/host/adhoc/matching.cpp
+new file mode 100644
+index 0000000..19cfb53
+--- /dev/null
++++ b/host/adhoc/matching.cpp
+@@ -0,0 +1,229 @@
++#include "matching.hpp"
++
++#include <algorithm>
++
++namespace portablekit::adhoc::matching {
++
++namespace {
++
++constexpr std::uint64_t kExtraTimeoutUs = 2'000'000u; // slack on top of the keepalive periods
++
++void put32(std::string &out, std::uint32_t value) {
++    for (unsigned i = 0; i < 4u; ++i) out.push_back(static_cast<char>((value >> (8u * i)) & 0xFFu));
++}
++
++void put_mac(std::string &out, const Mac &mac) {
++    for (std::uint8_t byte : mac) out.push_back(static_cast<char>(byte));
++}
++
++} // namespace
++
++Context::Context(const Config &config, Io &io) : config_(config), io_(io) {
++    timeout_us_ = config.keepalive_us * static_cast<std::uint64_t>(std::max(1, config.init_count)) + kExtraTimeoutUs;
++}
++
++void Context::start(std::string hello) {
++    hello_ = std::move(hello);
++    running_ = true;
++    last_hello_ = 0u;
++    last_ping_ = 0u;
++}
++
++void Context::stop() {
++    if (!running_) return;
++    const std::string bye(1, static_cast<char>(9));
++    for (const Peer &peer : peers_) send_to(peer.mac, bye);
++    clear_peers();
++    running_ = false;
++}
++
++// Peers ----------------------------------------------------------------------
++
++Peer *Context::find(const Mac &mac) {
++    for (Peer &peer : peers_)
++        if (peer.mac == mac) return &peer;
++    return nullptr;
++}
++
++Peer *Context::find_state(PeerState state) {
++    for (Peer &peer : peers_)
++        if (peer.state == state) return &peer;
++    return nullptr;
++}
++
++Peer &Context::add(const Mac &mac, PeerState state) {
++    Peer peer;
++    peer.mac = mac;
++    peer.state = state;
++    peer.last_ping_us = io_.now_us();
++    peers_.push_back(peer);
++    return peers_.back();
++}
++
++int Context::count_children() const {
++    return static_cast<int>(std::count_if(peers_.begin(), peers_.end(), [](const Peer &p) { return p.state == PeerState::Child; }));
++}
++
++int Context::count_connected() const {
++    return static_cast<int>(std::count_if(peers_.begin(), peers_.end(), [](const Peer &p) {
++        return p.state == PeerState::Child || p.state == PeerState::Parent || p.state == PeerState::P2P;
++    }));
++}
++
++void Context::remove(const Mac &mac) {
++    peers_.erase(std::remove_if(peers_.begin(), peers_.end(), [&](const Peer &p) { return p.mac == mac; }), peers_.end());
++}
++
++void Context::clear_peers() { peers_.clear(); }
++
++std::vector<Mac> Context::members() const {
++    std::vector<Mac> out{config_.mac};
++    for (const Peer &peer : peers_)
++        if (peer.state == PeerState::Child || peer.state == PeerState::Parent || peer.state == PeerState::P2P)
++            out.push_back(peer.mac);
++    return out;
++}
++
++// Sending --------------------------------------------------------------------
++
++void Context::send_to(const Mac &to, const std::string &bytes) {
++    const auto port = peer_port_.find(to);
++    io_.send(to, port != peer_port_.end() ? port->second : config_.port, bytes);
++}
++
++void Context::broadcast(const std::string &bytes) {
++    for (const Mac &mac : io_.group())
++        if (mac != config_.mac) send_to(mac, bytes);
++}
++
++void Context::send_join(const Mac &to, const std::string &opt) {
++    std::string p(1, static_cast<char>(2));
++    put32(p, static_cast<std::uint32_t>(opt.size()));
++    p += opt;
++    send_to(to, p);
++}
++
++void Context::send_accept(const Mac &to, const std::string &opt) {
++    // A host tells the new child who else is connected, so the children know each other.
++    std::vector<Mac> siblings;
++    if (config_.mode == Mode::Host)
++        for (const Peer &peer : peers_)
++            if (peer.state == PeerState::Child && peer.mac != to) siblings.push_back(peer.mac);
++    std::string p(1, static_cast<char>(3));
++    put32(p, static_cast<std::uint32_t>(opt.size()));
++    put32(p, static_cast<std::uint32_t>(siblings.size()));
++    p += opt;
++    for (const Mac &mac : siblings) put_mac(p, mac);
++    send_to(to, p);
++}
++
++void Context::send_cancel(const Mac &to, const std::string &opt) {
++    std::string p(1, static_cast<char>(4));
++    put32(p, static_cast<std::uint32_t>(opt.size()));
++    p += opt;
++    send_to(to, p);
++}
++
++void Context::send_bulk(const Mac &to, const std::string &data) {
++    std::string p(1, static_cast<char>(5));
++    put32(p, static_cast<std::uint32_t>(data.size()));
++    p += data;
++    send_to(to, p);
++}
++
++// Tells the other children that `peer` joined.
++void Context::send_birth(const Peer &peer) {
++    std::string p(1, static_cast<char>(7));
++    put_mac(p, peer.mac);
++    for (const Peer &other : peers_)
++        if (other.state == PeerState::Child && other.mac != peer.mac) send_to(other.mac, p);
++}
++
++// Tells the other children that `peer` left.
++void Context::send_death(const Peer &peer) {
++    std::string p(1, static_cast<char>(8));
++    put_mac(p, peer.mac);
++    for (const Peer &other : peers_)
++        if (other.state == PeerState::Child && other.mac != peer.mac) send_to(other.mac, p);
++}
++
++// The calls of the game ------------------------------------------------------
++
++std::uint32_t Context::select_target(const Mac &target, const std::string &opt) {
++    if (!running_) return error::kNotRunning;
++    Peer *peer = find(target);
++    if (peer == nullptr) return error::kUnknownTarget;
++    if (config_.mode == Mode::Host) {
++        if (peer->state == PeerState::Child && peer->accepting) return error::kRequestInProgress;
++        if (peer->state == PeerState::Child) return error::kAlreadyEstablished;
++        if (count_children() == config_.maxpeers - 1) return error::kExceedMaxnum;
++        if (peer->state == PeerState::IncomingRequest) {
++            peer->state = PeerState::Child;
++            peer->accepting = true;
++            send_birth(*peer);
++            send_accept(peer->mac, opt);
++            return 0u;
++        }
++    } else if (config_.mode == Mode::Client) {
++        if (find_state(PeerState::Parent) != nullptr) return error::kAlreadyEstablished;
++        if (find_state(PeerState::OutgoingRequest) != nullptr) return error::kRequestInProgress;
++        if (peer->state == PeerState::Offer) {
++            peer->state = PeerState::OutgoingRequest;
++            send_join(peer->mac, opt);
++            return 0u;
++        }
++    } else {
++        if (find_state(PeerState::P2P) != nullptr) return error::kAlreadyEstablished;
++        if (find_state(PeerState::OutgoingRequest) != nullptr) return error::kRequestInProgress;
++        if (peer->state == PeerState::Offer) {
++            peer->state = PeerState::OutgoingRequest;
++            send_join(peer->mac, opt);
++            return 0u;
++        }
++        if (peer->state == PeerState::IncomingRequest) {
++            peer->state = PeerState::P2P;
++            send_accept(peer->mac, opt);
++            return 0u;
++        }
++    }
++    return error::kTargetNotReady;
++}
++
++std::uint32_t Context::cancel_target(const Mac &target, const std::string &opt) {
++    if (!running_) return error::kNotRunning;
++    Peer *peer = find(target);
++    if (peer == nullptr) return error::kUnknownTarget;
++    const Mode mode = config_.mode;
++    const PeerState state = peer->state;
++    const bool applies = (mode == Mode::Client && (state == PeerState::Parent || state == PeerState::OutgoingRequest)) ||
++                         (mode == Mode::Host && (state == PeerState::Child || state == PeerState::IncomingRequest)) ||
++                         (mode == Mode::P2P && (state == PeerState::P2P || state == PeerState::IncomingRequest));
++    if (!applies) return 0u;
++    const bool tell_others = mode == Mode::Host && state == PeerState::Child && count_connected() > 1;
++    const Mac mac = peer->mac;
++    if (mode == Mode::P2P && state == PeerState::IncomingRequest) {
++        send_cancel(mac, opt);
++        peer->state = PeerState::Offer;
++        peer->last_ping_us = io_.now_us();
++        return 0u;
++    }
++    send_cancel(mac, opt);
++    if (tell_others) send_death(*peer);
++    remove(mac);
++    return 0u;
++}
++
++std::uint32_t Context::send_data(const Mac &target, const std::string &data) {
++    if (!running_) return error::kNotRunning;
++    if (data.empty()) return error::kInvalidDatalen;
++    Peer *peer = find(target);
++    if (peer == nullptr) return error::kUnknownTarget;
++    if (peer->state != PeerState::Parent && peer->state != PeerState::Child && peer->state != PeerState::P2P)
++        return error::kNotEstablished;
++    send_bulk(peer->mac, data);
++    // The transport is reliable and in order, so the data is as good as acknowledged once it is sent.
++    io_.post(kEventDataAck, peer->mac, {});
++    return 0u;
++}
++
++} // namespace portablekit::adhoc::matching
+diff --git a/host/adhoc/matching.hpp b/host/adhoc/matching.hpp
+new file mode 100644
+index 0000000..669bbc5
+--- /dev/null
++++ b/host/adhoc/matching.hpp
+@@ -0,0 +1,167 @@
++#pragma once
++
++// The protocol of sceNetAdhocMatching, with no guest memory and no kernel in it: one Context is one matching
++// context of the game. It talks through an Io (the datagrams to send, the events to hand to the game's handler),
++// so the same code runs under the HLE and under a test over loopback.
++//
++// Packets are datagrams on the context's PDP port; integers are little-endian:
++//   PING [0]                          HELLO  [1][len u32][data]
++//   JOIN [2][len u32][opt]            ACCEPT [3][len u32][siblings u32][opt][siblings x 6-byte MAC]
++//   CANCEL [4][len u32][opt]          BULK   [5][len u32][data]
++//   BIRTH [7][MAC]                    DEATH  [8][MAC]            BYE [9]
++#include "protocol.hpp"
++
++#include <cstdint>
++#include <functional>
++#include <map>
++#include <string>
++#include <vector>
++
++namespace portablekit::adhoc::matching {
++
++enum class Mode : int { Host = 1, Client = 2, P2P = 3 };
++
++// The values the game's handler receives.
++enum Event : int {
++    kEventHello = 1,
++    kEventRequest = 2,
++    kEventLeave = 3,
++    kEventDeny = 4,
++    kEventCancel = 5,
++    kEventAccept = 6,
++    kEventEstablished = 7,
++    kEventTimeout = 8,
++    kEventError = 9,
++    kEventBye = 10,
++    kEventData = 11,
++    kEventDataAck = 12,
++    kEventDataTimeout = 13,
++};
++
++namespace error {
++inline constexpr std::uint32_t kInvalidMode = 0x80410801u;
++inline constexpr std::uint32_t kInvalidPort = 0x80410802u;
++inline constexpr std::uint32_t kInvalidMaxnum = 0x80410803u;
++inline constexpr std::uint32_t kRxbufTooShort = 0x80410804u;
++inline constexpr std::uint32_t kInvalidOptlen = 0x80410805u;
++inline constexpr std::uint32_t kInvalidArg = 0x80410806u;
++inline constexpr std::uint32_t kInvalidId = 0x80410807u;
++inline constexpr std::uint32_t kIdNotAvail = 0x80410808u;
++inline constexpr std::uint32_t kNoSpace = 0x80410809u;
++inline constexpr std::uint32_t kIsRunning = 0x8041080Au;
++inline constexpr std::uint32_t kNotRunning = 0x8041080Bu;
++inline constexpr std::uint32_t kUnknownTarget = 0x8041080Cu;
++inline constexpr std::uint32_t kTargetNotReady = 0x8041080Du;
++inline constexpr std::uint32_t kExceedMaxnum = 0x8041080Eu;
++inline constexpr std::uint32_t kRequestInProgress = 0x8041080Fu;
++inline constexpr std::uint32_t kAlreadyEstablished = 0x80410810u;
++inline constexpr std::uint32_t kBusy = 0x80410811u;
++inline constexpr std::uint32_t kAlreadyInitialized = 0x80410812u;
++inline constexpr std::uint32_t kNotInitialized = 0x80410813u;
++inline constexpr std::uint32_t kPortInUse = 0x80410814u;
++inline constexpr std::uint32_t kInvalidDatalen = 0x80410816u;
++inline constexpr std::uint32_t kNotEstablished = 0x80410817u;
++inline constexpr std::uint32_t kDataBusy = 0x80410818u;
++} // namespace error
++
++struct Config {
++    int id{};
++    Mode mode{Mode::Host};
++    int maxpeers{};
++    std::uint16_t port{};
++    std::uint32_t rxbuflen{};
++    std::uint64_t hello_us{};     // between two hellos (host and P2P)
++    std::uint64_t keepalive_us{}; // between two pings, and the unit of the timeout
++    int init_count{};             // how many keepalive periods of silence lose a peer
++    std::uint64_t rexmt_us{};
++    Mac mac{};
++};
++
++// What the context needs from its surroundings.
++struct Io {
++    virtual ~Io() = default;
++    virtual void send(const Mac &to, std::uint16_t port, const std::string &bytes) = 0;
++    // The members of the ad hoc group, for hellos and pings.
++    virtual std::vector<Mac> group() = 0;
++    // An event for the game's handler. `opt` is what the packet carried.
++    virtual void post(int event, const Mac &from, const std::string &opt) = 0;
++    virtual std::uint64_t now_us() = 0;
++};
++
++enum class PeerState { Offer, IncomingRequest, OutgoingRequest, Child, Parent, P2P, CancelInProgress };
++
++struct Peer {
++    Mac mac{};
++    PeerState state{PeerState::Offer};
++    std::uint64_t last_ping_us{};
++    bool accepting{};
++    bool sending{};
++};
++
++class Context {
++public:
++    Context(const Config &config, Io &io);
++
++    [[nodiscard]] const Config &config() const noexcept { return config_; }
++    [[nodiscard]] bool running() const noexcept { return running_; }
++    [[nodiscard]] const std::vector<Peer> &peers() const noexcept { return peers_; }
++    [[nodiscard]] const std::string &hello() const noexcept { return hello_; }
++
++    void set_hello(std::string data) { hello_ = std::move(data); }
++    void start(std::string hello);
++    // Sends a bye to everyone known and drops them all.
++    void stop();
++
++    // The calls of the game; each returns 0 or an error::k... value.
++    [[nodiscard]] std::uint32_t select_target(const Mac &target, const std::string &opt);
++    [[nodiscard]] std::uint32_t cancel_target(const Mac &target, const std::string &opt);
++    [[nodiscard]] std::uint32_t send_data(const Mac &target, const std::string &data);
++
++    // A datagram that arrived on the port.
++    void on_datagram(const Mac &from, std::uint16_t from_port, const std::string &bytes);
++    // Timers: hello, ping, timeouts. Call at least a few times a second.
++    void tick();
++
++    // The members the game can see: its own MAC first, then the connected peers.
++    [[nodiscard]] std::vector<Mac> members() const;
++
++private:
++    [[nodiscard]] Peer *find(const Mac &mac);
++    [[nodiscard]] Peer *find_state(PeerState state);
++    [[nodiscard]] Peer &add(const Mac &mac, PeerState state);
++    [[nodiscard]] int count_children() const;
++    [[nodiscard]] int count_connected() const;
++    void remove(const Mac &mac);
++    void clear_peers();
++    void send_to(const Mac &to, const std::string &bytes);
++    void broadcast(const std::string &bytes);
++
++    void send_join(const Mac &to, const std::string &opt);
++    void send_accept(const Mac &to, const std::string &opt);
++    void send_cancel(const Mac &to, const std::string &opt);
++    void send_bulk(const Mac &to, const std::string &data);
++    void send_birth(const Peer &peer);
++    void send_death(const Peer &peer);
++
++    void on_hello(const Mac &from, const std::string &p);
++    void on_join(const Mac &from, const std::string &p);
++    void on_accept(const Mac &from, const std::string &p);
++    void on_cancel(const Mac &from, const std::string &p);
++    void on_bulk(const Mac &from, const std::string &p);
++    void on_birth(const Mac &from, const std::string &p);
++    void on_death(const Mac &from, const std::string &p);
++    void on_bye(const Mac &from);
++    void check_timeouts(std::uint64_t now);
++
++    Config config_;
++    Io &io_;
++    bool running_{};
++    std::string hello_;
++    std::vector<Peer> peers_;
++    std::map<Mac, std::uint16_t> peer_port_; // where each peer's datagrams come from
++    std::uint64_t last_hello_{};
++    std::uint64_t last_ping_{};
++    std::uint64_t timeout_us_{};
++};
++
++} // namespace portablekit::adhoc::matching
+diff --git a/host/adhoc/matching_receive.cpp b/host/adhoc/matching_receive.cpp
+new file mode 100644
+index 0000000..b43658a
+--- /dev/null
++++ b/host/adhoc/matching_receive.cpp
+@@ -0,0 +1,156 @@
++#include "matching.hpp"
++
++#include <cstring>
++
++namespace portablekit::adhoc::matching {
++
++namespace {
++
++constexpr std::size_t kMaxPeers = 32u;
++
++std::uint32_t get32(const std::string &p, std::size_t offset) {
++    std::uint32_t value = 0u;
++    for (unsigned i = 0; i < 4u; ++i) value |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(p[offset + i])) << (8u * i);
++    return value;
++}
++
++Mac get_mac(const std::string &p, std::size_t offset) {
++    Mac mac{};
++    for (std::size_t i = 0; i < mac.size(); ++i) mac[i] = static_cast<std::uint8_t>(p[offset + i]);
++    return mac;
++}
++
++// A packet of [opcode][len u32][len bytes]: the bytes, or false when the packet is cut short.
++bool read_counted(const std::string &p, std::string &out) {
++    if (p.size() < 5u) return false;
++    const std::uint32_t length = get32(p, 1u);
++    if (length > p.size() - 5u) return false;
++    out = p.substr(5u, length);
++    return true;
++}
++
++} // namespace
++
++void Context::on_datagram(const Mac &from, std::uint16_t from_port, const std::string &bytes) {
++    if (!running_ || bytes.empty()) return;
++    if (peer_port_.size() < kMaxPeers || peer_port_.count(from) != 0u) peer_port_[from] = from_port;
++    if (Peer *known = find(from)) known->last_ping_us = io_.now_us(); // any packet shows the peer is there
++    switch (static_cast<std::uint8_t>(bytes[0])) {
++    case 0: break; // ping: the time above is all it does
++    case 1: on_hello(from, bytes); break;
++    case 2: on_join(from, bytes); break;
++    case 3: on_accept(from, bytes); break;
++    case 4: on_cancel(from, bytes); break;
++    case 5: on_bulk(from, bytes); break;
++    case 7: on_birth(from, bytes); break;
++    case 8: on_death(from, bytes); break;
++    case 9: on_bye(from); break;
++    default: break;
++    }
++}
++
++// A host or P2P player is offering a room; only a client without a parent, or a P2P player without a partner, cares.
++void Context::on_hello(const Mac &from, const std::string &p) {
++    const bool looking = (config_.mode == Mode::Client && find_state(PeerState::Parent) == nullptr) ||
++                         (config_.mode == Mode::P2P && find_state(PeerState::P2P) == nullptr);
++    if (!looking) return;
++    std::string opt;
++    if (!read_counted(p, opt)) return;
++    Peer *peer = find(from);
++    if (peer == nullptr) {
++        if (peers_.size() >= kMaxPeers) return;
++        peer = &add(from, PeerState::Offer);
++    }
++    if (peer->state != PeerState::OutgoingRequest && peer->state != PeerState::IncomingRequest)
++        io_.post(kEventHello, from, opt);
++}
++
++void Context::on_join(const Mac &from, const std::string &p) {
++    if (config_.mode == Mode::Client) return;
++    const bool room = (config_.mode == Mode::Host && count_children() < config_.maxpeers - 1) ||
++                      (config_.mode == Mode::P2P && find_state(PeerState::P2P) == nullptr);
++    std::string opt;
++    if (room && read_counted(p, opt)) {
++        Peer *peer = find(from);
++        if (peer != nullptr && config_.mode == Mode::Host &&
++            (peer->state == PeerState::IncomingRequest || peer->state == PeerState::Child))
++            return; // a repeated request
++        if (peer == nullptr) {
++            if (peers_.size() >= kMaxPeers) return;
++            peer = &add(from, PeerState::IncomingRequest);
++        } else {
++            peer->state = PeerState::IncomingRequest;
++            peer->last_ping_us = io_.now_us();
++        }
++        io_.post(kEventRequest, from, opt);
++        return;
++    }
++    send_cancel(from, {}); // no room, or a broken packet
++}
++
++void Context::on_accept(const Mac &from, const std::string &p) {
++    if (config_.mode == Mode::Host) return;
++    const bool looking = (config_.mode == Mode::Client && find_state(PeerState::Parent) == nullptr) ||
++                         (config_.mode == Mode::P2P && find_state(PeerState::P2P) == nullptr);
++    if (!looking || p.size() < 9u) return;
++    const std::uint32_t optlen = get32(p, 1u);
++    const std::uint32_t siblings = get32(p, 5u);
++    if (optlen > p.size() || siblings > p.size() || 9u + static_cast<std::uint64_t>(optlen) + 6u * static_cast<std::uint64_t>(siblings) > p.size())
++        return;
++    Peer *request = find_state(PeerState::OutgoingRequest);
++    if (request == nullptr || request->mac != from) return;
++    const std::string opt = p.substr(9u, optlen);
++    request->state = config_.mode == Mode::Client ? PeerState::Parent : PeerState::P2P;
++    request->last_ping_us = io_.now_us();
++    // Everyone else we had heard of is no longer a candidate.
++    for (std::size_t i = 0; i < peers_.size();) {
++        if (peers_[i].mac != from) peers_.erase(peers_.begin() + static_cast<std::ptrdiff_t>(i));
++        else ++i;
++    }
++    if (config_.mode == Mode::Client)
++        for (std::uint32_t i = 0; i < siblings && peers_.size() < kMaxPeers; ++i) {
++            const Mac sibling = get_mac(p, 9u + optlen + 6u * i);
++            if (sibling != config_.mac && find(sibling) == nullptr) add(sibling, PeerState::Child);
++        }
++    io_.post(kEventAccept, from, opt);
++    io_.post(kEventEstablished, from, {});
++}
++
++void Context::on_cancel(const Mac &from, const std::string &p) {
++    Peer *peer = find(from);
++    if (peer == nullptr) return;
++    std::string opt;
++    if (!read_counted(p, opt)) return;
++    const PeerState state = peer->state;
++    if (config_.mode == Mode::Client) {
++        if (state == PeerState::OutgoingRequest) {
++            io_.post(kEventDeny, from, opt);
++            peer->state = PeerState::Offer;
++        } else if (state == PeerState::Parent) {
++            for (const Peer &other : peers_)
++                if (other.state == PeerState::Child || other.state == PeerState::Parent) io_.post(kEventLeave, other.mac, opt);
++            clear_peers();
++        }
++    } else if (config_.mode == Mode::Host) {
++        if (state == PeerState::IncomingRequest) {
++            io_.post(kEventCancel, from, opt);
++            peer->state = PeerState::Offer;
++        } else if (state == PeerState::Child) {
++            io_.post(kEventLeave, from, opt);
++            peer->state = PeerState::Offer;
++        }
++    } else {
++        if (state == PeerState::OutgoingRequest) {
++            io_.post(kEventDeny, from, opt);
++            peer->state = PeerState::Offer;
++        } else if (state == PeerState::P2P) {
++            io_.post(kEventLeave, from, opt);
++            remove(from);
++        } else if (state == PeerState::IncomingRequest) {
++            io_.post(kEventCancel, from, opt);
++            remove(from);
++        }
++    }
++}
++
++} // namespace portablekit::adhoc::matching
+diff --git a/host/adhoc/matching_timers.cpp b/host/adhoc/matching_timers.cpp
+new file mode 100644
+index 0000000..63c1ed6
+--- /dev/null
++++ b/host/adhoc/matching_timers.cpp
+@@ -0,0 +1,118 @@
++#include "matching.hpp"
++
++namespace portablekit::adhoc::matching {
++
++namespace {
++
++std::uint32_t get32(const std::string &p, std::size_t offset) {
++    std::uint32_t value = 0u;
++    for (unsigned i = 0; i < 4u; ++i) value |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(p[offset + i])) << (8u * i);
++    return value;
++}
++
++Mac get_mac(const std::string &p, std::size_t offset) {
++    Mac mac{};
++    for (std::size_t i = 0; i < mac.size(); ++i) mac[i] = static_cast<std::uint8_t>(p[offset + i]);
++    return mac;
++}
++
++constexpr std::size_t kMaxPeers = 32u;
++
++} // namespace
++
++void Context::on_bulk(const Mac &from, const std::string &p) {
++    Peer *peer = find(from);
++    if (peer == nullptr) return;
++    const bool allowed = (config_.mode == Mode::Host && peer->state == PeerState::Child) ||
++                         (config_.mode == Mode::Client && (peer->state == PeerState::Child || peer->state == PeerState::Parent)) ||
++                         (config_.mode == Mode::P2P && peer->state == PeerState::P2P);
++    if (!allowed || p.size() <= 5u) return;
++    const std::uint32_t length = get32(p, 1u);
++    if (length == 0u || length > p.size() - 5u) return;
++    io_.post(kEventData, from, p.substr(5u, length));
++}
++
++// The host says another child joined: a client keeps it as a sibling.
++void Context::on_birth(const Mac &from, const std::string &p) {
++    Peer *parent = find(from);
++    if (parent == nullptr || config_.mode != Mode::Client || parent->state != PeerState::Parent || p.size() < 7u) return;
++    const Mac mac = get_mac(p, 1u);
++    if (find(mac) != nullptr || mac == config_.mac || peers_.size() >= kMaxPeers) return;
++    add(mac, PeerState::Child);
++}
++
++void Context::on_death(const Mac &from, const std::string &p) {
++    Peer *parent = find(from);
++    if (parent == nullptr || config_.mode != Mode::Client || parent->state != PeerState::Parent || p.size() < 7u) return;
++    const Mac mac = get_mac(p, 1u);
++    Peer *dead = find(mac);
++    if (dead == nullptr || dead->state != PeerState::Child) return;
++    io_.post(kEventLeave, mac, {});
++    remove(mac);
++}
++
++void Context::on_bye(const Mac &from) {
++    Peer *peer = find(from);
++    if (peer == nullptr) return;
++    const PeerState state = peer->state;
++    if (config_.mode == Mode::Client) {
++        if (state == PeerState::Parent) {
++            io_.post(kEventBye, from, {});
++            clear_peers();
++        } else if (state == PeerState::Child) {
++            remove(from);
++        }
++        return;
++    }
++    const bool relevant =
++        config_.mode == Mode::Host
++            ? (state == PeerState::Child || state == PeerState::Offer)
++            : (state == PeerState::P2P || state == PeerState::Offer || state == PeerState::IncomingRequest ||
++               state == PeerState::OutgoingRequest);
++    if (!relevant) return;
++    io_.post(kEventBye, from, {});
++    remove(from);
++}
++
++// A peer that has been silent for the whole timeout is gone.
++void Context::check_timeouts(std::uint64_t now) {
++    std::vector<Peer> lost;
++    for (const Peer &peer : peers_) {
++        if (static_cast<std::int64_t>(now - peer.last_ping_us) <= static_cast<std::int64_t>(timeout_us_)) continue;
++        const bool relevant =
++            (config_.mode == Mode::Client && peer.state == PeerState::Parent) ||
++            (config_.mode == Mode::Host && peer.state == PeerState::Child) ||
++            (config_.mode == Mode::P2P && (peer.state == PeerState::P2P || peer.state == PeerState::IncomingRequest ||
++                                           peer.state == PeerState::OutgoingRequest));
++        if (relevant) lost.push_back(peer);
++    }
++    for (const Peer &peer : lost) {
++        io_.post(kEventTimeout, peer.mac, {});
++        if (config_.mode == Mode::Host) send_death(peer);
++        else send_cancel(peer.mac, {});
++        if (config_.mode == Mode::Client) clear_peers();
++        else remove(peer.mac);
++    }
++}
++
++void Context::tick() {
++    if (!running_) return;
++    const std::uint64_t now = io_.now_us();
++    // Hosts and P2P players with a free place keep announcing the room.
++    const bool offering = (config_.mode == Mode::Host && count_children() < config_.maxpeers - 1) ||
++                          (config_.mode == Mode::P2P && find_state(PeerState::P2P) == nullptr);
++    if (offering && config_.hello_us > 0u && now - last_hello_ >= config_.hello_us) {
++        std::string hello(1, static_cast<char>(1));
++        for (unsigned i = 0; i < 4u; ++i) hello.push_back(static_cast<char>((hello_.size() >> (8u * i)) & 0xFFu));
++        hello += hello_;
++        broadcast(hello);
++        last_hello_ = now;
++    }
++    if (config_.keepalive_us > 0u && now - last_ping_ >= config_.keepalive_us) {
++        broadcast(std::string(1, static_cast<char>(0)));
++        last_ping_ = now;
++    }
++    check_timeouts(now);
++}
++
++} // namespace portablekit::adhoc::matching
+diff --git a/host/adhoc/portmap.cpp b/host/adhoc/portmap.cpp
+new file mode 100644
+index 0000000..6d400f4
+--- /dev/null
++++ b/host/adhoc/portmap.cpp
+@@ -0,0 +1,99 @@
++#include "portmap.hpp"
++
++#include <cstdio>
++
++namespace portablekit::adhoc {
++
++namespace {
++
++// 10/8, 172.16/12, 192.168/16 and the carrier-grade range 100.64/10: an address nobody on the internet can reach.
++bool is_private(const std::string &ip) {
++    unsigned a = 0, b = 0, c = 0, d = 0;
++    if (std::sscanf(ip.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) != 4) return false;
++    return a == 10 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) || (a == 100 && b >= 64 && b <= 127) || a == 0;
++}
++
++} // namespace
++
++PortMapper &PortMapper::get() {
++    static PortMapper instance;
++    return instance;
++}
++
++PortMapper::~PortMapper() {
++    if (worker_.joinable()) worker_.join();
++}
++
++PortMapStatus PortMapper::status() const {
++    const std::lock_guard<std::mutex> lock(mutex_);
++    return status_;
++}
++
++void PortMapper::open(std::uint16_t adhocctl_port) {
++    {
++        const std::lock_guard<std::mutex> lock(mutex_);
++        if (status_.state == PortMapStatus::State::Working) return;
++        status_ = PortMapStatus{};
++        status_.state = PortMapStatus::State::Working;
++        status_.port = adhocctl_port;
++    }
++    if (worker_.joinable()) worker_.join();
++    worker_ = std::thread([this, adhocctl_port] { work(adhocctl_port); });
++}
++
++void PortMapper::work(std::uint16_t port) {
++    UpnpGateway gateway;
++    const bool found = upnp_find_gateway(gateway, 2500);
++    std::string external = found ? upnp_external_ip(gateway) : std::string();
++    if (external.empty()) external = stun_public_ip(2000);
++
++    PortMapStatus result;
++    result.port = port;
++    result.external_ip = external;
++    if (found && upnp_add_mapping(gateway, port, "PortableKit session") &&
++        upnp_add_mapping(gateway, static_cast<std::uint16_t>(port + 1u), "PortableKit session relay")) {
++        result.method = "UPnP";
++        result.state = PortMapStatus::State::Mapped;
++    } else {
++        result.state = PortMapStatus::State::Failed;
++        result.error = found ? "The router refused to open the ports. Forward TCP ports " + std::to_string(port) + " and " +
++                                   std::to_string(port + 1u) + " to this computer by hand."
++                             : "The router does not offer UPnP. Forward TCP ports " + std::to_string(port) + " and " +
++                                   std::to_string(port + 1u) + " to this computer by hand.";
++    }
++    if (external.empty()) {
++        result.state = PortMapStatus::State::Failed;
++        result.error = "Could not find out the public address. Check the internet connection.";
++    } else if (is_private(external)) {
++        result.external_ip.clear(); // an address nobody can reach is not one to hand out
++        result.state = PortMapStatus::State::Failed;
++        result.error = "The internet provider shares one public address between many customers (CGNAT), so other "
++                       "players cannot reach this computer directly. IPv6, or a provider that gives a public address, is needed.";
++    }
++    const std::lock_guard<std::mutex> lock(mutex_);
++    if (status_.state == PortMapStatus::State::Idle) return; // closed while working
++    status_ = result;
++    if (result.method == "UPnP") {
++        gateway_ = gateway;
++        mapped_port_ = port;
++    }
++}
++
++void PortMapper::close() {
++    if (worker_.joinable()) worker_.join();
++    UpnpGateway gateway;
++    std::uint16_t port = 0;
++    {
++        const std::lock_guard<std::mutex> lock(mutex_);
++        gateway = gateway_;
++        port = mapped_port_;
++        mapped_port_ = 0;
++        status_ = PortMapStatus{};
++    }
++    if (port != 0u) {
++        upnp_remove_mapping(gateway, port);
++        upnp_remove_mapping(gateway, static_cast<std::uint16_t>(port + 1u));
++    }
++}
++
++} // namespace portablekit::adhoc
+diff --git a/host/adhoc/portmap.hpp b/host/adhoc/portmap.hpp
+new file mode 100644
+index 0000000..70f334a
+--- /dev/null
++++ b/host/adhoc/portmap.hpp
+@@ -0,0 +1,62 @@
++#pragma once
++
++// Makes a hosted session reachable from the internet without a server in between: asks the router to forward the
++// host's two TCP ports (UPnP), and finds the public address to hand to the other players (the router's answer, or a
++// STUN server's, which only says what address a packet came from and carries no game data).
++#include <cstdint>
++#include <mutex>
++#include <string>
++#include <thread>
++
++namespace portablekit::adhoc {
++
++// UPnP Internet Gateway Device.
++struct UpnpGateway {
++    std::string control_url; // http://host:port/path of the port mapping service
++    std::string service_type;
++    std::string local_ip;    // this machine's address towards the router
++};
++
++struct PortMapStatus {
++    enum class State { Idle, Working, Mapped, Failed };
++    State state{State::Idle};
++    std::string external_ip;   // the public address, when one was found
++    std::uint16_t port{};      // the adhocctl port that was asked for (the relay is on the next)
++    std::string method;        // "UPnP" when the router opened the ports
++    std::string error;         // what went wrong, for the player
++    // The text for another player to enter: "address:port", empty until the public address is known.
++    [[nodiscard]] std::string invite() const {
++        return external_ip.empty() ? std::string() : external_ip + ":" + std::to_string(port);
++    }
++};
++
++class PortMapper {
++public:
++    static PortMapper &get();
++    // Starts finding the public address and opening `adhocctl_port` and the next one, in the background.
++    void open(std::uint16_t adhocctl_port);
++    // Takes the mapping away again.
++    void close();
++    [[nodiscard]] PortMapStatus status() const;
++
++private:
++    PortMapper() = default;
++    ~PortMapper();
++    void work(std::uint16_t port);
++
++    mutable std::mutex mutex_;
++    PortMapStatus status_;
++    std::thread worker_;
++    UpnpGateway gateway_;         // kept to remove the mapping
++    std::uint16_t mapped_port_{};
++};
++
++// STUN (RFC 5389): the public IPv4 address as a server sees it; empty when none answers.
++[[nodiscard]] std::string stun_public_ip(int timeout_ms);
++
++[[nodiscard]] bool upnp_find_gateway(UpnpGateway &out, int timeout_ms);
++[[nodiscard]] bool upnp_add_mapping(const UpnpGateway &gateway, std::uint16_t port, const std::string &description);
++void upnp_remove_mapping(const UpnpGateway &gateway, std::uint16_t port);
++[[nodiscard]] std::string upnp_external_ip(const UpnpGateway &gateway);
++
++} // namespace portablekit::adhoc
+diff --git a/host/adhoc/portmap_http.hpp b/host/adhoc/portmap_http.hpp
+new file mode 100644
+index 0000000..2e619a7
+--- /dev/null
++++ b/host/adhoc/portmap_http.hpp
+@@ -0,0 +1,25 @@
++#pragma once
++
++// The small HTTP client UPnP needs: one request, one answer, over a plain TCP connection.
++#include <string>
++
++namespace portablekit::adhoc {
++
++struct HttpUrl {
++    std::string host;
++    std::string port{"80"};
++    std::string path{"/"};
++};
++
++// "http://host:port/path"; false for anything else.
++[[nodiscard]] bool parse_http_url(const std::string &url, HttpUrl &out);
++
++// Sends `request` to host:port and returns everything the server answers until it closes (or the time runs out).
++[[nodiscard]] std::string http_exchange(const HttpUrl &url, const std::string &request, int timeout_ms,
++                                        std::string *local_ip = nullptr);
++
++// The text between <tag> and </tag>, empty when absent.
++[[nodiscard]] std::string xml_text(const std::string &xml, const std::string &tag, std::size_t from = 0u,
++                                   std::size_t *end = nullptr);
++
++} // namespace portablekit::adhoc
+diff --git a/host/adhoc/portmap_soap.cpp b/host/adhoc/portmap_soap.cpp
+new file mode 100644
+index 0000000..99dccc0
+--- /dev/null
++++ b/host/adhoc/portmap_soap.cpp
+@@ -0,0 +1,123 @@
++#include "portmap.hpp"
++#include "portmap_http.hpp"
++#include "sockets.hpp"
++
++#include <chrono>
++
++namespace portablekit::adhoc {
++
++using namespace net;
++
++bool parse_http_url(const std::string &url, HttpUrl &out) {
++    static const std::string kScheme = "http://";
++    if (url.compare(0, kScheme.size(), kScheme) != 0) return false;
++    const std::size_t host_start = kScheme.size();
++    const std::size_t slash = url.find('/', host_start);
++    const std::string authority = url.substr(host_start, slash == std::string::npos ? std::string::npos : slash - host_start);
++    out.path = slash == std::string::npos ? "/" : url.substr(slash);
++    const std::size_t colon = authority.rfind(':');
++    out.host = colon == std::string::npos ? authority : authority.substr(0, colon);
++    out.port = colon == std::string::npos ? "80" : authority.substr(colon + 1);
++    return !out.host.empty();
++}
++
++std::string xml_text(const std::string &xml, const std::string &tag, std::size_t from, std::size_t *end) {
++    const std::string open = "<" + tag + ">";
++    const std::string close = "</" + tag + ">";
++    const std::size_t a = xml.find(open, from);
++    if (a == std::string::npos) return {};
++    const std::size_t b = xml.find(close, a + open.size());
++    if (b == std::string::npos) return {};
++    if (end != nullptr) *end = b + close.size();
++    return xml.substr(a + open.size(), b - a - open.size());
++}
++
++std::string http_exchange(const HttpUrl &url, const std::string &request, int timeout_ms, std::string *local_ip) {
++    WinsockSession winsock;
++    addrinfo hints{};
++    hints.ai_family = AF_INET;
++    hints.ai_socktype = SOCK_STREAM;
++    addrinfo *found = nullptr;
++    if (getaddrinfo(url.host.c_str(), url.port.c_str(), &hints, &found) != 0 || found == nullptr) return {};
++    Socket sock = ::socket(found->ai_family, found->ai_socktype, found->ai_protocol);
++    std::string answer;
++    if (sock != kNoSocket) {
++        if (::connect(sock, found->ai_addr, static_cast<int>(found->ai_addrlen)) == 0) {
++            if (local_ip != nullptr) {
++                sockaddr_in local{};
++#if defined(_WIN32)
++                int size = sizeof(local);
++#else
++                socklen_t size = sizeof(local);
++#endif
++                if (::getsockname(sock, reinterpret_cast<sockaddr *>(&local), &size) == 0) {
++                    char text[INET_ADDRSTRLEN] = {};
++                    inet_ntop(AF_INET, &local.sin_addr, text, sizeof(text));
++                    *local_ip = text;
++                }
++            }
++            if (::send(sock, request.data(), static_cast<int>(request.size()), kSendFlags) == static_cast<int>(request.size())) {
++                const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
++                char buffer[4096];
++                while (std::chrono::steady_clock::now() < deadline) {
++                    PollEntry entry{};
++                    entry.fd = sock;
++                    entry.events = POLLIN;
++                    if (poll_sockets(&entry, 1, 200) <= 0) continue;
++                    const int got = static_cast<int>(::recv(sock, buffer, sizeof(buffer), 0));
++                    if (got <= 0) break;
++                    answer.append(buffer, static_cast<std::size_t>(got));
++                }
++            }
++        }
++        close_socket(sock);
++    }
++    freeaddrinfo(found);
++    return answer;
++}
++
++namespace {
++
++// One SOAP action on the router's port mapping service; the whole HTTP answer.
++std::string soap(const UpnpGateway &gateway, const std::string &action, const std::string &arguments) {
++    HttpUrl url;
++    if (!parse_http_url(gateway.control_url, url)) return {};
++    const std::string body = "<?xml version=\"1.0\"?>"
++                             "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" "
++                             "s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body>"
++                             "<u:" + action + " xmlns:u=\"" + gateway.service_type + "\">" + arguments + "</u:" + action +
++                             "></s:Body></s:Envelope>";
++    const std::string request = "POST " + url.path + " HTTP/1.1\r\nHost: " + url.host + ":" + url.port +
++                                "\r\nContent-Type: text/xml; charset=\"utf-8\"\r\nSOAPAction: \"" + gateway.service_type + "#" +
++                                action + "\"\r\nContent-Length: " + std::to_string(body.size()) +
++                                "\r\nConnection: close\r\n\r\n" + body;
++    return http_exchange(url, request, 4000);
++}
++
++bool succeeded(const std::string &answer) { return answer.compare(0, 12, "HTTP/1.1 200") == 0 || answer.compare(0, 12, "HTTP/1.0 200") == 0; }
++
++} // namespace
++
++bool upnp_add_mapping(const UpnpGateway &gateway, std::uint16_t port, const std::string &description) {
++    const std::string port_text = std::to_string(port);
++    // A lease of 0 asks for a permanent mapping; the host removes it again when it stops.
++    return succeeded(soap(gateway, "AddPortMapping",
++                          "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + port_text + "</NewExternalPort>"
++                          "<NewProtocol>TCP</NewProtocol><NewInternalPort>" + port_text + "</NewInternalPort>"
++                          "<NewInternalClient>" + gateway.local_ip + "</NewInternalClient><NewEnabled>1</NewEnabled>"
++                          "<NewPortMappingDescription>" + description + "</NewPortMappingDescription>"
++                          "<NewLeaseDuration>0</NewLeaseDuration>"));
++}
++
++void upnp_remove_mapping(const UpnpGateway &gateway, std::uint16_t port) {
++    (void)soap(gateway, "DeletePortMapping",
++               "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + std::to_string(port) +
++                   "</NewExternalPort><NewProtocol>TCP</NewProtocol>");
++}
++
++std::string upnp_external_ip(const UpnpGateway &gateway) {
++    const std::string answer = soap(gateway, "GetExternalIPAddress", "");
++    return succeeded(answer) ? xml_text(answer, "NewExternalIPAddress") : std::string();
++}
++
++} // namespace portablekit::adhoc
+diff --git a/host/adhoc/portmap_stun.cpp b/host/adhoc/portmap_stun.cpp
+new file mode 100644
+index 0000000..ff73cc1
+--- /dev/null
++++ b/host/adhoc/portmap_stun.cpp
+@@ -0,0 +1,95 @@
++#include "portmap.hpp"
++#include "sockets.hpp"
++
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <cstdio>
++#include <random>
++
++namespace portablekit::adhoc {
++
++namespace {
++
++using namespace net;
++
++constexpr std::uint32_t kMagicCookie = 0x2112A442u;
++
++struct Server {
++    const char *host;
++    const char *port;
++};
++
++// Public STUN servers: they answer one question (what address did this packet come from) and keep nothing.
++constexpr std::array<Server, 3> kServers{{{"stun.l.google.com", "19302"},
++                                          {"stun.cloudflare.com", "3478"},
++                                          {"stun1.l.google.com", "19302"}}};
++
++// One binding request to one server; the mapped address in dotted form, or empty.
++std::string ask(const Server &server, int timeout_ms) {
++    addrinfo hints{};
++    hints.ai_family = AF_INET;
++    hints.ai_socktype = SOCK_DGRAM;
++    addrinfo *found = nullptr;
++    if (getaddrinfo(server.host, server.port, &hints, &found) != 0 || found == nullptr) return {};
++    Socket sock = ::socket(found->ai_family, found->ai_socktype, found->ai_protocol);
++    if (sock == kNoSocket) {
++        freeaddrinfo(found);
++        return {};
++    }
++    std::array<std::uint8_t, 20> request{};
++    request[0] = 0x00u; // binding request
++    request[1] = 0x01u;
++    request[4] = static_cast<std::uint8_t>(kMagicCookie >> 24u);
++    request[5] = static_cast<std::uint8_t>(kMagicCookie >> 16u);
++    request[6] = static_cast<std::uint8_t>(kMagicCookie >> 8u);
++    request[7] = static_cast<std::uint8_t>(kMagicCookie);
++    std::random_device random;
++    for (std::size_t i = 8; i < 20; ++i) request[i] = static_cast<std::uint8_t>(random());
++    std::string result;
++    if (::sendto(sock, reinterpret_cast<const char *>(request.data()), static_cast<int>(request.size()), 0, found->ai_addr,
++                 static_cast<int>(found->ai_addrlen)) == static_cast<int>(request.size())) {
++        PollEntry entry{};
++        entry.fd = sock;
++        entry.events = POLLIN;
++        if (poll_sockets(&entry, 1, timeout_ms) > 0) {
++            std::array<std::uint8_t, 512> reply{};
++            const int length = static_cast<int>(::recv(sock, reinterpret_cast<char *>(reply.data()), static_cast<int>(reply.size()), 0));
++            // A success response (0x0101) that answers our transaction.
++            if (length >= 20 && reply[0] == 0x01u && reply[1] == 0x01u &&
++                std::equal(request.begin() + 8, request.end(), reply.begin() + 8)) {
++                int at = 20;
++                while (at + 4 <= length) {
++                    const int type = (reply[at] << 8) | reply[at + 1];
++                    const int size = (reply[at + 2] << 8) | reply[at + 3];
++                    const int body = at + 4;
++                    if (body + size > length) break;
++                    // XOR-MAPPED-ADDRESS (0x0020), IPv4: family 1, port, address, all xor the magic cookie.
++                    if (type == 0x0020 && size >= 8 && reply[body + 1] == 0x01u) {
++                        char text[32];
++                        std::snprintf(text, sizeof(text), "%u.%u.%u.%u", reply[body + 4] ^ (kMagicCookie >> 24u),
++                                      reply[body + 5] ^ ((kMagicCookie >> 16u) & 0xFFu),
++                                      reply[body + 6] ^ ((kMagicCookie >> 8u) & 0xFFu), reply[body + 7] ^ (kMagicCookie & 0xFFu));
++                        result = text;
++                        break;
++                    }
++                    at = body + ((size + 3) & ~3);
++                }
++            }
++        }
++    }
++    close_socket(sock);
++    freeaddrinfo(found);
++    return result;
++}
++
++} // namespace
++
++std::string stun_public_ip(int timeout_ms) {
++    WinsockSession winsock;
++    for (const Server &server : kServers)
++        if (std::string ip = ask(server, timeout_ms); !ip.empty()) return ip;
++    return {};
++}
++
++} // namespace portablekit::adhoc
+diff --git a/host/adhoc/portmap_upnp.cpp b/host/adhoc/portmap_upnp.cpp
+new file mode 100644
+index 0000000..0659fd1
+--- /dev/null
++++ b/host/adhoc/portmap_upnp.cpp
+@@ -0,0 +1,112 @@
++#include "portmap.hpp"
++#include "portmap_http.hpp"
++#include "sockets.hpp"
++
++#include <algorithm>
++#include <cctype>
++#include <chrono>
++#include <vector>
++
++namespace portablekit::adhoc {
++
++using namespace net;
++
++namespace {
++
++std::string lower(std::string text) {
++    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++    return text;
++}
++
++// The value of an HTTP header in an SSDP answer.
++std::string header(const std::string &message, const std::string &name) {
++    const std::string wanted = lower(name) + ":";
++    std::size_t at = 0;
++    while (at < message.size()) {
++        std::size_t end = message.find("\r\n", at);
++        if (end == std::string::npos) end = message.size();
++        const std::string line = message.substr(at, end - at);
++        if (lower(line).compare(0, wanted.size(), wanted) == 0) {
++            std::size_t start = wanted.size();
++            while (start < line.size() && line[start] == ' ') ++start;
++            return line.substr(start);
++        }
++        at = end + 2;
++    }
++    return {};
++}
++
++// The addresses of the devices that answer a search for an Internet Gateway Device.
++std::vector<std::string> search(int timeout_ms) {
++    std::vector<std::string> locations;
++    Socket sock = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if (sock == kNoSocket) return locations;
++    sockaddr_in target{};
++    target.sin_family = AF_INET;
++    target.sin_port = htons(1900);
++    inet_pton(AF_INET, "239.255.255.250", &target.sin_addr);
++    for (const char *st : {"urn:schemas-upnp-org:device:InternetGatewayDevice:1", "urn:schemas-upnp-org:device:InternetGatewayDevice:2"}) {
++        const std::string request = std::string("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ") +
++                                    st + "\r\n\r\n";
++        (void)::sendto(sock, request.data(), static_cast<int>(request.size()), 0, reinterpret_cast<const sockaddr *>(&target), sizeof(target));
++    }
++    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
++    while (std::chrono::steady_clock::now() < deadline) {
++        PollEntry entry{};
++        entry.fd = sock;
++        entry.events = POLLIN;
++        if (poll_sockets(&entry, 1, 200) <= 0) continue;
++        char buffer[2048];
++        const int got = static_cast<int>(::recv(sock, buffer, sizeof(buffer) - 1, 0));
++        if (got <= 0) continue;
++        const std::string location = header(std::string(buffer, static_cast<std::size_t>(got)), "LOCATION");
++        if (!location.empty() && std::find(locations.begin(), locations.end(), location) == locations.end())
++            locations.push_back(location);
++    }
++    close_socket(sock);
++    return locations;
++}
++
++// "http://host:port" of a device description's address, the base of the relative control URLs.
++std::string base_of(const HttpUrl &url) { return "http://" + url.host + ":" + url.port; }
++
++// The port mapping service in a device description, or false.
++bool find_service(const std::string &description, const std::string &base, UpnpGateway &out) {
++    std::size_t at = 0;
++    while (true) {
++        const std::size_t open = description.find("<service>", at);
++        if (open == std::string::npos) return false;
++        std::size_t end = description.find("</service>", open);
++        if (end == std::string::npos) return false;
++        const std::string block = description.substr(open, end - open);
++        const std::string type = xml_text(block, "serviceType");
++        if (type.find("WANIPConnection") != std::string::npos || type.find("WANPPPConnection") != std::string::npos) {
++            std::string control = xml_text(block, "controlURL");
++            if (control.empty()) return false;
++            out.service_type = type;
++            out.control_url = control.compare(0, 7, "http://") == 0 ? control : base + (control[0] == '/' ? "" : "/") + control;
++            return true;
++        }
++        at = end;
++    }
++}
++
++} // namespace
++
++bool upnp_find_gateway(UpnpGateway &out, int timeout_ms) {
++    WinsockSession winsock;
++    for (const std::string &location : search(timeout_ms)) {
++        HttpUrl url;
++        if (!parse_http_url(location, url)) continue;
++        std::string local_ip;
++        const std::string request = "GET " + url.path + " HTTP/1.1\r\nHost: " + url.host + ":" + url.port + "\r\nConnection: close\r\n\r\n";
++        const std::string description = http_exchange(url, request, 3000, &local_ip);
++        if (find_service(description, base_of(url), out)) {
++            out.local_ip = local_ip;
++            return !out.local_ip.empty();
++        }
++    }
++    return false;
++}
++
++} // namespace portablekit::adhoc
+diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
+index fcc7fc2..42fe769 100644
+--- a/host/hle/hle_adhoc.cpp
++++ b/host/hle/hle_adhoc.cpp
+@@ -16,6 +16,7 @@
+ // <prefix>_TRACE_ADHOC=1 logs every call with its arguments and result, and
+ // every packet header the client sends or receives.
+ #include "../profile.hpp"
++#include "hle_adhoc_matching.hpp"
+ #include "hle_common.hpp"
+ 
+ #include "adhoc/client.hpp"
+@@ -979,6 +980,9 @@ bool adhoc_session_active() {
+     return adhoc_hosting() || Client::get().in_group() || d.joining.has_value() || d.rejoin_ms.has_value();
+ }
+ 
++// This machine's virtual MAC, for sceNetAdhocMatching (hle_adhoc_matching.cpp).
++adhoc::Mac adhoc_own_mac() { return own_mac(); }
++
+ void register_adhoc(HleRegistrar &hle) {
+     register_net(hle);
+     register_adhocctl(hle);
+@@ -986,6 +990,7 @@ void register_adhoc(HleRegistrar &hle) {
+     register_ptp(hle);
+     register_discover(hle);
+     register_netconf(hle);
++    matching_hle::register_api(hle);
+ }
+ 
+ } // namespace portablekit
+diff --git a/host/hle/hle_adhoc_matching.cpp b/host/hle/hle_adhoc_matching.cpp
+new file mode 100644
+index 0000000..1141a3d
+--- /dev/null
++++ b/host/hle/hle_adhoc_matching.cpp
+@@ -0,0 +1,124 @@
++#include "hle_adhoc_matching.hpp"
++
++#include "adhoc/client.hpp"
++#include "kernel/kernel.hpp"
++
++#include <chrono>
++#include <cstdio>
++
++namespace portablekit {
++
++// hle_adhoc.cpp: this machine's virtual MAC.
++adhoc::Mac adhoc_own_mac();
++
++namespace matching_hle {
++
++State &state() {
++    static State value;
++    return value;
++}
++
++Entry *find_entry(int id) {
++    const auto it = state().contexts.find(id);
++    return it == state().contexts.end() ? nullptr : it->second.get();
++}
++
++adhoc::Mac read_mac(const psprecomp::GuestMemory &memory, std::uint32_t address) {
++    adhoc::Mac mac{};
++    for (std::size_t i = 0; i < mac.size(); ++i) mac[i] = memory.load8(address + static_cast<std::uint32_t>(i));
++    return mac;
++}
++
++std::string read_bytes(const psprecomp::GuestMemory &memory, std::uint32_t address, std::uint32_t length) {
++    std::string out(length, '\0');
++    for (std::uint32_t i = 0; i < length; ++i) out[i] = static_cast<char>(memory.load8(address + i));
++    return out;
++}
++
++// EntryIo -------------------------------------------------------------------
++
++void EntryIo::send(const adhoc::Mac &to, std::uint16_t port, const std::string &bytes) {
++    if (owner->pdp != 0) adhoc::Client::get().pdp_send(owner->pdp, to, port, bytes.data(), bytes.size());
++}
++
++std::vector<adhoc::Mac> EntryIo::group() {
++    std::vector<adhoc::Mac> macs;
++    for (const adhoc::Peer &peer : adhoc::Client::get().peers()) macs.push_back(peer.mac);
++    return macs;
++}
++
++void EntryIo::post(int event, const adhoc::Mac &from, const std::string &opt) {
++    owner->events.push_back(PendingEvent{event, from, opt});
++}
++
++std::uint64_t EntryIo::now_us() {
++    using namespace std::chrono;
++    return static_cast<std::uint64_t>(duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count());
++}
++
++// Running ---------------------------------------------------------------------
++
++std::uint32_t start_entry(Entry &entry, std::string hello) {
++    const adhoc::matching::Config &config = entry.context->config();
++    entry.pdp = adhoc::Client::get().pdp_open(config.port, config.rxbuflen);
++    if (entry.pdp == 0) return adhoc::matching::error::kPortInUse;
++    entry.context->start(std::move(hello));
++    if (!state().hooked) {
++        state().hooked = true;
++        kernel().add_vblank_hook(pump);
++    }
++    return 0u;
++}
++
++void stop_entry(Entry &entry) {
++    entry.context->stop();
++    if (entry.pdp != 0) adhoc::Client::get().pdp_close(entry.pdp);
++    entry.pdp = 0;
++    entry.events.clear();
++}
++
++namespace {
++
++// The handler is called as handler(id, event, mac*, optlen, opt*); the mac and the option live in a block of guest
++// memory that is given back when the handler returns.
++void deliver(Entry &entry, int id, const PendingEvent &event) {
++    Kernel &k = kernel();
++    const auto size = static_cast<std::uint32_t>(8u + event.opt.size());
++    const std::int32_t block = k.allocate_block("AdhocMatchingEvent", 1u, (size + 15u) & ~15u, 0u);
++    if (block < 0) return;
++    const MemoryBlock *memory = k.find_block(static_cast<SceUID>(block));
++    if (memory == nullptr) return;
++    auto &guest = k.runtime().memory();
++    for (std::size_t i = 0; i < event.from.size(); ++i) guest.store8(memory->address + static_cast<std::uint32_t>(i), event.from[i]);
++    for (std::size_t i = 0; i < event.opt.size(); ++i)
++        guest.store8(memory->address + 8u + static_cast<std::uint32_t>(i), static_cast<std::uint8_t>(event.opt[i]));
++    InterruptCall call{};
++    call.function = entry.callback;
++    call.arguments = {static_cast<std::uint32_t>(id), static_cast<std::uint32_t>(event.event), memory->address,
++                      static_cast<std::uint32_t>(event.opt.size()), memory->address + 8u, 0u, 0u, 0u};
++    call.argument_count = 5u;
++    const auto uid = static_cast<SceUID>(block);
++    call.on_return = [uid](std::uint32_t) { kernel().free_block(uid); };
++    if (adhoc::Client::tracing())
++        std::fprintf(stderr, "[adhoc] matching %d: event %d, %zu bytes\n", id, event.event, event.opt.size());
++    k.queue_interrupt(std::move(call));
++}
++
++} // namespace
++
++void pump() {
++    for (auto &[id, entry] : state().contexts) {
++        if (!entry->context->running() || entry->pdp == 0) continue;
++        while (auto datagram = adhoc::Client::get().pdp_receive(entry->pdp))
++            entry->context->on_datagram(datagram->source, datagram->port, datagram->data);
++        entry->context->tick();
++        while (!entry->events.empty()) {
++            PendingEvent event = std::move(entry->events.front());
++            entry->events.pop_front();
++            deliver(*entry, id, event);
++        }
++    }
++}
++
++} // namespace matching_hle
++} // namespace portablekit
+diff --git a/host/hle/hle_adhoc_matching.hpp b/host/hle/hle_adhoc_matching.hpp
+new file mode 100644
+index 0000000..56a7a53
+--- /dev/null
++++ b/host/hle/hle_adhoc_matching.hpp
+@@ -0,0 +1,60 @@
++#pragma once
++
++// sceNetAdhocMatching on top of the ad hoc client's PDP sockets (adhoc/matching.hpp holds the protocol).
++#include "adhoc/matching.hpp"
++#include "hle_common.hpp"
++
++#include <array>
++#include <deque>
++#include <map>
++#include <memory>
++#include <string>
++
++namespace portablekit::matching_hle {
++
++struct Entry;
++
++// What a context's protocol code uses: the client's PDP socket, the group's members and a queue of events.
++struct EntryIo final : adhoc::matching::Io {
++    Entry *owner{};
++    void send(const adhoc::Mac &to, std::uint16_t port, const std::string &bytes) override;
++    std::vector<adhoc::Mac> group() override;
++    void post(int event, const adhoc::Mac &from, const std::string &opt) override;
++    std::uint64_t now_us() override;
++};
++
++struct PendingEvent {
++    int event{};
++    adhoc::Mac from{};
++    std::string opt;
++};
++
++struct Entry {
++    EntryIo io;
++    std::unique_ptr<adhoc::matching::Context> context;
++    std::uint32_t callback{}; // the game's handler
++    int pdp{};                // the client's socket handle, 0 while not started
++    std::deque<PendingEvent> events;
++};
++
++struct State {
++    bool initialized{};
++    bool hooked{};
++    std::map<int, std::unique_ptr<Entry>> contexts;
++};
++
++[[nodiscard]] State &state();
++[[nodiscard]] Entry *find_entry(int id);
++
++// Receives datagrams, runs the timers and hands the events to the game's handlers. Runs once per vblank.
++void pump();
++// Opens the socket and starts the context. Returns 0 or an error code.
++[[nodiscard]] std::uint32_t start_entry(Entry &entry, std::string hello);
++void stop_entry(Entry &entry);
++
++[[nodiscard]] adhoc::Mac read_mac(const psprecomp::GuestMemory &memory, std::uint32_t address);
++[[nodiscard]] std::string read_bytes(const psprecomp::GuestMemory &memory, std::uint32_t address, std::uint32_t length);
++
++void register_api(HleRegistrar &hle);
++
++} // namespace portablekit::matching_hle
+diff --git a/host/hle/hle_adhoc_matching_api.cpp b/host/hle/hle_adhoc_matching_api.cpp
+new file mode 100644
+index 0000000..4ff1298
+--- /dev/null
++++ b/host/hle/hle_adhoc_matching_api.cpp
+@@ -0,0 +1,171 @@
++#include "hle_adhoc_matching.hpp"
++
++#include "adhoc/client.hpp"
++#include "kernel/kernel.hpp"
++
++namespace portablekit {
++
++adhoc::Mac adhoc_own_mac();
++
++namespace matching_hle {
++
++namespace {
++
++namespace err = adhoc::matching::error;
++using adhoc::matching::Mode;
++
++constexpr int kMaxContexts = 15;
++
++// The functions answer with the result in v0; a negative value is an error code.
++void answer(AllegrexContext &ctx, std::uint32_t result) { kernel().finish(ctx, result); }
++
++} // namespace
++
++void register_api(HleRegistrar &hle) {
++    constexpr const char *kModule = "sceNetAdhocMatching";
++
++    hle.add(kModule, "sceNetAdhocMatchingInit", [](Runtime &, AllegrexContext &ctx) {
++        if (state().initialized) return answer(ctx, err::kAlreadyInitialized);
++        state().initialized = true;
++        answer(ctx, 0u);
++    });
++
++    hle.add(kModule, "sceNetAdhocMatchingTerm", [](Runtime &, AllegrexContext &ctx) {
++        for (auto &[id, entry] : state().contexts) stop_entry(*entry);
++        state().contexts.clear();
++        state().initialized = false;
++        answer(ctx, 0u);
++    });
++
++    // (mode, maxnum, port, rxbuflen, hello_int, keepalive_int, init_count, rexmt_int, handler)
++    hle.add(kModule, "sceNetAdhocMatchingCreate", [](Runtime &, AllegrexContext &ctx) {
++        if (!state().initialized) return answer(ctx, err::kNotInitialized);
++        const auto mode = static_cast<int>(arg(ctx, 0));
++        const auto maxnum = static_cast<int>(arg(ctx, 1));
++        const auto port = static_cast<std::uint16_t>(arg(ctx, 2));
++        const auto rxbuflen = static_cast<std::int32_t>(arg(ctx, 3));
++        const std::uint32_t hello_int = arg(ctx, 4);
++        const std::uint32_t keepalive_int = arg(ctx, 5);
++        const auto init_count = static_cast<std::int32_t>(arg(ctx, 6));
++        const std::uint32_t rexmt_int = arg(ctx, 7);
++        const std::uint32_t handler = arg(ctx, 8);
++        if (maxnum <= 1 || maxnum > 16) return answer(ctx, err::kInvalidMaxnum);
++        if (rxbuflen < 6 * maxnum + 4) return answer(ctx, err::kRxbufTooShort);
++        if (rxbuflen > 1024 * 1024) return answer(ctx, err::kNoSpace);
++        if (mode < 1 || mode > 3) return answer(ctx, err::kInvalidMode);
++        const bool announces = mode == 1 || mode == 3;
++        if ((announces && (hello_int == 0u || keepalive_int == 0u)) || init_count < 0 || rexmt_int == 0u)
++            return answer(ctx, err::kInvalidArg);
++        for (const auto &[id, other] : state().contexts)
++            if (other->context->config().port == port) return answer(ctx, err::kPortInUse);
++        if (static_cast<int>(state().contexts.size()) >= kMaxContexts) return answer(ctx, err::kIdNotAvail);
++        int id = 1;
++        while (state().contexts.count(id) != 0u) ++id;
++
++        adhoc::matching::Config config;
++        config.id = id;
++        config.mode = static_cast<Mode>(mode);
++        config.maxpeers = maxnum;
++        config.port = port;
++        config.rxbuflen = static_cast<std::uint32_t>(rxbuflen);
++        config.hello_us = hello_int;
++        config.keepalive_us = keepalive_int != 0u ? keepalive_int : 5'000'000u;
++        config.init_count = init_count;
++        config.rexmt_us = rexmt_int;
++        config.mac = adhoc_own_mac();
++        auto entry = std::make_unique<Entry>();
++        entry->io.owner = entry.get();
++        entry->callback = handler;
++        entry->context = std::make_unique<adhoc::matching::Context>(config, entry->io);
++        state().contexts[id] = std::move(entry);
++        answer(ctx, static_cast<std::uint32_t>(id));
++    });
++
++    // (id, evthPri, evthStack, inthPri, inthStack, optLen, optData): the priorities and stacks are for threads the
++    // game's PSP would have had; the events come from the vblank hook here.
++    hle.add(kModule, "sceNetAdhocMatchingStart", [](Runtime &rt, AllegrexContext &ctx) {
++        Entry *entry = find_entry(static_cast<int>(arg(ctx, 0)));
++        if (entry == nullptr) return answer(ctx, err::kInvalidId);
++        if (entry->context->running()) return answer(ctx, err::kIsRunning);
++        const std::uint32_t opt_length = arg(ctx, 5);
++        const std::uint32_t opt = arg(ctx, 6);
++        std::string hello;
++        if (opt_length > 0u && opt != 0u) hello = read_bytes(rt.memory(), opt, opt_length);
++        answer(ctx, start_entry(*entry, std::move(hello)));
++    });
++
++    hle.add(kModule, "sceNetAdhocMatchingStop", [](Runtime &, AllegrexContext &ctx) {
++        Entry *entry = find_entry(static_cast<int>(arg(ctx, 0)));
++        if (entry == nullptr) return answer(ctx, err::kInvalidId);
++        if (!entry->context->running()) return answer(ctx, err::kNotRunning);
++        stop_entry(*entry);
++        answer(ctx, 0u);
++    });
++
++    hle.add(kModule, "sceNetAdhocMatchingDelete", [](Runtime &, AllegrexContext &ctx) {
++        const auto id = static_cast<int>(arg(ctx, 0));
++        Entry *entry = find_entry(id);
++        if (entry == nullptr) return answer(ctx, err::kInvalidId);
++        if (entry->context->running()) return answer(ctx, err::kIsRunning);
++        state().contexts.erase(id);
++        answer(ctx, 0u);
++    });
++
++    // (id, optLen, optData)
++    hle.add(kModule, "sceNetAdhocMatchingSetHelloOpt", [](Runtime &rt, AllegrexContext &ctx) {
++        Entry *entry = find_entry(static_cast<int>(arg(ctx, 0)));
++        if (entry == nullptr) return answer(ctx, err::kInvalidId);
++        const std::uint32_t length = arg(ctx, 1);
++        const std::uint32_t data = arg(ctx, 2);
++        if (length > 0u && data == 0u) return answer(ctx, err::kInvalidOptlen);
++        entry->context->set_hello(length > 0u ? read_bytes(rt.memory(), data, length) : std::string{});
++        answer(ctx, 0u);
++    });
++
++    // (id, mac*, optLen, optData)
++    hle.add(kModule, "sceNetAdhocMatchingSelectTarget", [](Runtime &rt, AllegrexContext &ctx) {
++        if (!state().initialized) return answer(ctx, err::kNotInitialized);
++        if (arg(ctx, 1) == 0u) return answer(ctx, err::kInvalidArg);
++        Entry *entry = find_entry(static_cast<int>(arg(ctx, 0)));
++        if (entry == nullptr) return answer(ctx, err::kInvalidId);
++        const std::uint32_t length = arg(ctx, 2);
++        if (length != 0u && arg(ctx, 3) == 0u) return answer(ctx, err::kInvalidOptlen);
++        const std::string opt = length > 0u ? read_bytes(rt.memory(), arg(ctx, 3), length) : std::string{};
++        answer(ctx, entry->context->select_target(read_mac(rt.memory(), arg(ctx, 1)), opt));
++    });
++
++    const auto cancel = [](Runtime &rt, AllegrexContext &ctx, bool with_opt) {
++        if (!state().initialized) return answer(ctx, err::kNotInitialized);
++        if (arg(ctx, 1) == 0u) return answer(ctx, err::kInvalidArg);
++        Entry *entry = find_entry(static_cast<int>(arg(ctx, 0)));
++        if (entry == nullptr) return answer(ctx, err::kInvalidId);
++        const std::uint32_t length = with_opt ? arg(ctx, 2) : 0u;
++        if (length != 0u && arg(ctx, 3) == 0u) return answer(ctx, err::kInvalidArg);
++        const std::string opt = length > 0u ? read_bytes(rt.memory(), arg(ctx, 3), length) : std::string{};
++        answer(ctx, entry->context->cancel_target(read_mac(rt.memory(), arg(ctx, 1)), opt));
++    };
++    hle.add(kModule, "sceNetAdhocMatchingCancelTarget",
++            [cancel](Runtime &rt, AllegrexContext &ctx) { cancel(rt, ctx, false); });
++    hle.add(kModule, "sceNetAdhocMatchingCancelTargetWithOpt",
++            [cancel](Runtime &rt, AllegrexContext &ctx) { cancel(rt, ctx, true); });
++
++    // (id, mac*, dataLen, data)
++    hle.add(kModule, "sceNetAdhocMatchingSendData", [](Runtime &rt, AllegrexContext &ctx) {
++        if (!state().initialized) return answer(ctx, err::kNotInitialized);
++        if (arg(ctx, 1) == 0u) return answer(ctx, err::kInvalidArg);
++        Entry *entry = find_entry(static_cast<int>(arg(ctx, 0)));
++        if (entry == nullptr) return answer(ctx, err::kInvalidId);
++        const std::uint32_t length = arg(ctx, 2);
++        if (static_cast<std::int32_t>(length) <= 0 || arg(ctx, 3) == 0u) return answer(ctx, err::kInvalidDatalen);
++        answer(ctx, entry->context->send_data(read_mac(rt.memory(), arg(ctx, 1)), read_bytes(rt.memory(), arg(ctx, 3), length)));
++    });
++
++    // Data goes out at once and in order, so there is nothing left to abort.
++    hle.add(kModule, "sceNetAdhocMatchingAbortSendData", [](Runtime &, AllegrexContext &ctx) {
++        if (!state().initialized) return answer(ctx, err::kNotInitialized);
++        answer(ctx, find_entry(static_cast<int>(arg(ctx, 0))) == nullptr ? err::kInvalidId : 0u);
++    });
++}
++
++} // namespace matching_hle
++} // namespace portablekit
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 4c381fe..107a277 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -19,6 +19,7 @@
+ 
+ #include "adhoc/client.hpp"
+ #include "adhoc/discovery.hpp"
++#include "adhoc/portmap.hpp"
+ #include "adhoc/session.hpp"
+ #include "audio/audio_sink.hpp"
+ #include "gpu/frame_pacing.hpp"
+@@ -1434,6 +1435,23 @@ void play_together() {
+                 copied = text;
+             }
+         }
++        // The address for players on the internet: the router's ports are opened for them, no server in between.
++        {
++            const adhoc::PortMapStatus mapping = adhoc::PortMapper::get().status();
++            if (mapping.state == adhoc::PortMapStatus::State::Working) info_row("Internet address", "Looking for it...");
++            if (!mapping.invite().empty()) {
++                const std::string text = mapping.invite();
++                const std::string label =
++                    text + (mapping.state == adhoc::PortMapStatus::State::Mapped ? "   internet, port opened by the router"
++                                                                                 : "   internet, port still to be opened") +
++                    "###internet address";
++                if (button_row(label.c_str(), {false, {}, "Copies this address. Players anywhere enter it under Join."})) {
++                    SDL_SetClipboardText(text.c_str());
++                    copied = text;
++                }
++            }
++            if (!mapping.error.empty()) info_row("Internet play", mapping.error);
++        }
+         if (!copied.empty()) info_row("Copied", copied);
+         ImGui::PushID("hosted players");
+         for (std::size_t i = 0; i < status.players.size(); ++i) {

@@ -4,6 +4,10 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_trace.log", "a"); if (f) std::setvbuf(f, nullptr, _IONBF, 0); return f ? f : stderr; }
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace psprecomp {
@@ -4262,6 +4266,8 @@ L_089DD4CC:
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-16));
     ctx.pc = 0x02D64960u; (void)rt.invoke_chained_call(ctx, &aot_mem); return;
 L_089DD4D0:
+    { static const bool th = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (n < 6) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] init_089DD4D0[29F9A274007A5CA2] r9=%08X sp=%08X\n", ctx.gpr[9], ctx.gpr[29]); } }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-16));
     goto L_089DD4D4;
 L_089DD4D4:

@@ -4,6 +4,10 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_trace.log", "a"); if (f) std::setvbuf(f, nullptr, _IONBF, 0); return f ? f : stderr; }
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace psprecomp {
@@ -8054,6 +8058,8 @@ L_089E64EC:
       if (!signed_ok) { rt.arithmetic_overflow(0x089E64ECu, 0x006E6962u); return; } }
     goto L_089E64F0;
 L_089E64F0:
+    { static const bool th = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (n < 6) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] F_entry_089E64F0 r9=%08X r10=%08X sp=%08X\n", ctx.gpr[9], ctx.gpr[10], ctx.gpr[29]); } }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-96));
     goto L_089E64F4;
 L_089E64F4:
@@ -8084,6 +8090,8 @@ L_089E6510:
     ctx.gpr[10] = (ctx.gpr[10] | 29263u);
     goto L_089E6514;
 L_089E6514:
+    { static const bool th = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (n < 6) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] F_check_089E6514 r9=%08X(word at 08845A1C) r10=%08X sp=%08X\n", ctx.gpr[9], ctx.gpr[10], ctx.gpr[29]); } }
     { const bool branch_taken = ctx.gpr[9] != ctx.gpr[10];
     ctx.gpr[4] = (0u | 2u);
       if (branch_taken) {
@@ -8252,7 +8260,8 @@ L_089E65B8:
     // nop
     goto L_089E65BC;
 L_089E65BC:
-    // nop
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (trace_hook && n < 8) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] load_jump_089E65BC: s0=%08X ra=%08X sp=%08X\n", ctx.gpr[16], ctx.gpr[31], ctx.gpr[29]); } }
     ctx.pc = 0x089E02A0u; (void)rt.invoke_chained_call(ctx, &aot_mem); return;
 L_089E65C0:
     // nop

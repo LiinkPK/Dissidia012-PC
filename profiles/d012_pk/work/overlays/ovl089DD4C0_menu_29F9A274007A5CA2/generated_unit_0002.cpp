@@ -4,6 +4,10 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_trace.log", "a"); if (f) std::setvbuf(f, nullptr, _IONBF, 0); return f ? f : stderr; }
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace psprecomp {
@@ -8054,6 +8058,8 @@ L_089E64EC:
       if (!signed_ok) { rt.arithmetic_overflow(0x089E64ECu, 0x006E6962u); return; } }
     goto L_089E64F0;
 L_089E64F0:
+    { static const bool th = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (n < 6) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] F_entry_089E64F0[29F9A274007A5CA2] r9=%08X sp=%08X\n", ctx.gpr[9], ctx.gpr[29]); } }
     rt.unsupported(0x089E64F0u, 0x756E656Du, "unknown not lowered yet"); return;
 L_089E64F4:
     rt.unsupported(0x089E64F4u, 0x6E656D2Fu, "vfpu3 not lowered yet"); return;

@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_trace.log", "a"); if (f) std::setvbuf(f, nullptr, _IONBF, 0); return f ? f : stderr; }
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 
@@ -4254,6 +4256,8 @@ LOCAL_DISPATCH:
     }
     }
 L_0BFE8000:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
+      if (hook_lines < 8) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] block2_entry: a0=%08X a1=%08X a2=%08X a3=%08X ra=%08X sp=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[7], ctx.gpr[31], ctx.gpr[29]); } }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-32));
     goto L_0BFE8004;
 L_0BFE8004:
@@ -5742,6 +5746,7 @@ L_0BFE8638:
     aot_mem.aot_store32(ctx.gpr[11] + static_cast<std::uint32_t>(0), ctx.gpr[10]);
     goto L_0BFE863C;
 L_0BFE863C:
+    { static int n = 0; if (n < 3) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] patch_gate_863C: s0=%08X word@+4800=%08X word@+2400=%08X word@+3754=%08X\n", ctx.gpr[16], aot_mem.aot_load32(ctx.gpr[16] + 18432u), aot_mem.aot_load32(ctx.gpr[16] + 9216u), aot_mem.aot_load32(ctx.gpr[16] + 0x3754u)); } }
     ctx.gpr[8] = (aot_mem.aot_load32(ctx.gpr[16] + static_cast<std::uint32_t>(18432)));
     goto L_0BFE8640;
 L_0BFE8640:
@@ -5845,6 +5850,7 @@ L_0BFE86A0:
     aot_mem.aot_store32(ctx.gpr[11] + static_cast<std::uint32_t>(4), 0u);
     goto L_0BFE86A4;
 L_0BFE86A4:
+    { static int n = 0; if (n < 4) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] patch_store_86A4: site=%08X word=%08X s0=%08X before=%08X\n", ctx.gpr[11], ctx.gpr[10], ctx.gpr[16], aot_mem.aot_load32(ctx.gpr[11])); } }
     aot_mem.aot_store32(ctx.gpr[11] + static_cast<std::uint32_t>(0), ctx.gpr[10]);
     goto L_0BFE86A8;
 L_0BFE86A8:
@@ -6055,6 +6061,7 @@ L_0BFE877C:
     aot_mem.aot_store32(ctx.gpr[11] + static_cast<std::uint32_t>(0), ctx.gpr[10]);
     goto L_0BFE8780;
 L_0BFE8780:
+    { static int n = 0; if (n < 3) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] applier_call_8780: s0=%08X\n", ctx.gpr[16]); } }
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
     goto L_0BFE8784;
 L_0BFE8784:
@@ -8652,6 +8659,8 @@ L_0BFE91FC:
       goto L_0BFE9204;
     }
 L_0BFE9200:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
+      if (trace_hook && hook_lines < 8) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] applier_9200: a0=%08X a1=%08X a2=%08X s0=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[31]); } }
     ctx.gpr[12] = (ctx.gpr[12] << 1u);
     goto L_0BFE9204;
 L_0BFE9204:
@@ -8709,6 +8718,8 @@ L_0BFE9234:
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(4), ctx.gpr[17]);
     goto L_0BFE9238;
 L_0BFE9238:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
+      if (trace_hook && hook_lines < 8) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] applier_9238: a0=%08X a1=%08X a2=%08X s0=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[31]); } }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-16));
     goto L_0BFE923C;
 L_0BFE923C:
@@ -12159,10 +12170,10 @@ L_0BFE9FFC:
     // nop
     goto L_0BFEA000;
 L_0BFEA000:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA004;
 L_0BFEA004:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA008;
 L_0BFEA008:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(2368));
@@ -12187,10 +12198,10 @@ L_0BFEA01C:
     // nop
     goto L_0BFEA020;
 L_0BFEA020:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA024;
 L_0BFEA024:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA028;
 L_0BFEA028:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(3096));
@@ -12215,10 +12226,10 @@ L_0BFEA03C:
     // nop
     goto L_0BFEA040;
 L_0BFEA040:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA044;
 L_0BFEA044:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA048;
 L_0BFEA048:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(3788));
@@ -12243,10 +12254,10 @@ L_0BFEA05C:
     // nop
     goto L_0BFEA060;
 L_0BFEA060:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA064;
 L_0BFEA064:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA068;
 L_0BFEA068:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(3796));
@@ -12271,10 +12282,10 @@ L_0BFEA07C:
     // nop
     goto L_0BFEA080;
 L_0BFEA080:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA084;
 L_0BFEA084:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA088;
 L_0BFEA088:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(3992));
@@ -12299,10 +12310,10 @@ L_0BFEA09C:
     // nop
     goto L_0BFEA0A0;
 L_0BFEA0A0:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA0A4;
 L_0BFEA0A4:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA0A8;
 L_0BFEA0A8:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(4508));
@@ -12327,10 +12338,10 @@ L_0BFEA0BC:
     // nop
     goto L_0BFEA0C0;
 L_0BFEA0C0:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA0C4;
 L_0BFEA0C4:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA0C8;
 L_0BFEA0C8:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(6300));
@@ -12355,10 +12366,10 @@ L_0BFEA0DC:
     // nop
     goto L_0BFEA0E0;
 L_0BFEA0E0:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA0E4;
 L_0BFEA0E4:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA0E8;
 L_0BFEA0E8:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(6460));
@@ -12383,10 +12394,10 @@ L_0BFEA0FC:
     // nop
     goto L_0BFEA100;
 L_0BFEA100:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA104;
 L_0BFEA104:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA108;
 L_0BFEA108:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(5204));
@@ -12411,10 +12422,10 @@ L_0BFEA11C:
     // nop
     goto L_0BFEA120;
 L_0BFEA120:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA124;
 L_0BFEA124:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA128;
 L_0BFEA128:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(6584));
@@ -12439,10 +12450,10 @@ L_0BFEA13C:
     // nop
     goto L_0BFEA140;
 L_0BFEA140:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA144;
 L_0BFEA144:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA148;
 L_0BFEA148:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(6652));
@@ -12467,10 +12478,10 @@ L_0BFEA15C:
     // nop
     goto L_0BFEA160;
 L_0BFEA160:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA164;
 L_0BFEA164:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA168;
 L_0BFEA168:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(6380));
@@ -12495,10 +12506,10 @@ L_0BFEA17C:
     // nop
     goto L_0BFEA180;
 L_0BFEA180:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA184;
 L_0BFEA184:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA188;
 L_0BFEA188:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(5492));
@@ -12547,10 +12558,10 @@ L_0BFEA1BC:
     // nop
     goto L_0BFEA1C0;
 L_0BFEA1C0:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA1C4;
 L_0BFEA1C4:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA1C8;
 L_0BFEA1C8:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(17748));
@@ -12575,10 +12586,10 @@ L_0BFEA1DC:
     // nop
     goto L_0BFEA1E0;
 L_0BFEA1E0:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA1E4;
 L_0BFEA1E4:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA1E8;
 L_0BFEA1E8:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(8912));
@@ -12603,10 +12614,10 @@ L_0BFEA1FC:
     // nop
     goto L_0BFEA200;
 L_0BFEA200:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA204;
 L_0BFEA204:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA208;
 L_0BFEA208:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(8920));
@@ -12631,10 +12642,10 @@ L_0BFEA21C:
     // nop
     goto L_0BFEA220;
 L_0BFEA220:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA224;
 L_0BFEA224:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA228;
 L_0BFEA228:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(19900));
@@ -12659,10 +12670,10 @@ L_0BFEA23C:
     // nop
     goto L_0BFEA240;
 L_0BFEA240:
-    // nop
+    ctx.gpr[25] = (3070u << 16u);
     goto L_0BFEA244;
 L_0BFEA244:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 32768u);
     goto L_0BFEA248;
 L_0BFEA248:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(20036));
@@ -15286,7 +15297,7 @@ L_0BFEAEAC:
     goto L_0BFEAEB0;
 L_0BFEAEB0:
     { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
-      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_2EB0: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] hook_2EB0: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[19]);
     goto L_0BFEAEB4;
 L_0BFEAEB4:
@@ -15335,7 +15346,7 @@ L_0BFEAED8:
     goto L_0BFEAEDC;
 L_0BFEAEDC:
     { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
-      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_2EDC: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] hook_2EDC: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[19]);
     goto L_0BFEAEE0;
 L_0BFEAEE0:
@@ -15384,7 +15395,7 @@ L_0BFEAF04:
     goto L_0BFEAF08;
 L_0BFEAF08:
     { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
-      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_2F08: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(d012_trace_file(), "[mod-hook] hook_2F08: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[16]);
     goto L_0BFEAF0C;
 L_0BFEAF0C:

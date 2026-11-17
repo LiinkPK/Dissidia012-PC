@@ -4,6 +4,10 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_trace.log", "a"); if (f) std::setvbuf(f, nullptr, _IONBF, 0); return f ? f : stderr; }
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace psprecomp {
@@ -4262,6 +4266,8 @@ L_089DD4CC:
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-16));
     ctx.pc = 0x02D683F0u; (void)rt.invoke_chained_call(ctx, &aot_mem); return;
 L_089DD4D0:
+    { static const bool th = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (n < 6) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] init_089DD4D0 r9=%08X r10=%08X sp=%08X\n", ctx.gpr[9], ctx.gpr[10], ctx.gpr[29]); } }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-16));
     goto L_089DD4D4;
 L_089DD4D4:
@@ -15124,6 +15130,8 @@ L_089E029C:
     // nop
     goto L_089E02A0;
 L_089E02A0:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int n = 0;
+      if (trace_hook && n < 8) { ++n; std::fprintf(d012_trace_file(), "[mod-hook] load_call_089E02A0: s0=%08X sp=%08X first=%08X\n", ctx.gpr[16], ctx.gpr[29], aot_mem.aot_load32(ctx.gpr[16])); } }
     jump_target = ctx.gpr[16];
     ctx.gpr[31] = (0x089E02A8u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);

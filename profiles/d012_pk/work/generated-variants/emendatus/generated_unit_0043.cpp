@@ -4,6 +4,26 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+static inline bool d012_hook_ok(std::uint32_t a) {
+    // D012_NO_HOOKS=1 turns every Emendatus hook off; D012_HOOK_RANGE=lo-hi (hex) keeps only the hooks whose site is in that range.
+    static bool init = false, off = false;
+    static std::uint32_t lo = 0u, hi = 0xFFFFFFFFu;
+    if (!init) {
+        init = true;
+        off = std::getenv("D012_NO_HOOKS") != nullptr;
+        if (const char *r = std::getenv("D012_HOOK_RANGE")) {
+            unsigned long l = 0, h = 0;
+            if (std::sscanf(r, "%lx-%lx", &l, &h) == 2) { lo = static_cast<std::uint32_t>(l); hi = static_cast<std::uint32_t>(h); }
+        }
+    }
+    return !off && a >= lo && a <= hi;
+}
+static inline void d012_hook_trace(std::uint32_t a) {
+    static int total = 0;
+    if (total < 200) { ++total; std::fprintf(stderr, "[hook] %08X\n", a); }
+}
 #include <limits>
 
 namespace psprecomp {
@@ -4702,7 +4722,7 @@ L_088B0210:
 L_088B0214:
     ctx.gpr[31] = (0x088B021Cu);
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(2020));
-    ctx.pc = 0x089C5858u;
+    ctx.pc = (d012_hook_ok(0x088B0214u) && aot_mem.aot_load32(0x088B0214u) == 0x0EAEF980u && (d012_hook_trace(0x088B0214u), true)) ? 0x0ABBE600u : 0x089C5858u;
     return;
 L_088B0218:
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(2020));
@@ -5047,7 +5067,7 @@ L_088B033C:
 L_088B0340:
     ctx.gpr[31] = (0x088B0348u);
     // nop
-    ctx.pc = 0x089C5878u;
+    ctx.pc = (d012_hook_ok(0x088B0340u) && aot_mem.aot_load32(0x088B0340u) == 0x0EAEF988u && (d012_hook_trace(0x088B0340u), true)) ? 0x0ABBE620u : 0x089C5878u;
     return;
 L_088B0344:
     // nop
