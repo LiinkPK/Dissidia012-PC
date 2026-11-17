@@ -1,0 +1,67 @@
+From 96a839683d56504f78bf8dad01ca9fd02179bc12 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Tue, 17 Nov 2026 00:52:14 +0100
+Subject: [PATCH] System page: add_system_rows, the port's own rows between
+ Quit game and Saves
+
+---
+ host/ui/menu.cpp | 12 ++++++++++++
+ host/ui/ui.hpp   |  5 +++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index fb9629d..4c381fe 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -108,6 +108,12 @@ std::vector<void (*)()> &mod_rows() {
+     return list;
+ }
+ 
++// The port's own rows on the System page, between Quit game and Saves (add_system_rows).
++std::vector<void (*)()> &system_rows() {
++    static std::vector<void (*)()> list;
++    return list;
++}
++
+ int cycle(int value, int delta, int count) { return ((value + delta) % count + count) % count; }
+ 
+ float gain(const settings::Settings &s) { return s.mute ? 0.0f : static_cast<float>(s.volume) / 100.0f; }
+@@ -1743,6 +1749,8 @@ void Menu::system() {
+                    colors::kDanger))
+         confirm_ = Confirm::Quit;
+ 
++    for (void (*rows)() : system_rows()) rows();
++
+     section("Saves");
+     save_rows();
+ 
+@@ -1995,6 +2003,10 @@ void add_mod_rows(void (*rows)()) {
+     if (rows != nullptr) mod_rows().push_back(rows);
+ }
+ 
++void add_system_rows(void (*rows)()) {
++    if (rows != nullptr) system_rows().push_back(rows);
++}
++
+ // The update question is waiting to be shown: menu_requested() reports it as a menu request, and the menu that opens
+ // for it starts on the question (show_update_on_open).
+ bool &update_prompt_pending() {
+diff --git a/host/ui/ui.hpp b/host/ui/ui.hpp
+index dbeee93..804e31d 100644
+--- a/host/ui/ui.hpp
++++ b/host/ui/ui.hpp
+@@ -52,6 +52,11 @@ void add_menu_rows(void (*rows)());
+ // `rows` is called each frame the page is shown and draws its rows as
+ // add_menu_rows does. It keeps what they change itself.
+ void add_mod_rows(void (*rows)());
++// Settings of the port's own on the menu's System page, between Quit game and
++// Saves: `rows` is called each frame the page is shown and draws its rows as
++// add_menu_rows does (starting with its own section()). It keeps what they
++// change itself.
++void add_system_rows(void (*rows)());
+ // Runs the cheats switched on in PSP/CHEATS/<disc id>.ini (PPSSPP's cwcheat
+ // format) once per game frame, at the game's flip.
+ void apply_cheats(psprecomp::Runtime &runtime);
+-- 
+2.54.0.windows.1
+
