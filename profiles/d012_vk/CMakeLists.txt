@@ -91,6 +91,13 @@ if(D012_OVERLAY_TARGETS AND D012_MULTI_CONFIG)
         COMMENT "Copying the overlay libraries next to the executable")
     add_dependencies(d012_copy_overlays ${D012_OVERLAY_TARGETS})
 endif()
+# The Emendatus mod's new character: her model package (obj/p_sev120.objx), taken out of the mod's data, is read from mods/ next to
+# the executable (d012_emendatus.cpp adds it to the game's file index).
+file(GLOB D012_AERITH_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/aerith/*")
+add_custom_command(TARGET d012_native POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:d012_native>/mods"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${D012_AERITH_FILES} "$<TARGET_FILE_DIR:d012_native>/mods"
+    COMMENT "Copying the new character's files next to the executable")
 # An edition's corpus library (corpora/<key>.dll, such as the Emendatus mod's) is looked for next to the executable; the
 # multi-config generators write it to bin/corpora/<config>, so it is copied beside the executable the same way.
 file(GLOB D012_CORPUS_TARGETS_DIRS CONFIGURE_DEPENDS LIST_DIRECTORIES true "${D012_WORK_DIR}/generated-variants/*")

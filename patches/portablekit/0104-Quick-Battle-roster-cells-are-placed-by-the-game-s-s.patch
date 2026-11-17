@@ -1,0 +1,80 @@
+From 8bdfc52256e5f692f64b0dc84aebc683779a714e Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Tue, 17 Nov 2026 15:00:34 +0100
+Subject: [PATCH] Quick Battle roster: cells are placed by the game's slot, in
+ two rows of 17
+
+---
+ host/gpu/vulkan_renderer.cpp | 35 +++++++++++++++++++++++++++++------
+ 1 file changed, 29 insertions(+), 6 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 41074c7..5fc194d 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -86,6 +86,27 @@ std::atomic<bool> g_d012_defer_3d{false};      // set by the profile while the s
+ // Debug triggers and traces (F10 and the <prefix>_TRACE_* dumps) live in logs/ beside the executable, made on first use,
+ // so they never end up in the source tree root.
+ static bool g_text_trace_active = false;  // true while the two traced frames are being drawn
++
++// The Quick Battle roster's new grid is two rows of 17: the game's slot of a cell (it draws slot s at rows of 6, 10, 10 and 6
++// cells: y = 113, 152, 191, 230 at x = 92, 28, 28, 92 + 32 n) decides where the cell goes, not the order the cells are drawn in.
++// Slot 16, empty in the game's own roster, is the 17th cell of the top row (the new character's place). Cells whose position is
++// not on that geometry keep their draw rank.
++static void roster_grid_cell(float game_x, float game_y, int rank, int &row, int &col) {
++    static const int first_slot[4] = {0, 6, 16, 26};
++    static const float first_x[4] = {92.0f, 28.0f, 28.0f, 92.0f};
++    static const float first_y[4] = {113.0f, 152.0f, 191.0f, 230.0f};
++    int slot = rank;
++    for (int line = 0; line < 4; ++line) {
++        if (std::fabs(game_y - first_y[line]) < 1.0f) {
++            const float n = (game_x - first_x[line]) / 32.0f;
++            const int index = static_cast<int>(n + 0.5f);
++            if (index >= 0 && std::fabs(n - static_cast<float>(index)) < 0.05f) slot = first_slot[line] + index;
++            break;
++        }
++    }
++    row = slot < 17 ? 0 : 1;
++    col = slot - 17 * row;
++}
+ static std::string debug_log_path(const char *name) {
+     std::error_code ignored;
+     std::filesystem::create_directories("logs", ignored);
+@@ -9112,8 +9133,9 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                         }
+                         if (best >= 0) {
+                             const float ox = impl.roster_drawn[best][0], oy = impl.roster_drawn[best][1];
+-                            const int row = best < 16 ? 0 : 1;
+-                            const float nx = 28.0f + 32.0f * static_cast<float>(best - 16 * row);
++                            int row = 0, col = 0;
++                            roster_grid_cell(ox, oy, best, row, col);
++                            const float nx = 28.0f + 32.0f * static_cast<float>(col);
+                             const float ny = 113.0f + 39.0f * static_cast<float>(row);
+                             const float tile_x = 7.0f + (nx - 28.0f) * 0.65f, tile_y = 203.0f + (ny - 113.0f) * 0.65f;
+                             if (is_frame) {
+@@ -9138,8 +9160,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                                 // The hand keeps its size. 1.5 game pixels up, and a little more on top (2 screen pixels,
+                                 // 0.5) and bottom (3, 0.75). First column (Warrior of Light, Garland): it would leave the
+                                 // screen on the left, so it is mirrored across the tile's centre and points from the right.
+-                                const float up = 1.5f + (best < 16 ? 0.5f : 0.75f);
+-                                const bool flip = best == 0 || best == 16;
++                                const float up = 1.5f + (row == 0 ? 0.5f : 0.75f);
++                                const bool flip = col == 0;
+                                 const float cx = tile_x + 16.0f * 0.65f;
+                                 for (std::size_t i = first; i < first + group; ++i) {
+                                     float x = impl.scratch[i].x + (tile_x - ox);
+@@ -9188,8 +9210,9 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                             impl.roster_drawn[impl.roster_p][1] = impl.roster_origin_y;
+                             impl.roster_drawn_frame[impl.roster_p] = impl.frames;
+                         }
+-                        const int row = impl.roster_p < 16 ? 0 : 1;
+-                        const float nx = 28.0f + 32.0f * static_cast<float>(impl.roster_p - 16 * row);
++                        int row = 0, col = 0;
++                        roster_grid_cell(impl.roster_origin_x, impl.roster_origin_y, impl.roster_p, row, col);
++                        const float nx = 28.0f + 32.0f * static_cast<float>(col);
+                         const float ny = 113.0f + 39.0f * static_cast<float>(row);
+                         for (std::size_t i = first; i < first + group; ++i) {
+                             impl.scratch[i].x = 7.0f + (nx - 28.0f + impl.scratch[i].x - impl.roster_origin_x) * 0.65f;
+-- 
+2.54.0.windows.1
+

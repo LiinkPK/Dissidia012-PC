@@ -4,6 +4,8 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 namespace psprecomp {
@@ -15283,6 +15285,8 @@ L_0BFEAEAC:
     // nop
     goto L_0BFEAEB0;
 L_0BFEAEB0:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_2EB0: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[19]);
     goto L_0BFEAEB4;
 L_0BFEAEB4:
@@ -15330,6 +15334,8 @@ L_0BFEAED8:
     // nop
     goto L_0BFEAEDC;
 L_0BFEAEDC:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_2EDC: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[19]);
     goto L_0BFEAEE0;
 L_0BFEAEE0:
@@ -15377,6 +15383,8 @@ L_0BFEAF04:
     // nop
     goto L_0BFEAF08;
 L_0BFEAF08:
+    { static const bool trace_hook = std::getenv("D012_TRACE_PACKAGE") != nullptr; static int hook_lines = 0;
+      if (trace_hook && hook_lines < 60 && (ctx.gpr[19] == 33u)) { ++hook_lines; std::fprintf(stderr, "[mod-hook] hook_2F08: a0=%08X a1=%08X a2=%08X s0=%08X s2=%08X s3=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[6], ctx.gpr[16], ctx.gpr[18], ctx.gpr[19], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[16]);
     goto L_0BFEAF0C;
 L_0BFEAF0C:

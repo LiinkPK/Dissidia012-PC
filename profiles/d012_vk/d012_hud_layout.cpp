@@ -35,6 +35,9 @@
 
 extern float g_d012_roster_cells[40][2];  // vulkan_renderer.cpp
 extern int g_d012_roster_count;
+extern int g_d012_roster_extra_rank;  // vulkan_renderer.cpp: the roster cell that goes to the 17th place of the first row, or -1
+extern int g_d012_roster_chaos_rank;  // vulkan_renderer.cpp: the CPU select's Chaos cell, which goes after Feral Chaos, or -1
+bool d012_emendatus_on();             // d012_emendatus.cpp: the Emendatus mod is on this run
 
 namespace {
 
@@ -425,6 +428,8 @@ void roster_new_position(unsigned position, float &x, float &y) {
 }
 
 void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &saved) {
+    g_d012_roster_extra_rank = -1;
+    g_d012_roster_chaos_rank = -1;
     std::vector<std::pair<float, float>> cells;  // the game's own position of each cell (top-left of its sprite)
     std::vector<std::uint32_t> frame_sprites, hand_sprites;
     unsigned cell_layouts = 0;
@@ -469,7 +474,12 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
     // tagged with their position, kMarkerHudBeginRosterFrame / Hand). Here only the position of each cell layout is
     // recorded, for mark_layout: the cells are in position order in the manager's list.
     g_roster_position.clear();
+    // D012_TRACE_ROSTER=1: the draw rank of each cell and the place the game gave it, printed when they change.
+    static const bool trace_roster = std::getenv("D012_TRACE_ROSTER") != nullptr;
+    static std::string g_last_roster_trace;
+    std::string roster_trace;
     unsigned position = 0, layouts2 = 0;
+    unsigned trailing_hidden = 0;  // cells at the end of the list that do not draw
     for (std::uint32_t layout = g_ld32(g, manager + 0x24u); layout != 0u && layouts2 < 512u && in_guest(g, layout, 0x30u);
          layout = g_ld32(g, layout + 0x24u), ++layouts2) {
         std::uint8_t kind;
@@ -480,7 +490,44 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         // start of the list, and counting them put its first cell in the sixth column (the 11 + 22 shape).
         const std::uint8_t flags = g_ld8(g, layout + 0x14u);
         if ((flags & 1u) == 0u || (flags & 0x2Cu) != 0u) continue;
+        if (trace_roster) {
+            const std::uint32_t cell_sprite = g_ld32(g, layout);
+            const bool has_sprite = cell_sprite != 0u && in_guest(g, cell_sprite, 0x40u);
+            char line[400];
+            int used = std::snprintf(line, sizeof line, "%s%u:(%g,%g) layout %08X words", position == 0u ? "" : "\n  ", position,
+                                     has_sprite ? load_float(g, cell_sprite + 0x10u) : -1.0f,
+                                     has_sprite ? load_float(g, cell_sprite + 0x14u) : -1.0f, layout);
+            for (std::uint32_t w = 0; has_sprite && w < 16u && used > 0 && used < 380; ++w)
+                used += std::snprintf(line + used, sizeof line - static_cast<std::size_t>(used), " %X", g_ld32(g, cell_sprite + 4u * w));
+            roster_trace += line;
+        }
+        {
+            const std::uint32_t cell_sprite_flags = g_ld32(g, layout);
+            const bool hidden = cell_sprite_flags != 0u && in_guest(g, cell_sprite_flags, 0x40u) &&
+                                (g_ld32(g, cell_sprite_flags + 0x20u) & 0xFFFFu) == 0x0412u;  // the hover state: the cell does not draw
+            trailing_hidden = hidden ? trailing_hidden + 1u : 0u;
+        }
         g_roster_position[layout] = position++;
+    }
+    if (trace_roster && roster_trace != g_last_roster_trace) {  // only when the grid changes
+        g_last_roster_trace = roster_trace;
+        std::fprintf(stderr, "[roster] rank:(game x,y)%s\n", roster_trace.c_str());
+    }
+    // Placement of two cells, decided here from the game's own cells before anything draws (the renderer follows). The last cell layouts
+    // do not draw in the Quick Battle select (their flags are those of the hover state), so the visible cells are fewer there:
+    //   Quick Battle:  31 fighters, [the Emendatus mod's new character], Random
+    //   CPU select:    31 fighters, Chaos, [the new character], Random
+    // The new character (mod on) is second to last and goes to the 17th place of the first row, where the game's own navigation puts
+    // her. Chaos (CPU select, in the game with the mod on or off) goes after Feral Chaos, before Shantotto and Prishe, so the second
+    // row is the Chaos fighters and then the Final Fantasy XI ones.
+    {
+        const unsigned visible = position - trailing_hidden;
+        const bool mod = d012_emendatus_on();
+        const bool cpu_select = mod ? visible == 34u : visible == 33u;
+        // Customization has no Random cell (32 visible cells with the mod): she is the last one there.
+        if (mod && visible == 32u) g_d012_roster_extra_rank = 31;
+        else if (mod && (visible == 33u || visible == 34u)) g_d012_roster_extra_rank = static_cast<int>(visible) - 2;
+        (void)cpu_select;  // Chaos's place after Feral Chaos is in the grid code's order table now (the cursor follows it)
     }
     (void)saved;
 }

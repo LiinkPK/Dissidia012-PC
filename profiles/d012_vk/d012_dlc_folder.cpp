@@ -159,10 +159,23 @@ std::string describe(const std::string &folder) {
     return files == 0 ? "No .edat files found there" : std::to_string(files) + " DLC files";
 }
 
+int count_edat(const fs::path &dir) {
+    std::error_code ec;
+    int files = 0;
+    for (const auto &entry : fs::directory_iterator(dir, ec))
+        if (entry.is_regular_file(ec) && lower(portablekit::install::path_to_utf8(entry.path().extension())) == ".edat") ++files;
+    return files;
+}
+
+// Where the game's own DLC folder is when none is chosen: the memory stick's PSP/GAME folder of the disc that holds the .edat
+// files (ULUS10566, which the game reads, or ULES01505, where a European player's DLC usually is). Empty folders: ULUS10566.
 fs::path default_dlc_folder() {
+    fs::path game = portablekit::install::user_data_directory() / "ms0" / "PSP" / "GAME";
     if (const char *dir = portablekit::env("MEMORY_STICK_DIR"); dir != nullptr && *dir != '\0')
-        return portablekit::install::path_from_utf8(dir) / "PSP" / "GAME" / kDiscFolder;
-    return portablekit::install::user_data_directory() / "ms0" / "PSP" / "GAME" / kDiscFolder;
+        game = portablekit::install::path_from_utf8(dir) / "PSP" / "GAME";
+    for (const char *disc : kDiscFolders)
+        if (count_edat(game / disc) != 0) return game / disc;
+    return game / kDiscFolder;
 }
 
 void open_browser() {
@@ -189,7 +202,11 @@ void browser_window() {
     ui::heading("Choose the DLC folder");
     ui::paragraph("Open the folder that holds your DLC files (the .edat files). The game reads them from there; nothing is copied.",
                   ui::colors::kTextDim);
+    // The browser's list takes all the room it is given, so it gets a child window that leaves the Cancel button's room.
+    const float button_room = ImGui::GetTextLineHeightWithSpacing() * 3.2f + ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("##dlc_browser_body", {0.0f, ImGui::GetContentRegionAvail().y - button_room}, ImGuiChildFlags_NavFlattened);
     const ui::FileBrowser::Result result = g_browser->frame(false);
+    ImGui::EndChild();
     bool close = result != ui::FileBrowser::Result::Browsing;
     if (result == ui::FileBrowser::Result::Chosen) {
         const std::string chosen = portablekit::install::path_to_utf8(g_browser->chosen());
@@ -225,6 +242,12 @@ void system_rows() {
             save_setting({});
             g_found.clear();
         }
+    }
+    else {
+        const fs::path own = default_dlc_folder();
+        ui::info_row("DLC used from", portablekit::install::path_to_utf8(own));
+        const int files = count_edat(own);
+        ui::info_row("Found", files == 0 ? "No .edat files found there" : std::to_string(files) + " DLC files");
     }
     if (ui::button_row("Open the DLC folder",
                        {false, {}, folder.empty() ? "Show the folder the game reads DLC from." : "Show the chosen DLC folder."}))

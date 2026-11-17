@@ -6269,7 +6269,9 @@ L_089A0988:
 L_089A098C:
     ctx.gpr[31] = (0x089A0994u);
     ctx.gpr[10] = (ctx.gpr[24] + 0u);
-    goto L_089A1770;
+    ctx.pc = 0x089A1770u;
+    if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x089A0994u) goto L_089A0994;
+    return;
 L_089A0990:
     ctx.gpr[10] = (ctx.gpr[24] + 0u);
     goto L_089A0994;

@@ -61,7 +61,7 @@ namespace ext = portablekit::hle_extension;
 
 constexpr const char *kKey = "game.emendatus";
 constexpr std::uint64_t kPackageSizeUS = 1034358784u, kPackageSizeEUR = 1035005472u;
-constexpr std::uint64_t kInfoSize = 132532u, kBattleSize = 1596312u;
+constexpr std::uint64_t kInfoSize = 132532u, kInfoSizeEUR = 132532u, kBattleSize = 1596312u;
 
 bool g_on = false;  // read once at start-up
 
@@ -122,6 +122,142 @@ void apply(const EmRegion *regions, std::size_t count, std::uint64_t offset, std
     }
 }
 
+// EUR: the disc's last entries of PACKAGE.BIN sit past the end of the US file, where the mod's appended data is read (at US
+// offsets). They are moved after that data (virtual offsets in PackageFile) and their rows in PACKAGE_INFO.BIN are pointed there.
+// Trace to emendatus_trace.log in the working directory, flushed per line (D012_TRACE_PACKAGE), so it survives a hang.
+void trace_line(const char *format, unsigned long long a = 0, unsigned long long b = 0, unsigned long long c = 0) {
+    static const bool on = std::getenv("D012_TRACE_PACKAGE") != nullptr;
+    if (!on) return;
+    static std::FILE *file = std::fopen("emendatus_trace.log", "w");
+    if (!file) return;
+    std::fprintf(file, format, a, b, c);
+    std::fflush(file);
+}
+
+// D012_LOG_FILE=1: the game's console output (stdout and stderr) goes to d012_console.log in the working directory, unbuffered,
+// for release builds, which have no console. Read when the program starts.
+struct ConsoleToFile {
+    ConsoleToFile() {
+        if (std::getenv("D012_LOG_FILE") == nullptr) return;
+        std::freopen("d012_console.log", "w", stdout);
+        std::freopen("d012_console.log", "a", stderr);
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
+        std::setvbuf(stderr, nullptr, _IONBF, 0);
+    }
+} console_to_file;
+
+struct Move { std::uint64_t from, size, to; };
+// The EUR disc's entries that end past the US file's end (found from its PACKAGE_INFO.BIN): offset, size.
+constexpr std::uint64_t kEurTail[][2] = {
+    {1034907648u, 15265u},
+    {1034536960u, 282404u},
+    {1034942464u, 17921u},
+    {1034838016u, 15489u},
+    {1034854400u, 17745u},
+    {1034889216u, 17424u},
+    {1034960896u, 43840u},
+    {1034924032u, 17426u},
+    {1034276864u, 259444u},
+    {1034872832u, 15410u},
+    {1034819584u, 17521u},
+};
+
+std::vector<Move> g_moves;
+std::uint64_t g_moved_end = 0u;
+
+// The new character's own files, taken out of the mod's data and kept in the repository (profiles/d012_vk/aerith/, copied next to the
+// program into mods/): her model package and her three costume models. The disc's index has no row for them, so rows are added to
+// the index the game reads (the name hash is the game's casefolded CRC32 of "obj/<file>"), pointing at places after everything
+// else in PACKAGE.BIN.
+// The 22 index rows the Emendatus mod adds (its data, tail offset 0xD891C04; found by their name hashes): the new character's package,
+// costume models, extra data, sounds, icons and voices, as (hash, sector in PACKAGE.BIN, size | flags << 28). The sectors are those of
+// the US layout, inside the appended data.
+constexpr std::uint32_t kModRows[][3] = {
+    {0xD02607DDu, 616410u, 0x1037A2D0u},
+    {0xFB4632A5u, 618191u, 0x10266794u},
+    {0xD63E252Du, 622546u, 0x10267604u},
+    {0xCD162855u, 623777u, 0x102664CCu},
+    {0x76E2C890u, 618191u, 0x10266794u},
+    {0x31EF1BF5u, 619420u, 0x100000A0u},
+    {0x1E1A0013u, 619421u, 0x10000058u},
+    {0xCFE3B820u, 619421u, 0x10000058u},
+    {0x80B4D031u, 619421u, 0x10000058u},
+    {0x7211E240u, 619422u, 0x100BEA30u},
+    {0x164281B6u, 622032u, 0x10010520u},
+    {0xAE4BD83Cu, 622065u, 0x10001520u},
+    {0x2E27AC41u, 622068u, 0x10001520u},
+    {0x63613F1Cu, 622071u, 0x10004520u},
+    {0x4E192894u, 622071u, 0x10004520u},
+    {0x553125ECu, 622071u, 0x10004520u},
+    {0x69745E16u, 622492u, 0x0000208Cu},
+    {0xB263F681u, 622497u, 0x00002E0Cu},
+    {0xFB6E910Cu, 622503u, 0x00002F8Cu},
+    {0x008DBA18u, 622509u, 0x000061CCu},
+    {0x4980DD95u, 622522u, 0x0000730Cu},
+    {0x92977502u, 622537u, 0x000040CCu},
+};
+
+// The 11 rows the Emendatus mod puts over rows of the game's own index (its menu and message packs and a sound bank: the new
+// character's pre-battle info, texts and sounds), as (hash, sector, size). The mod's plugin does this at run time (block2 + 0x7A00);
+// here it is done in the index the port serves, keeping each row's own flags.
+constexpr std::uint32_t kModReplace[][3] = {
+    {0xBA8B325Bu, 619804u, 1151344u},
+    {0x9892E431u, 620367u, 366864u},
+    {0x8F593261u, 620547u, 807712u},
+    {0x4AA1BF07u, 620942u, 589696u},
+    {0xD756264Cu, 621230u, 541168u},
+    {0x7BCC2B61u, 621495u, 543920u},
+    {0x4CAE5267u, 621761u, 315568u},
+    {0x50FE4705u, 621916u, 235888u},
+    {0x3DB759EAu, 622080u, 306320u},
+    {0x92D1AB3Bu, 622230u, 219728u},
+    {0x4300D781u, 622338u, 315280u},
+};
+
+struct Extra {
+    std::uint32_t hash;
+    const char *file;
+    std::uint64_t base, size;  // where it is served in PACKAGE.BIN, and its size (0: file not found)
+};
+Extra g_extras[] = {
+    {0xD02607DDu, "p_sev120.objx", 0u, 0u},    // obj/p_sev120.objx
+    {0xFB4632A5u, "P_SEV120_1P.gmo", 0u, 0u},  // obj/P_SEV120_1P.gmo
+    {0xD63E252Du, "P_SEV120_2P.gmo", 0u, 0u},  // obj/P_SEV120_2P.gmo
+    {0xCD162855u, "P_SEV120_3P.gmo", 0u, 0u},  // obj/P_SEV120_3P.gmo
+    {0xC93FB94Au, "D_SEV120.objx", 0u, 0u},    // obj/D_SEV120.objx (the other FF7 fighters have a D_ pair too)
+    {0x752C1C24u, "D_SEV120.gmo", 0u, 0u},     // obj/D_SEV120.gmo
+};
+std::uint64_t g_package_end = kPackageSizeUS + kEmTailSize;
+
+std::filesystem::path extra_path(const Extra &extra) { return portablekit::executable_directory() / "mods" / extra.file; }
+
+void plan_layout(bool eur) {
+    static std::once_flag once;
+    std::call_once(once, [eur] {
+        std::uint64_t next = (kPackageSizeUS + kEmTailSize + 2047u) / 2048u * 2048u;
+        if (eur && std::getenv("D012_EMENDATUS_NOMOVE") == nullptr) {  // NOMOVE: A/B test, the EUR entries stay where they are
+            for (const auto &row : kEurTail) {
+                g_moves.push_back({row[0], row[1], next});
+                next += (row[1] + 2047u) / 2048u * 2048u;
+            }
+            g_moved_end = next;
+        }
+        for (Extra &extra : g_extras) {
+            std::error_code ec;
+            const std::uint64_t size = std::filesystem::file_size(extra_path(extra), ec);
+            if (!ec && size != 0u) {
+                extra.base = next;
+                extra.size = size;
+                next += (size + 2047u) / 2048u * 2048u;
+            } else {
+                std::cerr << "[mod] Emendatus: " << extra_path(extra).string() << " not found, the new character's files are incomplete\n";
+            }
+        }
+        g_package_end = std::max<std::uint64_t>(g_package_end, next);
+        trace_line("layout: %llu moves, end %llu\n", g_moves.size(), g_package_end);
+    });
+}
+
 // A file the size it has on the disc, with the mod's regions over it.
 class RegionFile final : public ext::FileFilter {
 public:
@@ -143,6 +279,90 @@ private:
     std::size_t count_;
 };
 
+// PACKAGE_INFO.BIN as the game gets it: the disc's index with the mod's size fields, the moved EUR entries pointed at their new
+// place, and a row added for the new character's model package (rows are 12 bytes after a 16-byte header, sorted by hash; the
+// row count is the word at +8). The game reads it into a buffer with room for 210 more rows than the disc's index has.
+class InfoFile final : public ext::FileFilter {
+public:
+    InfoFile(std::uint32_t fd, std::uint64_t disc_size, const EmRegion *regions, std::size_t count) : bytes_(static_cast<std::size_t>(disc_size)) {
+        const std::size_t got = portablekit::read_open_file(fd, 0u, bytes_.data(), bytes_.size());
+        bytes_.resize(got);
+        apply(regions, count, 0u, bytes_.data(), got);
+        for (std::size_t pos = 16u + 4u; pos + 4u <= bytes_.size(); pos += 12u) {
+            std::uint32_t sector;
+            std::memcpy(&sector, bytes_.data() + pos, 4);
+            for (const Move &m : g_moves)
+                if (std::uint64_t(sector) * 2048u == m.from) {
+                    const std::uint32_t moved = static_cast<std::uint32_t>(m.to / 2048u);
+                    std::memcpy(bytes_.data() + pos, &moved, 4);
+                    break;
+                }
+        }
+        for (const auto &replaced : kModReplace) add_row(replaced[0], replaced[1], replaced[2], true);  // the mod's packs replace the game's
+        for (const auto &mod_row : kModRows) add_row(mod_row[0], mod_row[1], mod_row[2]);  // the mod's own new rows
+        for (const Extra &extra : g_extras)  // then any of the repository's files the mod's rows do not cover
+            if (extra.size != 0u)
+                add_row(extra.hash, static_cast<std::uint32_t>(extra.base / 2048u), 0x10000000u | static_cast<std::uint32_t>(extra.size));
+        // D012_AERITH_CLONE=1 (debug): her model package is Warrior of Light's / Cloud's own (obj/p_sev100.objx), to tell a fault in her
+        // package from a fault in the tables the game keys by her id.
+        if (std::getenv("D012_AERITH_CLONE") != nullptr) copy_row(0xD02607DDu, 0x4E88D7FFu);
+        trace_line("info: %llu bytes\n", bytes_.size());
+    }
+    std::uint64_t size() const override { return bytes_.size(); }
+    std::size_t read(std::uint64_t offset, std::uint8_t *destination, std::size_t length) override {
+        if (offset >= bytes_.size()) return 0u;
+        length = static_cast<std::size_t>(std::min<std::uint64_t>(length, bytes_.size() - offset));
+        std::memcpy(destination, bytes_.data() + offset, length);
+        return length;
+    }
+
+private:
+    // Points the row of hash `to` at the sector and size of the row of hash `from`.
+    void copy_row(std::uint32_t to, std::uint32_t from) {
+        if (bytes_.size() < 16u) return;
+        std::uint32_t rows;
+        std::memcpy(&rows, bytes_.data() + 8, 4);
+        std::size_t to_at = rows, from_at = rows;
+        for (std::size_t at = 0; at < rows; ++at) {
+            std::uint32_t hash;
+            std::memcpy(&hash, bytes_.data() + 16u + 12u * at, 4);
+            if (hash == to) to_at = at;
+            if (hash == from) from_at = at;
+        }
+        if (to_at < rows && from_at < rows)
+            std::memcpy(bytes_.data() + 16u + 12u * to_at + 4u, bytes_.data() + 16u + 12u * from_at + 4u, 8);
+    }
+    // Adds a row in hash order, unless the index already has one for that hash.
+    void add_row(std::uint32_t hash, std::uint32_t sector, std::uint32_t flags_and_size, bool replace = false) {
+        if (bytes_.size() < 16u) return;
+        std::uint32_t rows;
+        std::memcpy(&rows, bytes_.data() + 8, 4);
+        std::size_t at = 0;
+        while (at < rows) {
+            std::uint32_t existing;
+            std::memcpy(&existing, bytes_.data() + 16u + 12u * at, 4);
+            if (existing == hash) {
+                if (replace) {  // another sector and size, the row's own flags kept
+                    std::uint32_t old_flags;
+                    std::memcpy(&old_flags, bytes_.data() + 16u + 12u * at + 8u, 4);
+                    const std::uint32_t row_size = (old_flags & 0xF0000000u) | (flags_and_size & 0x0FFFFFFFu);
+                    std::memcpy(bytes_.data() + 16u + 12u * at + 4u, &sector, 4);
+                    std::memcpy(bytes_.data() + 16u + 12u * at + 8u, &row_size, 4);
+                }
+                return;
+            }
+            if (existing > hash) break;
+            ++at;
+        }
+        const std::uint32_t row[3] = {hash, sector, flags_and_size};
+        bytes_.insert(bytes_.begin() + 16 + 12 * static_cast<std::ptrdiff_t>(at), reinterpret_cast<const std::uint8_t *>(row),
+                      reinterpret_cast<const std::uint8_t *>(row) + 12);
+        ++rows;
+        std::memcpy(bytes_.data() + 8, &rows, 4);
+    }
+    std::vector<std::uint8_t> bytes_;
+};
+
 // PACKAGE.BIN with the mod's edits over the disc's bytes, then the new character's data. The patched game reads it at the
 // offsets of the US layout (kPackageSizeUS and on), so on the EUR disc, whose file is longer, the part of it that falls
 // over the EUR file's own last bytes is not reachable; the disc's own bytes win there.
@@ -150,13 +370,39 @@ class PackageFile final : public ext::FileFilter {
 public:
     PackageFile(std::uint32_t fd, std::uint64_t disc_size, const EmRegion *regions, std::size_t count)
         : fd_(fd), disc_size_(disc_size), regions_(regions), count_(count), assets_(assets_path(), std::ios::binary) {}
-    std::uint64_t size() const override { return kPackageSizeUS + kEmTailSize; }
+    std::uint64_t size() const override { return g_package_end; }
     std::size_t read(std::uint64_t offset, std::uint8_t *destination, std::size_t length) override {
+        trace_line("want %llu +%llu\n", offset, length);
+        const std::size_t got = read_bytes(offset, destination, length);
+        {
+            trace_line(got != length ? "package read %llu +%llu -> %llu SHORT\n" : "package read %llu +%llu -> %llu\n", offset, length, got);
+        }
+        return got;
+    }
+    std::size_t read_bytes(std::uint64_t offset, std::uint8_t *destination, std::size_t length) {
         if (offset >= size()) return 0u;
-        length = static_cast<std::size_t>(std::min<std::uint64_t>(length, size() - offset));
+        for (const Move &m : g_moves)
+            if (offset >= m.to && offset < m.to + ((m.size + 2047u) / 2048u) * 2048u) {
+                const std::uint64_t inside = offset - m.to;
+                if (inside >= m.size) return 0u;
+                const std::size_t n = static_cast<std::size_t>(std::min<std::uint64_t>(length, m.size - inside));
+                return portablekit::read_open_file(fd_, m.from + inside, destination, n);
+            }
+        for (const Extra &extra : g_extras)
+            if (extra.size != 0u && offset >= extra.base && offset < extra.base + ((extra.size + 2047u) / 2048u) * 2048u) {
+                const std::uint64_t inside = offset - extra.base;
+                if (inside >= extra.size) return 0u;
+                const std::size_t n = static_cast<std::size_t>(std::min<std::uint64_t>(length, extra.size - inside));
+                std::ifstream model(extra_path(extra), std::ios::binary);
+                model.seekg(static_cast<std::streamoff>(inside));
+                model.read(reinterpret_cast<char *>(destination), static_cast<std::streamsize>(n));
+                return static_cast<std::size_t>(std::max<std::streamsize>(model.gcount(), 0));
+            }
+        if (offset >= kPackageSizeUS + kEmTailSize) return 0u;
+        length = static_cast<std::size_t>(std::min<std::uint64_t>(length, kPackageSizeUS + kEmTailSize - offset));
         std::size_t done = 0u;
-        if (offset < disc_size_) {
-            const std::size_t head = static_cast<std::size_t>(std::min<std::uint64_t>(length, disc_size_ - offset));
+        if (offset < std::min<std::uint64_t>(disc_size_, kPackageSizeUS)) {
+            const std::size_t head = static_cast<std::size_t>(std::min<std::uint64_t>(length, std::min<std::uint64_t>(disc_size_, kPackageSizeUS) - offset));
             done = portablekit::read_open_file(fd_, offset, destination, head);
             apply(regions_, count_, offset, destination, done);
             if (done < head) return done;
@@ -232,14 +478,19 @@ std::shared_ptr<ext::FileFilter> serve(std::string_view path, std::uint32_t fd) 
     const bool package = ends_with_icase(path, "/data/package.bin"), info = ends_with_icase(path, "/data/package_info.bin");
     const bool battle = ends_with_icase(path, "/data/ovl_battle_app.elf"), menu = ends_with_icase(path, "/data/ovl_menu_app.elf");
     if (!package && !info && !battle && !menu) return nullptr;
+    trace_line("serve fd=%llu\n", fd);
     const Release disc = release();
+    trace_line("release=%llu\n", static_cast<unsigned long long>(disc));
     if (disc == Release::Unknown) return nullptr;
     std::cout << "[mod] The Emendatus Mod: " << path << " is served with the mod's changes\n";
+    if (package || info) plan_layout(disc == Release::EUR);
     if (package) {
         return disc == Release::US ? std::make_shared<PackageFile>(fd, kPackageSizeUS, kEmPackageUS, sizeof kEmPackageUS / sizeof kEmPackageUS[0])
                                    : std::make_shared<PackageFile>(fd, kPackageSizeEUR, kEmPackageEUR, sizeof kEmPackageEUR / sizeof kEmPackageEUR[0]);
     }
-    if (info) return std::make_shared<RegionFile>(fd, kInfoSize, kEmIndex, sizeof kEmIndex / sizeof kEmIndex[0]);
+    if (info) {
+        return std::make_shared<InfoFile>(fd, kInfoSize, kEmIndex, sizeof kEmIndex / sizeof kEmIndex[0]);
+    }
     if (battle) return std::make_shared<RegionFile>(fd, kBattleSize, kEmBattle, sizeof kEmBattle / sizeof kEmBattle[0]);
     return std::make_shared<MenuOverlay>(fd);
 }
@@ -250,6 +501,17 @@ std::shared_ptr<ext::FileFilter> serve(std::string_view path, std::uint32_t fd) 
 // The menu's own check (is there a row for slot 12) then offers the outfit too. Only while the mod is on.
 constexpr std::uint32_t kObjectScan = 0x088470DCu;  // main: (character, costume, assist) -> row of objentry.bin, or 0
 constexpr std::uint32_t kManikinSlot = 12u;
+
+// A NUL-ended text in the game's memory (at most 64 characters), for the traces.
+std::string guest_text(std::uint32_t address) {
+    std::string text;
+    for (std::uint32_t i = 0; i < 64u; ++i) {
+        const char c = static_cast<char>((d012::decomp::live_load32((address + i) & ~3u) >> (((address + i) & 3u) * 8u)) & 0xFFu);
+        if (c == 0) break;
+        text.push_back(c >= 32 && c < 127 ? c : '?');
+    }
+    return text;
+}
 
 void run_object_scan(Guest *g, const d012::decomp::CallState &in, GuestRegs &out) {
     GuestRegs regs{};
@@ -262,15 +524,122 @@ void run_object_scan(Guest *g, const d012::decomp::CallState &in, GuestRegs &out
         d012::decomp::call_original(g, kObjectScan, manikin);
         if (manikin.v0 != 0u) regs = manikin;
     }
+    // Trace for the new character (0x21): what the object table answers. D012_TRACE_PACKAGE=1 turns it on.
+    static const bool trace_scan = std::getenv("D012_TRACE_PACKAGE") != nullptr;
+    if (trace_scan && g_on && in.gpr[4] == 0x21u)
+        std::fprintf(stderr, "[emendatus] object scan character=0x%X costume=%u assist=%u -> %u\n", in.gpr[4], in.gpr[5], in.gpr[6],
+                     regs.v0);
+    if (trace_scan && g_on && in.gpr[4] == 0x21u && regs.v0 != 0u)
+        std::fprintf(stderr, "[emendatus]   row name \"%s\"%s", guest_text(regs.v0 + 0x24u).c_str(), "\n");
+    out = regs;
+}
+
+// The file-exists check of the loader (FUN_088fe7c8): is the named file in the package index? 0 = no, and the loader flags an error.
+constexpr std::uint32_t kFileExists = 0x088FE7C8u;
+void run_file_exists(Guest *g, const d012::decomp::CallState &in, GuestRegs &out) {
+    GuestRegs regs{};
+    for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
+    d012::decomp::call_original(g, kFileExists, regs);
+    static const bool trace = std::getenv("D012_TRACE_PACKAGE") != nullptr;
+    static int lines = 0;
+    if (trace && g_on && lines < 400) {
+        ++lines;
+        std::fprintf(stderr, "[emendatus] file exists \"%s\" -> %u\n", guest_text(in.gpr[4]).c_str(), regs.v0);
+    }
+    out = regs;
+}
+
+// The package index search (FUN_088713e4(index, name) -> row or 0). Pure memory, so it is safe to wrap: logs the names of the new
+// character's files (D012_TRACE_PACKAGE=1).
+constexpr std::uint32_t kIndexSearch = 0x088713E4u;
+void run_index_search(Guest *g, const d012::decomp::CallState &in, GuestRegs &out) {
+    GuestRegs regs{};
+    for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
+    d012::decomp::call_original(g, kIndexSearch, regs);
+    static const bool trace = std::getenv("D012_TRACE_PACKAGE") != nullptr;
+    static int lines = 0;
+    static int calls = 0;
+    ++calls;
+    if (trace && g_on && lines < 400) {
+        const std::string name = guest_text(in.gpr[5]);
+        if (name.rfind("obj/", 0) == 0 || regs.v0 == 0u) {
+            ++lines;
+            std::fprintf(stderr, "[emendatus] index search \"%s\" -> %08X\n", name.c_str(), regs.v0);
+        }
+    }
+    out = regs;
+}
+
+// FUN_088470b8(index) -> row of objentry.bin or 0: a pure memory lookup, traced for the setup of the battle's objects.
+constexpr std::uint32_t kObjectRow = 0x088470B8u;
+void run_object_row(Guest *g, const d012::decomp::CallState &in, GuestRegs &out) {
+    GuestRegs regs{};
+    for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
+    d012::decomp::call_original(g, kObjectRow, regs);
+    static const bool trace = std::getenv("D012_TRACE_PACKAGE") != nullptr;
+    static int lines = 0;
+    if (trace && g_on && lines < 120) {
+        ++lines;
+        std::fprintf(stderr, "[emendatus] object row %u -> %08X %s\n", in.gpr[4], regs.v0, regs.v0 != 0u ? guest_text(regs.v0 + 0x24u).c_str() : "(none)");
+    }
+    out = regs;
+}
+
+// The loader's per-frame state machine for one object (FUN_08846a3c(machine): state byte at +0x60, the object index at +0x10, the
+// error flag at +0x61). It only starts requests, never waits, so it is safe to wrap. Logged when the state or index changes.
+constexpr std::uint32_t kLoaderStep = 0x08846A3Cu;
+void run_loader_step(Guest *g, const d012::decomp::CallState &in, GuestRegs &out) {
+    static const bool trace = std::getenv("D012_TRACE_PACKAGE") != nullptr;
+    static std::uint32_t last_key = 0xFFFFFFFFu;
+    static int lines = 0;
+    if (trace && g_on && lines < 300) {
+        const std::uint32_t machine = in.gpr[4];
+        const std::uint32_t word60 = d012::decomp::live_load32(machine + 0x60u);
+        const std::uint32_t state = word60 & 0xFFu, error = (word60 >> 8) & 0xFFu;
+        const std::uint32_t index = d012::decomp::live_load32(machine + 0x10u);
+        const std::uint32_t key = state | (error << 8) | (index << 16);
+        if (key != last_key) {
+            last_key = key;
+            ++lines;
+            std::fprintf(stderr, "[emendatus] loader %08X state %u error %u index %d\n", machine, state, error, static_cast<int>(index));
+        }
+    }
+    GuestRegs regs{};
+    for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
+    d012::decomp::call_original(g, kLoaderStep, regs);
+    out = regs;
+}
+
+// The loader's file requests (D012_TRACE_PACKAGE=1): FUN_088fe708 starts a load of a named file (and returns its size or 0), FUN_088fe850 starts
+// one with a callback. Logged with the name, to see which request of the new character's load never goes out.
+template <std::uint32_t Address>
+void run_request_trace(Guest *g, const d012::decomp::CallState &in, GuestRegs &out) {
+    GuestRegs regs{};
+    for (int i = 0; i < 8; ++i) regs.a[i] = in.gpr[4 + i];
+    static const bool trace = std::getenv("D012_TRACE_PACKAGE") != nullptr;
+    static int lines = 0;
+    if (trace && g_on && lines < 200) {
+        const std::string name = guest_text(in.gpr[4]);
+        if (name.rfind("obj/", 0) == 0) {
+            ++lines;
+            std::fprintf(stderr, "[emendatus] request %08X \"%s\"\n", Address, name.c_str());
+        }
+    }
+    d012::decomp::call_original(g, Address, regs);
     out = regs;
 }
 
 struct ScanInstall {
     ScanInstall() {
+        // The Manikin fix is always on. The rest only trace (D012_TRACE_PACKAGE=1) and are not installed otherwise: wrapping loader
+        // functions that can wait crashes the game ("a guest call from decompiled code switched threads").
         static const d012::decomp::Override overrides[] = {
             {kObjectScan, "emendatus_manikin_slot", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_object_scan},
+            {kFileExists, "emendatus_file_exists_trace", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_file_exists},
+            {kIndexSearch, "emendatus_index_search_trace", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_index_search},
+            {kObjectRow, "emendatus_object_row_trace", d012::decomp::Module::Main, d012::decomp::Returns::Integer, &run_object_row},
         };
-        d012::decomp::add_overrides(overrides, 1, true);
+        d012::decomp::add_overrides(overrides, std::getenv("D012_TRACE_PACKAGE") != nullptr ? 4 : 1, true);
     }
 } scan_install;
 
@@ -412,3 +781,5 @@ void redirect_game_files(std::filesystem::path &executable, std::filesystem::pat
 }
 
 } // namespace d012_emendatus
+
+bool d012_emendatus_on() { return g_on; }
