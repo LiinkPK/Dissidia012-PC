@@ -3,3 +3,5 @@
 *.ps1 linguist-vendored
 CMakeLists.txt linguist-vendored
 *.cmake linguist-vendored
+
+*.sh text eol=lf
