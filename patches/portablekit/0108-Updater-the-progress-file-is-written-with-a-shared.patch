@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 18 Nov 2026 12:00:00 +0100
+Subject: [PATCH] Updater: the progress file is written with a shared open and retried, one file per run
+
+The helper script wrote its progress with Set-Content, which throws when the file is locked for a moment (the game reads it
+every 200 ms). The throw was reported as a failed update. The write now opens the file shared and retries, the log writes
+cannot fail the update, and each run uses a progress file of its own, so Try again starts clean.
+---
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 3662aa2..f6f2905 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -297,8 +383,18 @@ std::filesystem::path g_progress_path;
+ // What the script is told to do, written to the temp folder when an update starts.
+ const char *kHelperScript = R"PS(param($ProcessId, $Zip, $Target, $Exe, $Progress)
+ $log = Join-Path $env:TEMP 'd012_update.log'
+-Set-Content -LiteralPath $log -Value ('started ' + (Get-Date) + ' zip=' + $Zip + ' target=' + $Target + ' exe=' + $Exe)
+-function Report($text) { Set-Content -LiteralPath $Progress -Value $text -Encoding ASCII }
++Set-Content -LiteralPath $log -Value ('started ' + (Get-Date) + ' zip=' + $Zip + ' target=' + $Target + ' exe=' + $Exe) -ErrorAction SilentlyContinue
++# Progress reporting must never stop an update: the file is opened sharing read, write and delete with the game, which reads it
++# every 200 ms, and a write that still meets a lock (a scanner, a reader) is tried again instead of failing the unpacking.
++function Report($text) {
++  for ($try = 0; $try -lt 25; $try++) {
++    try {
++      $stream = [System.IO.File]::Open($Progress, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
++      try { $bytes = [System.Text.Encoding]::ASCII.GetBytes([string]$text); $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
++      return
++    } catch { Start-Sleep -Milliseconds 40 }
++  }
++}
+ $stage = Join-Path $Target 'update_staging'
+ try {
+   Add-Type -AssemblyName System.IO.Compression.FileSystem
+@@ -342,7 +438,7 @@ try {
+   } finally { $archive.Dispose() }
+   Report 'unpacked'
+ } catch {
+-  $_ | Out-File -LiteralPath $log -Append
++  $_ | Out-File -LiteralPath $log -Append -ErrorAction SilentlyContinue
+   Report ('failed: ' + $_.Exception.Message)
+   Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+   exit
+@@ -357,7 +453,7 @@ try {
+   if ($LASTEXITCODE -ge 8) { throw ('robocopy failed: ' + $LASTEXITCODE) }
+   Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+   if ($Zip -like (Join-Path $env:TEMP '*')) { Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue }
+-  Add-Content -LiteralPath $log -Value 'installed'
++  Add-Content -LiteralPath $log -Value 'installed' -ErrorAction SilentlyContinue
+ } catch {
+   $_ | Out-File -LiteralPath $log -Append
+ }
+@@ -377,8 +473,11 @@ bool start_helper(const std::filesystem::path &zip, std::string &error) {
+     std::error_code ec;
+     const std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
+     const std::filesystem::path script = temp / "d012_update.ps1";
+-    g_progress_path = temp / "d012_update_progress.txt";
+-    std::filesystem::remove(g_progress_path, ec);
++    // One file per run: a progress file still held by an earlier run (or a reader of it) cannot block this one, and
++    // "Try again" after a failure starts clean.
++    g_progress_path = temp / ("d012_update_progress_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(GetTickCount64()) + ".txt");
++    for (const auto &old : std::filesystem::directory_iterator(temp, ec))
++        if (old.path().filename().string().rfind("d012_update_progress", 0) == 0) std::filesystem::remove(old.path(), ec);
+     {
+         std::ofstream out(script, std::ios::trunc);
+         out << kHelperScript;
+-- 
+2.54.0.windows.1
+

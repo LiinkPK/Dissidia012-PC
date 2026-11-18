@@ -79,8 +79,8 @@ echo "== 4/6 joining the CPUs -> $REL =="
 FIRST="${ARCHS%% *}"
 B1="$OUT/d012_vk-$FIRST/bin"
 # dist/ may also hold other packages: only what this script makes is cleared.
-rm -rf "$REL/Dissidia 012 Final Fantasy HD Remastered.app" "$REL/lib" "$REL/overlays" "$REL/textures" "$REL/d012_native-macos-universal.tar.gz" "$REL/d012_native-macos.tar.gz"
-mkdir -p "$REL/lib" "$REL/overlays"
+rm -rf "$REL/Dissidia 012 Final Fantasy HD Remastered.app" "$REL/lib" "$REL/overlays" "$REL/corpora" "$REL/mods" "$REL/textures" "$REL/d012_native-macos-universal.tar.gz" "$REL/d012_native-macos.tar.gz"
+mkdir -p "$REL/lib" "$REL/overlays" "$REL/corpora" "$REL/mods"
 # join <relative path inside bin/>  -> $REL/<same path>; one file per CPU, merged with lipo (a single CPU is just copied)
 join() {
   local rel="$1" dest="$2" inputs=()
@@ -90,6 +90,17 @@ join() {
 join d012_native "$REL/d012_native"
 chmod +x "$REL/d012_native"
 for f in "$B1"/overlays/*; do [ -f "$f" ] && join "overlays/$(basename "$f")" "$REL/overlays/$(basename "$f")"; done
+# The Emendatus Mod ships by default: its edition corpus (corpora/), the new character's files and the new data (mods/, from
+# release/mods). WITHOUT_EMENDATUS=1 leaves it out.
+if [ "${WITHOUT_EMENDATUS:-0}" != 1 ]; then
+  for f in "$B1"/corpora/*; do [ -f "$f" ] && join "corpora/$(basename "$f")" "$REL/corpora/$(basename "$f")"; done
+  cp -a "$B1"/mods/. "$REL/mods/" 2>/dev/null || true
+  [ -d "$ROOT/release/mods" ] && cp -a "$ROOT/release/mods/." "$REL/mods/"
+  [ -f "$REL/mods/emendatus_assets.bin" ] || { echo "ERROR: release/mods/emendatus_assets.bin is missing (WITHOUT_EMENDATUS=1 builds an app without the Emendatus Mod)"; exit 1; }
+  [ -n "$(ls -A "$REL/corpora" 2>/dev/null)" ] || { echo "ERROR: no edition corpus in $B1/corpora, so the Emendatus Mod cannot run (WITHOUT_EMENDATUS=1 leaves it out)"; exit 1; }
+else
+  rm -f "$REL"/overlays/*ovl089DD4C0_battle_85688873* "$REL"/overlays/*ovl089DD4C0_menu_56F41D05* "$REL"/overlays/*ovl0A601000_suppreacc_* "$REL"/overlays/*ovl0ABBC700_plugin_* "$REL"/overlays/*ovl0BFE8000_block2_*
+fi
 # FFmpeg's libraries (real files, not links)
 if [ -d "$B1/lib" ]; then
   for f in "$B1"/lib/*.dylib; do [ -f "$f" ] && [ ! -L "$f" ] && join "lib/$(basename "$f")" "$REL/lib/$(basename "$f")"; done
@@ -119,6 +130,8 @@ mkdir -p "$MACOS" "$RES/defaults/ms0/PSP/CHEATS"
 mv "$REL/d012_native" "$MACOS/d012_native"
 mv "$REL/lib" "$MACOS/lib"
 mv "$REL/overlays" "$MACOS/overlays"
+mv "$REL/corpora" "$MACOS/corpora"
+mv "$REL/mods" "$MACOS/mods"
 cp -a "$ROOT/release/macos/fonts" "$MACOS/fonts"
 # First-run defaults, copied to the data folder only where a file is missing (the player's edits are never overwritten).
 [ -d "$ROOT/release/data/ms0/PSP/CHEATS" ] && cp -a "$ROOT/release/data/ms0/PSP/CHEATS/." "$RES/defaults/ms0/PSP/CHEATS/"
@@ -190,7 +203,7 @@ if [ -f "$ROOT/favicon.png" ] && command -v iconutil >/dev/null 2>&1; then
   rm -rf "$(dirname "$ICONSET")"
 fi
 # arm64 code must be signed to run: every library and the program, then the whole app, ad hoc.
-find "$MACOS" -type f \( -name '*.dylib' -o -name 'd012_native' -o -name 'ovl*' \) -exec codesign --force --sign - {} \;
+find "$MACOS" -type f \( -name '*.dylib' -o -name 'd012_native' -o -name 'ovl*' -o -path '*/corpora/*' \) -exec codesign --force --sign - {} \;
 codesign --force --deep --sign - "$APP"
 
 echo "== 6/6 check and package =="

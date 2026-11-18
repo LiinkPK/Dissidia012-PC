@@ -507,6 +507,27 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
                                 (g_ld32(g, cell_sprite_flags + 0x20u) & 0xFFFFu) == 0x0412u;  // the hover state: the cell does not draw
             trailing_hidden = hidden ? trailing_hidden + 1u : 0u;
         }
+        // A cell's place is its slot in the game's grid (rows of 6, 10, 10 and 6 cells at y = 113, 152, 191, 230 from x = 92, 28,
+        // 28, 92, 32 apart), not its rank among the cells that draw: a locked character's cell does not draw, and counting only the
+        // drawn ones moved every cell after it one place back (Prishe took Shantotto's place while the game's cursor still used the
+        // real slot). A cell off that geometry (the Emendatus mod's, Chaos, Random) follows the one before it, as it did.
+        {
+            const std::uint32_t slot_sprite = g_ld32(g, layout);
+            if (slot_sprite != 0u && in_guest(g, slot_sprite, 0x40u)) {
+                static const unsigned first_slot[4] = {0u, 6u, 16u, 26u};
+                static const float first_x[4] = {92.0f, 28.0f, 28.0f, 92.0f};
+                static const float first_y[4] = {113.0f, 152.0f, 191.0f, 230.0f};
+                const float cell_x = load_float(g, slot_sprite + 0x10u), cell_y = load_float(g, slot_sprite + 0x14u);
+                for (unsigned line = 0; line < 4u; ++line) {
+                    if (std::fabs(cell_y - first_y[line]) >= 1.0f) continue;
+                    const float n = (cell_x - first_x[line]) / 32.0f;
+                    const int index = static_cast<int>(n + 0.5f);
+                    if (index >= 0 && std::fabs(n - static_cast<float>(index)) < 0.05f && first_slot[line] + static_cast<unsigned>(index) > position)
+                        position = first_slot[line] + static_cast<unsigned>(index);
+                    break;
+                }
+            }
+        }
         g_roster_position[layout] = position++;
     }
     if (trace_roster && roster_trace != g_last_roster_trace) {  // only when the grid changes

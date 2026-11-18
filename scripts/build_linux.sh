@@ -104,6 +104,19 @@ rm -rf "$REL/overlays"; mkdir -p "$REL/overlays"
 install -m755 "$BUILD/bin/d012_native" "$REL/d012_native"
 cp -a "$BUILD"/bin/*.so* "$REL/lib/" 2>/dev/null || true
 cp -a "$BUILD"/bin/overlays/. "$REL/overlays/" 2>/dev/null || true
+# The Emendatus Mod ships by default: its edition corpus (corpora/), the new character's files and the new data (mods/, taken from
+# release/mods). WITHOUT_EMENDATUS=1 leaves it out (the overlay libraries of the mod are then removed too, as in the Windows script).
+rm -rf "$REL/corpora" "$REL/mods"
+if [ "${WITHOUT_EMENDATUS:-0}" != 1 ]; then
+  mkdir -p "$REL/corpora" "$REL/mods"
+  cp -a "$BUILD"/bin/corpora/. "$REL/corpora/" 2>/dev/null || true
+  cp -a "$BUILD"/bin/mods/. "$REL/mods/" 2>/dev/null || true
+  [ -d "$ROOT/release/mods" ] && cp -a "$ROOT/release/mods/." "$REL/mods/"
+  [ -f "$REL/mods/emendatus_assets.bin" ] || { echo "ERROR: release/mods/emendatus_assets.bin is missing (WITHOUT_EMENDATUS=1 builds a package without the Emendatus Mod)"; exit 1; }
+  [ -n "$(ls -A "$REL/corpora" 2>/dev/null)" ] || { echo "ERROR: no edition corpus in $BUILD/bin/corpora, so the Emendatus Mod cannot run (WITHOUT_EMENDATUS=1 leaves it out)"; exit 1; }
+else
+  rm -f "$REL"/overlays/*ovl089DD4C0_battle_85688873* "$REL"/overlays/*ovl089DD4C0_menu_56F41D05* "$REL"/overlays/*ovl0A601000_suppreacc_* "$REL"/overlays/*ovl0ABBC700_plugin_* "$REL"/overlays/*ovl0BFE8000_block2_*
+fi
 # Battle, menu and extra code live in the overlays and the release has no interpreter: a package without them
 # crashes at the first battle ("no function at 0x089E...").
 [ "$(find "$REL/overlays" -type f -name '*.so' | wc -l)" -ge 4 ] || { echo "ERROR: fewer than 4 overlay libraries in $BUILD/bin/overlays (a build failure hidden by -k 0?)"; exit 1; }
@@ -134,7 +147,7 @@ chmod +x "$REL/run.sh" "$REL/requirements.sh" "$REL/d012_native"
 # The package: d012_native-linux.tar.gz (the files at the top, no folder around them; the in-game updater takes it as it is).
 # The player's own files never go in: nothing inside game/, mods, PSP/GAME (ISO, DLC) or PSP/SAVEDATA, no logs, settings or caches.
 ITEMS=()
-for item in d012_native lib overlays fonts data game run.sh requirements.sh linux_deps.sh README.txt d012_native.png d012_native.desktop; do
+for item in d012_native lib overlays corpora mods fonts data game run.sh requirements.sh linux_deps.sh README.txt d012_native.png d012_native.desktop; do
   [ -e "$REL/$item" ] && ITEMS+=("$item")
 done
 TARBALL="$REL/d012_native-linux.tar.gz"

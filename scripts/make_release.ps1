@@ -14,9 +14,11 @@ param(
     [string]$Build = "out\d012_vk\bin\Release",
     [string]$Out = "dist",
     [string]$Name = "d012_native-windows",
-    [switch]$WithEmendatus
+    [switch]$WithoutEmendatus  # leave the Emendatus Mod out of the zip; by default it ships
 )
 $ErrorActionPreference = "Stop"
+# The Emendatus Mod ships unless -WithoutEmendatus is given: every mod library, corpora\ and mods\ are an explicit allowlist below.
+$WithEmendatus = -not $WithoutEmendatus
 $root = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $root $Build
 $bin = Split-Path $src -Parent
@@ -56,7 +58,7 @@ Write-Host "[3/6] Adding the build's overlays, FFmpeg and the setup files... " -
 $stageOverlays = Join-Path $stage "overlays"
 if (Test-Path $stageOverlays) { Remove-Item -Recurse -Force $stageOverlays }
 New-Item -ItemType Directory -Force $stageOverlays | Out-Null
-# The Emendatus Mod's libraries (its overlays and corpora\emendatus.dll, hundreds of MB) travel only with -WithEmendatus.
+# The Emendatus Mod's libraries (its overlays and corpora\emendatus.dll, hundreds of MB) travel unless -WithoutEmendatus is given.
 $modLibraries = "ovl089DD4C0_battle_85688873*", "ovl089DD4C0_menu_56F41D05*", "ovl0A601000_suppreacc_*", "ovl0ABBC700_plugin_*", "ovl0BFE8000_block2_*"
 Get-ChildItem $overlaySrc -Filter "*.dll" | Where-Object { $_.Name -notlike "*.stale*" } | Where-Object {
     $dll = $_.Name; $WithEmendatus -or -not (@($modLibraries | Where-Object { $dll -like $_ }).Count)

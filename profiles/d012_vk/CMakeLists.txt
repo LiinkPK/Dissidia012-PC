@@ -46,6 +46,7 @@ portablekit_add_game(d012_native
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_bloom.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_braviest_turning.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_emendatus.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/d012_expansion.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_dlc_folder.cpp"
             "${D012_PORT_DIR}/host/d012_camera.cpp"
             "${D012_PORT_DIR}/host/d012_crash_report.cpp"

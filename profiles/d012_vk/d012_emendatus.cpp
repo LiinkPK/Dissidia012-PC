@@ -49,6 +49,9 @@
 #include <string_view>
 #include <vector>
 
+namespace d012_expansion {
+bool redirect(std::filesystem::path &executable);  // d012_expansion.cpp
+}
 namespace d012_braviest_turning {
 void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_braviest_turning.cpp
 }
@@ -86,7 +89,21 @@ constexpr const char *kPatchedExecutableFile = "EBOOT_EMENDATUS.ELF";
 
 bool g_applied = false;  // the switch's value this run started with
 
-std::filesystem::path assets_path() { return portablekit::executable_directory() / "mods" / "emendatus_assets.bin"; }
+// A file of the mod's: in mods/ next to the program (Windows, Linux and macOS packages) or, when it is not there, in mods/ of the data
+// folder. An APK cannot carry the 338 MB of new data beside the program, so on Android the data folder is where it goes.
+std::filesystem::path mod_file(const std::string &name) {
+    const std::filesystem::path beside = portablekit::executable_directory() / "mods" / name;
+    std::error_code ec;
+    if (std::filesystem::exists(beside, ec)) return beside;
+    try {
+        const std::filesystem::path in_data = portablekit::install::user_data_directory() / "mods" / name;
+        if (std::filesystem::exists(in_data, ec)) return in_data;
+    } catch (const std::exception &) {
+    }
+    return beside;
+}
+
+std::filesystem::path assets_path() { return mod_file("emendatus_assets.bin"); }
 
 bool assets_present() {
     std::error_code ec;
@@ -229,7 +246,7 @@ Extra g_extras[] = {
 };
 std::uint64_t g_package_end = kPackageSizeUS + kEmTailSize;
 
-std::filesystem::path extra_path(const Extra &extra) { return portablekit::executable_directory() / "mods" / extra.file; }
+std::filesystem::path extra_path(const Extra &extra) { return mod_file(extra.file); }
 
 void plan_layout(bool eur) {
     static std::once_flag once;
@@ -769,7 +786,7 @@ void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image
 // While the switch is on, runs the mod's executable (the disc's own with the mod's patches, kept in the data folder) instead
 // of the installed one; the disc image stays the player's own. Nothing changes when the switch is off, the mod's assets
 // file is missing, or the installed executable is not the stock one the patches are made for.
-void redirect_game_files(std::filesystem::path &executable, std::filesystem::path &) {
+static void redirect_emendatus(std::filesystem::path &executable) {
     if (!read_setting()) return;
     if (!assets_present()) {
         std::cerr << "[mod] The Emendatus Mod is not used: " << portablekit::install::path_to_utf8(assets_path()) << " is missing\n";
@@ -795,6 +812,13 @@ void redirect_game_files(std::filesystem::path &executable, std::filesystem::pat
     } catch (const std::exception &e) {
         std::cerr << "[mod] The Emendatus Mod is not used: " << e.what() << "\n";
     }
+}
+
+// The game files this run uses: the Emendatus Mod's executable when it is on and set up; otherwise the stock one with Gojo's memory
+// expansion (d012_expansion.cpp), which the mod's executable already has.
+void redirect_game_files(std::filesystem::path &executable, std::filesystem::path &) {
+    redirect_emendatus(executable);
+    if (!g_redirected) d012_expansion::redirect(executable);
 }
 
 } // namespace d012_emendatus
