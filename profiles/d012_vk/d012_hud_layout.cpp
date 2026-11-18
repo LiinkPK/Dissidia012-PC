@@ -578,7 +578,7 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         // cell of hers at all: its 33 visible cells are the 32 fighters and the "Free" cell, which stays where the game puts it (the end
         // of the second row). Moving one to the 17th place put "Free" there while the cursor still went to the end of the row.
         const bool cpu_order = mod && g_ld16s(g, 0x0BFEB200u + 29u * 12u + 8u) == 0x17;
-        if (mod && cpu_order && visible == 33u) g_d012_roster_extra_rank = -1;
+        if (mod && cpu_order && (visible == 32u || visible == 33u)) g_d012_roster_extra_rank = -1;  // Original Quest: no Chaos, no new character
         else if (mod && visible == 32u) g_d012_roster_extra_rank = 31;
         else if (mod && (visible == 33u || visible == 34u)) g_d012_roster_extra_rank = static_cast<int>(visible) - 2;
         (void)cpu_select;  // Chaos's place after Feral Chaos is in the grid code's order table now (the cursor follows it)

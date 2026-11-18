@@ -43,7 +43,7 @@ def apply(corpus):
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
         "        { static bool traced = false; if (!traced) { traced = true; std::fprintf(stderr, \"[roster-mod] position 33 -> slot 16\\n\"); } }\n"
         "    }\n"
-        "    if (!g_d012_grid_party && (static_cast<std::int32_t>(ctx.gpr[17]) == -2 || ctx.gpr[17] == 32u)) {  // the Random cell (-2) and Original Quest's Free cell (32): the last place of the second row (slot 33), whatever the number of fighters before it\n"
+        "    if (!g_d012_grid_party && static_cast<std::int32_t>(ctx.gpr[17]) == -2) {  // the Random cell: the last place of the second row (slot 33), whatever the number of fighters before it\n"
         "        ctx.gpr[5] = 33u;\n"
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
         "    }\n"
@@ -85,6 +85,12 @@ def apply(corpus):
             "        }",
             "    }",
             "    ctx.gpr[22] = (0u | 0u);"]), "character list")
+    # Original Quest (mode 2) has no Chaos and no new character, as in the stock game: their rows (ids 0x17 and 0x21) make no cell there
+    text = replace_once(
+        text, "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));",
+        "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));" + NL +
+        "    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game",
+        "Original Quest rows")
     # trace: how many cells the builder counted, and the list of characters it picked them from
     text = replace_once(
         text, "    if (!g_d012_grid_party) {\n        if (ctx.gpr[22] >= 17u) {",

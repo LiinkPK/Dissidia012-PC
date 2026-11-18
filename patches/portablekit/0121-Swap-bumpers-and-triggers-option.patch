@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 18 Nov 2026 19:00:00 +0100
+Subject: [PATCH] Swap bumpers and triggers option
+
+A controls setting (input.swap_shoulders) trades the bumpers (L1, R1) with the triggers (L2, R2), for hands that find the triggers easier, such as on a Steam Deck.
+---
+
+diff --git a/.d012_patched b/.d012_patched
+index a3f587e..19dd58c 100644
+--- a/.d012_patched
++++ b/.d012_patched
+@@ -1 +1 @@
+-111 patches applied
++121 patches applied
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index a8814b9..877378b 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -827,6 +827,7 @@ struct PadTuning {
+     bool invert_x{};
+     bool invert_y{};
+     bool confirm_south{};
++    bool swap_shoulders{};
+     settings::JumpButton jump{settings::JumpButton::Off};
+     bool trace{false};
+ };
+@@ -852,6 +853,7 @@ PadTuning pad_tuning() {
+     value.invert_y = player.invert_camera_y;
+     // Which face button presses the game's confirm button; see read_gamepad.
+     value.confirm_south = player.confirm_south;
++    value.swap_shoulders = player.swap_shoulders;
+     value.jump = player.jump_button;
+     value.trace = trace;
+     return value;
+@@ -889,8 +891,13 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
+     held(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, 0x0020u);
+     held(SDL_GAMEPAD_BUTTON_DPAD_DOWN, 0x0040u);
+     held(SDL_GAMEPAD_BUTTON_DPAD_LEFT, 0x0080u);
+-    held(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, 0x0100u);
+-    held(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, 0x0200u);
++    // With the swap on, the bumpers do what the triggers do and the triggers what the bumpers do (see below).
++    const bool bumper_left = SDL_GetGamepadButton(device, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
++    const bool bumper_right = SDL_GetGamepadButton(device, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
++    if (!tuning.swap_shoulders) {
++        if (bumper_left) buttons |= 0x0100u;
++        if (bumper_right) buttons |= 0x0200u;
++    }
+     held(SDL_GAMEPAD_BUTTON_START, 0x0008u);
+     held(SDL_GAMEPAD_BUTTON_BACK, 0x0001u);
+     held(SDL_GAMEPAD_BUTTON_NORTH, 0x1000u);
+@@ -923,11 +930,18 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
+     // gets the triggers as those instead, unless the player chose a profile.
+     const std::uint32_t extras = portablekit::active_extra_buttons();
+     const bool profiled = tuning.triggers != 0u && tuning.triggers <= profiles.size();
+-    if (axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > tuning.trigger) {
++    const bool trigger_left_down = axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > tuning.trigger;
++    const bool trigger_right_down = axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > tuning.trigger;
++    if (tuning.swap_shoulders) {
++        // Swapped: the triggers are L and R, and the bumpers take the triggers' place below.
++        if (trigger_left_down) buttons |= 0x0100u;
++        if (trigger_right_down) buttons |= 0x0200u;
++    }
++    if (tuning.swap_shoulders ? bumper_left : trigger_left_down) {
+         pad.extra |= input::kExtraL2;
+         if (profiled || (extras & input::kExtraL2) == 0u) buttons |= left_trigger;
+     }
+-    if (axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > tuning.trigger) {
++    if (tuning.swap_shoulders ? bumper_right : trigger_right_down) {
+         pad.extra |= input::kExtraR2;
+         if (profiled || (extras & input::kExtraR2) == 0u) buttons |= right_trigger;
+     }
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index ad54f67..35aca96 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -259,6 +259,7 @@ const std::vector<Field> &fields() {
+          [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 100u, s.volume); },
+          [](const Settings &s) { return std::to_string(s.volume); }, nullptr},
+         BOOL_FIELD("audio.mute", mute),
++        BOOL_FIELD("input.swap_shoulders", swap_shoulders),
+         {"input.confirm", "PAD_FACE",
+          [](Settings &s, const std::string &t) {
+              if (t == "south") s.confirm_south = true;
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 23f3292..5c8c9e0 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -81,6 +81,8 @@ struct Settings {
+     // east one. The default follows the console the profile describes: south
+     // where cross confirms, east where circle does.
+     bool confirm_south{};
++    // The bumpers (L1, R1) and the triggers (L2, R2) trade places, for a hand that finds the triggers easier (Steam Deck).
++    bool swap_shoulders{};
+     float dead_zone{0.15f};
+     // The left stick's circle stretched to the PSP nub's square range, so a
+     // full diagonal reaches the corner (input/stick.hpp). Off passes the
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index b5fc938..05165e4 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -1066,6 +1066,12 @@ void Menu::controls() {
+         s.confirm_south = !s.confirm_south;
+         settings::save();
+     }
++    if (toggle_row("Trigger buttons swap", s.swap_shoulders,
++                   options_for("input.swap_shoulders",
++                               "Swaps the bumper buttons (LB, RB) with the trigger buttons (LT, RT)."))) {
++        s.swap_shoulders = !s.swap_shoulders;
++        settings::save();
++    }
+     int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
+     if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
+                    options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
+@@ -1300,6 +1306,7 @@ void Menu::controls() {
+             if (settings::overridden_by(key).empty()) value = fallback;
+         };
+         restore("input.confirm", s.confirm_south, d.confirm_south);
++        restore("input.swap_shoulders", s.swap_shoulders, d.swap_shoulders);
+         restore("input.dead_zone", s.dead_zone, d.dead_zone);
+         restore("input.stick_square", s.stick_square, d.stick_square);
+         restore("input.trigger", s.trigger, d.trigger);
+-- 
+2.43.0
+

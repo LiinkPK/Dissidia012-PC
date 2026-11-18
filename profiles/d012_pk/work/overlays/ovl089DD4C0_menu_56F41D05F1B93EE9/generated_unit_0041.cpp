@@ -18922,6 +18922,7 @@ L_08A8508C:
     goto L_08A85090;
 L_08A85090:
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));
+    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game
     goto L_08A85094;
 L_08A85094:
     ctx.gpr[17] = (0u | 0u);
