@@ -6,6 +6,10 @@ on:
       tag:
         description: "Release tag, for example v1.0.5 (it must be the same as kReleaseVersion in the code)"
         required: true
+      skip_macos:
+        description: "Leave macOS out of this run (when GitHub has no macOS runner); build it later and attach it"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -68,6 +72,7 @@ jobs:
 
   macos:
     needs: check
+    if: ${{ !inputs.skip_macos }}
     runs-on: macos-latest
     timeout-minutes: 360
     steps:
@@ -180,7 +185,7 @@ jobs:
   release:
     # Android is optional: if it fails, Linux and macOS are still attached.
     needs: [linux, macos, android]
-    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.macos.result == 'success' }}
+    if: ${{ !cancelled() && needs.linux.result == 'success' && (needs.macos.result == 'success' || (inputs.skip_macos && needs.macos.result == 'skipped')) }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
