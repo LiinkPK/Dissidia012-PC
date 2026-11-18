@@ -5,7 +5,7 @@ Written from a code review. Nothing here has been built or run yet; "Status" say
 ## Changelog (draft)
 
 - The Emendatus Mod ships by default in the Windows, Linux and macOS packages (`-WithoutEmendatus` for Windows, `WITHOUT_EMENDATUS=1` for the Linux and macOS scripts leave it out). The Linux and macOS scripts warn if the corpus or `release/mods/emendatus_assets.bin` is missing (the file is git-ignored, so a CI checkout never has it); `STRICT_EMENDATUS=1` makes that an error.
-- Android: the APK already carries every overlay library, so the mod's code ships; the 338 MB of new data is looked for in `mods/` of the app's data folder when it is not beside the program.
+- Android: the Emendatus Mod can run. The APK carries the overlay libraries and now the edition corpora (as `libcorpus_<key>.so`, found by the loader on Android). The 338 MB of data is downloaded once inside the app (Mods page, "Download to…": the app's private storage, the shared area or an SD card) from a release file named `emendatus_assets.bin` — **attach that file to the GitHub release**, or the download reports that the release has none. Untested.
 - Memory expansion (Gojo's heap edits) for the stock game too, not only with the Emendatus Mod: a new "expanded" edition. It needs its corpus generated and built once (below); until then the stock executable runs as before.
 - Multiplayer: the Emendatus Mod and the stock game never play each other (the product code carries an edition mark; the Join list hides the other edition). Patch `0111` and `d012_profile.cpp`. Untested.
 - Fixed "The update failed: ... d012_update_progress.txt is being used by another process"; "Try again" now starts clean.
@@ -57,7 +57,7 @@ Or run with `D012_TRACE_CHEATS=1` and send `d012_cheats.log` from the temp folde
 
 ## Not done
 
-- The 338 MB Emendatus data is not bundled in the APK (the player or the updater puts it in `mods/` of the data folder).
+- The Emendatus data is not in the APK; it needs the release to carry `emendatus_assets.bin`.
 - A confirmed cause for the cheats report.
 - NEW labels on the Customization roster (known open bug).
 

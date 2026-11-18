@@ -23,6 +23,9 @@
 #include "psprecomp/elf32.hpp"
 #include "psprecomp/runtime.hpp"
 #include "psprecomp/sha256.hpp"
+#if defined(PORTABLEKIT_ANDROID_APP)
+#include "platform/android_jni.hpp"
+#endif
 #if defined(PORTABLEKIT_HAS_RENDERER)
 #include "ui/ui.hpp"
 #include "ui/widgets.hpp"
@@ -44,6 +47,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -91,6 +95,8 @@ bool g_applied = false;  // the switch's value this run started with
 
 // A file of the mod's: in mods/ next to the program (Windows, Linux and macOS packages) or, when it is not there, in mods/ of the data
 // folder. An APK cannot carry the 338 MB of new data beside the program, so on Android the data folder is where it goes.
+constexpr const char *kDataDirKey = "game.emendatus_data_dir";  // the folder the player chose for the mod's data (Android's in-app download)
+
 std::filesystem::path mod_file(const std::string &name) {
     const std::filesystem::path beside = portablekit::executable_directory() / "mods" / name;
     std::error_code ec;
@@ -98,6 +104,11 @@ std::filesystem::path mod_file(const std::string &name) {
     try {
         const std::filesystem::path in_data = portablekit::install::user_data_directory() / "mods" / name;
         if (std::filesystem::exists(in_data, ec)) return in_data;
+        const auto entries = portablekit::install::read_settings_file(portablekit::install::user_data_directory());
+        if (const auto found = entries.find(kDataDirKey); found != entries.end() && !found->second.empty()) {
+            const std::filesystem::path chosen = portablekit::install::path_from_utf8(found->second) / "mods" / name;
+            if (std::filesystem::exists(chosen, ec)) return chosen;
+        }
     } catch (const std::exception &) {
     }
     return beside;
@@ -699,6 +710,107 @@ void restart_game() {
 #endif
 }
 
+#if defined(PORTABLEKIT_ANDROID_APP)
+// The mod's 338 MB of new data cannot be in the APK: it is downloaded once, from the latest release, into a folder the player picks
+// (the app's own storage or an SD card). mod_file() then finds it there.
+namespace android_data {
+enum class Phase { Idle, Finding, Downloading, Done, Failed };
+std::mutex g_lock;
+Phase g_phase = Phase::Idle;
+std::string g_error;
+
+void set_phase(Phase phase, const std::string &error = {}) {
+    const std::lock_guard<std::mutex> guard(g_lock);
+    g_phase = phase;
+    g_error = error;
+}
+
+// The download address of emendatus_assets.bin among the latest release's files.
+std::string asset_url(std::string &error) {
+    const auto body = portablekit::android::update_get("https://api.github.com/repos/LiinkPK/Dissidia012-PC/releases/latest", error);
+    if (!body) return {};
+    const std::string key = "\"browser_download_url\"";
+    for (std::size_t at = body->find(key); at != std::string::npos; at = body->find(key, at + 1u)) {
+        const std::size_t open = body->find('"', body->find(':', at));
+        if (open == std::string::npos) break;
+        const std::size_t close = body->find('"', open + 1u);
+        if (close == std::string::npos) break;
+        const std::string url = body->substr(open + 1u, close - open - 1u);
+        const std::string name = "emendatus_assets.bin";
+        if (url.size() >= name.size() && url.compare(url.size() - name.size(), name.size(), name) == 0) return url;
+    }
+    error = "the latest release has no emendatus_assets.bin";
+    return {};
+}
+
+void download_into(std::string folder) {
+    set_phase(Phase::Finding);
+    std::string error;
+    const std::string url = asset_url(error);
+    if (url.empty()) {
+        set_phase(Phase::Failed, error);
+        return;
+    }
+    set_phase(Phase::Downloading);
+    const std::string target = portablekit::install::path_to_utf8(
+        portablekit::install::path_from_utf8(folder) / "mods" / "emendatus_assets.bin");
+    if (!portablekit::android::download_to(url, target, kEmTailSize, error)) {
+        set_phase(Phase::Failed, error);
+        return;
+    }
+    try {
+        const std::filesystem::path dir = portablekit::install::user_data_directory();
+        portablekit::install::SettingsEntries entries = portablekit::install::read_settings_file(dir);
+        entries[kDataDirKey] = folder;
+        portablekit::install::write_settings_file(dir, entries);
+    } catch (const std::exception &e) {
+        set_phase(Phase::Failed, std::string("the file is downloaded but the choice could not be saved: ") + e.what());
+        return;
+    }
+    set_phase(Phase::Done);
+}
+
+void rows() {
+    namespace ui = portablekit::ui;
+    Phase phase;
+    std::string error;
+    {
+        const std::lock_guard<std::mutex> guard(g_lock);
+        phase = g_phase;
+        error = g_error;
+    }
+    ui::info_row("Emendatus data", phase == Phase::Done ? "Installed" : "Not installed (a 322 MB download, once)");
+    if (phase == Phase::Finding) {
+        ui::info_row("Status", "Looking for the file in the latest release…");
+        return;
+    }
+    if (phase == Phase::Downloading) {
+        std::uint64_t done = 0, total = 0;
+        portablekit::android::update_progress(done, total);
+        ui::progress_bar(total != 0u ? static_cast<float>(done) / static_cast<float>(total) : 0.0f, "Downloading the Emendatus data");
+        return;
+    }
+    if (phase == Phase::Done) {
+        ui::info_row("Status", "Done. Restart the game, then turn the Emendatus Mod on here.");
+        return;
+    }
+    if (phase == Phase::Failed) ui::info_row("Download failed", error);
+    static std::vector<portablekit::android::StorageChoice> choices = portablekit::android::storage_choices();
+    for (const portablekit::android::StorageChoice &choice : choices) {
+        const bool room = choice.free_bytes > kEmTailSize + (256ull << 20);
+        ui::RowOptions options;
+        options.disabled = !room;
+        options.note = std::to_string(choice.free_bytes >> 20) + " MB free" + (room ? "" : ", not enough");
+        options.description = "Downloads the Emendatus data into " + choice.path + "/mods. It stays in this app's own folder there.";
+        if (ui::button_row(("Download to: " + choice.name + "###emdata " + choice.path).c_str(), options)) {
+            std::thread(download_into, choice.path).detach();
+            break;
+        }
+    }
+}
+} // namespace android_data
+#endif
+
 void mod_rows() {
     namespace ui = portablekit::ui;
     ui::section("Emendatus");
@@ -708,6 +820,9 @@ void mod_rows() {
     static bool target = false;           // what the open question would set
     static bool asking = false;
     const bool have_assets = assets_present();
+#if defined(PORTABLEKIT_ANDROID_APP)
+    if (!have_assets) android_data::rows();
+#endif
     if (!have_assets && !read_setting()) return;  // the mod's data is not here: no row
     if (const char *text = std::getenv("D012_EMENDATUS"); text != nullptr && *text != 0) {
         options.disabled = true;

@@ -8,7 +8,7 @@ counts its writes, skipped writes, unsupported codes and unmet conditions; the C
 cheat and the console prints it once.
 ---
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 4c381fe..ac846f1 100644
+index 4c381fe..514533b 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -177,6 +178,28 @@ std::FILE *cheat_log() {
@@ -83,7 +83,7 @@ index 4c381fe..ac846f1 100644
          }
      }
  }
-@@ -1637,6 +1691,9 @@ void Menu::cheats() {
+@@ -1637,6 +1700,9 @@ void Menu::cheats() {
          info_row("Cheats", "None found");
          return;
      }
@@ -93,7 +93,7 @@ index 4c381fe..ac846f1 100644
      section("Codes");
      for (std::size_t i = 0; i < f.heads.size(); ++i) {
          std::string &line = f.lines[f.heads[i]];
-@@ -1650,6 +1707,32 @@ void Menu::cheats() {
+@@ -1650,6 +1716,32 @@ void Menu::cheats() {
          }
          ImGui::PopID();
      }
@@ -126,7 +126,7 @@ index 4c381fe..ac846f1 100644
  }
  
  void Menu::mods() {
-@@ -1994,7 +2093,17 @@ void apply_cheats(psprecomp::Runtime &runtime) {
+@@ -1994,7 +2102,17 @@ void apply_cheats(psprecomp::Runtime &runtime) {
              static std::map<std::size_t, unsigned> runs;
              cheat_logging = cheat_log() != nullptr && ++runs[i] <= 60u;
              if (cheat_logging) std::fprintf(cheat_log(), "cheat %zu \"%s\" run %u\n", i, f.lines[f.heads[i]].c_str() + 3, runs[i]);

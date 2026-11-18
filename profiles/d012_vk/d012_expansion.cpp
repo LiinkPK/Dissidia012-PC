@@ -35,7 +35,11 @@ namespace fs = std::filesystem;
 // The corpus of the edition ("expanded") is a library next to the program, in corpora/.
 bool corpus_present() {
     std::error_code ec;
+#if defined(PORTABLEKIT_ANDROID_APP)
+    const fs::path folder = portablekit::executable_directory();  // libcorpus_expanded.so among the app's libraries
+#else
     const fs::path folder = portablekit::executable_directory() / "corpora";
+#endif
     for (fs::directory_iterator it(folder, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
         if (it->path().filename().string().find("expanded") != std::string::npos) return true;
     return false;

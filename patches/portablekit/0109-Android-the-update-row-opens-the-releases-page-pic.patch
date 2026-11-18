@@ -7,7 +7,7 @@ Android has no updater, so the update row did nothing. It now opens the releases
 picked folder or file persistent, which was lost when the app restarted.
 ---
 diff --git a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
-index cec636d..0db8972 100644
+index cec636d..63a346e 100644
 --- a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 +++ b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 @@ -2,6 +2,7 @@ package io.github.teamgdb.portablekit;
@@ -35,7 +35,7 @@ index cec636d..0db8972 100644
              finishPick(uri != null ? uri.toString() : null);
              return;
          }
-@@ -193,4 +204,159 @@ public class GameActivity extends SDLActivity {
+@@ -193,4 +204,215 @@ public class GameActivity extends SDLActivity {
              return -1;
          }
      }
@@ -194,6 +194,62 @@ index cec636d..0db8972 100644
 +            return 2;
 +        }
 +    }
++
++    // ---- Large downloads (a mod's data): where they can go, and the download itself. ----
++
++    /** The places a large file can go, as "path<TAB>name<TAB>free bytes": the app's own storage first, then each external volume. */
++    public static String[] storageChoices() {
++        java.util.ArrayList<String> choices = new java.util.ArrayList<>();
++        java.io.File own = mSingleton.getFilesDir();
++        choices.add(own.getPath() + "\t" + "Phone storage, private to the app" + "\t" + own.getUsableSpace());
++        java.io.File[] external = mSingleton.getExternalFilesDirs(null);
++        if (external != null) {
++            for (int i = 0; i < external.length; i++) {
++                java.io.File dir = external[i];
++                if (dir == null) continue;
++                String name = i == 0 ? "Phone storage, shared area" : "SD card or other volume " + i;
++                choices.add(dir.getPath() + "\t" + name + "\t" + dir.getUsableSpace());
++            }
++        }
++        return choices.toArray(new String[0]);
++    }
++
++    /**
++     * Downloads a URL into a file, blocking (its progress is updateProgress()), through a .part file that is renamed when whole. When
++     * expectedSize is above 0 the file must be exactly that long. False with updateError() set.
++     */
++    public static boolean downloadTo(String url, String path, long expectedSize) {
++        sUpdateError = "";
++        sUpdateDone = 0;
++        sUpdateTotal = expectedSize > 0 ? expectedSize : 0;
++        java.io.File target = new java.io.File(path);
++        java.io.File partial = new java.io.File(path + ".part");
++        try {
++            if (target.getParentFile() != null) target.getParentFile().mkdirs();
++            java.net.HttpURLConnection connection = open(url);
++            try (java.io.InputStream in = connection.getInputStream();
++                 java.io.FileOutputStream out = new java.io.FileOutputStream(partial)) {
++                if (expectedSize <= 0 && connection.getContentLengthLong() > 0) sUpdateTotal = connection.getContentLengthLong();
++                byte[] buffer = new byte[1 << 20];
++                int got;
++                while ((got = in.read(buffer)) > 0) {
++                    out.write(buffer, 0, got);
++                    sUpdateDone += got;
++                }
++            } finally {
++                connection.disconnect();
++            }
++            if (expectedSize > 0 && sUpdateDone != expectedSize)
++                throw new java.io.IOException("the file is " + sUpdateDone + " bytes, not the " + expectedSize + " expected");
++            target.delete();
++            if (!partial.renameTo(target)) throw new java.io.IOException("the downloaded file could not be kept");
++            return true;
++        } catch (Exception e) {
++            partial.delete();
++            sUpdateError = String.valueOf(e.getMessage() != null ? e.getMessage() : e.toString());
++            return false;
++        }
++    }
  }
 diff --git a/packaging/android/AndroidManifest.xml b/packaging/android/AndroidManifest.xml
 index 8978eb5..496452c 100644
@@ -209,7 +265,7 @@ index 8978eb5..496452c 100644
      <application android:label="@string/app_name"
          android:icon="@mipmap/ic_launcher"
 diff --git a/host/platform/android_jni.hpp b/host/platform/android_jni.hpp
-index 08cb1cf..707aa5a 100644
+index 08cb1cf..93599b4 100644
 --- a/host/platform/android_jni.hpp
 +++ b/host/platform/android_jni.hpp
 @@ -6,6 +6,7 @@
@@ -220,7 +276,7 @@ index 08cb1cf..707aa5a 100644
  #include <optional>
  #include <string>
  #include <vector>
-@@ -45,4 +46,12 @@ struct Entry {
+@@ -45,4 +46,21 @@ struct Entry {
  // truncating); -1 on failure.
  [[nodiscard]] int open_document(const std::string &uri, const char *mode);
  
@@ -229,15 +285,32 @@ index 08cb1cf..707aa5a 100644
 +[[nodiscard]] std::optional<std::string> update_get(const std::string &url, std::string &error);
 +[[nodiscard]] bool update_download(const std::string &url, std::string &error);
 +void update_progress(std::uint64_t &done, std::uint64_t &total);
++// Where a large file can go (the app's own storage and each external volume), and a download into any such folder. The
++// download blocks; its progress is update_progress().
++struct StorageChoice {
++    std::string path;
++    std::string name;
++    std::uint64_t free_bytes{};
++};
++[[nodiscard]] std::vector<StorageChoice> storage_choices();
++[[nodiscard]] bool download_to(const std::string &url, const std::string &path, std::uint64_t expected_size, std::string &error);
 +enum class InstallResult { Started, NeedsPermission, Failed };
 +[[nodiscard]] InstallResult update_install(std::string &error);
 +
  } // namespace portablekit::android
 diff --git a/host/platform/android_jni.cpp b/host/platform/android_jni.cpp
-index 5073494..1e4e056 100644
+index 5073494..18a1c5e 100644
 --- a/host/platform/android_jni.cpp
 +++ b/host/platform/android_jni.cpp
-@@ -80,6 +80,99 @@ void relaunch() {
+@@ -6,6 +6,7 @@
+ #include <jni.h>
+ 
+ #include <cstdio>
++#include <cstdlib>
+ 
+ namespace portablekit::android {
+ namespace {
+@@ -80,6 +81,145 @@ void relaunch() {
      call.failed();
  }
  
@@ -312,6 +385,52 @@ index 5073494..1e4e056 100644
 +    total = static_cast<std::uint64_t>(values[1]);
 +}
 +
++std::vector<StorageChoice> storage_choices() {
++    std::vector<StorageChoice> choices;
++    Call call;
++    if (!call.ok()) return choices;
++    jmethodID id = call.method("storageChoices", "()[Ljava/lang/String;");
++    if (id == nullptr) return choices;
++    auto array = static_cast<jobjectArray>(call.env->CallStaticObjectMethod(call.type, id));
++    if (call.failed() || array == nullptr) return choices;
++    const jsize count = call.env->GetArrayLength(array);
++    for (jsize i = 0; i < count; ++i) {
++        const std::optional<std::string> line = call.text(call.env->GetObjectArrayElement(array, i));
++        if (!line) continue;
++        const std::size_t first = line->find('\t');
++        const std::size_t second = first == std::string::npos ? first : line->find('\t', first + 1u);
++        if (second == std::string::npos) continue;
++        choices.push_back({line->substr(0u, first), line->substr(first + 1u, second - first - 1u),
++                           static_cast<std::uint64_t>(std::strtoull(line->c_str() + second + 1u, nullptr, 10))});
++    }
++    call.env->DeleteLocalRef(array);
++    return choices;
++}
++
++bool download_to(const std::string &url, const std::string &path, std::uint64_t expected_size, std::string &error) {
++    Call call;
++    if (!call.ok()) {
++        error = "no Java connection";
++        return false;
++    }
++    jmethodID id = call.method("downloadTo", "(Ljava/lang/String;Ljava/lang/String;J)Z");
++    if (id == nullptr) {
++        error = "the download code is missing from this app";
++        return false;
++    }
++    jstring address = call.string(url);
++    jstring target = call.string(path);
++    const jboolean done = call.env->CallStaticBooleanMethod(call.type, id, address, target, static_cast<jlong>(expected_size));
++    call.env->DeleteLocalRef(address);
++    call.env->DeleteLocalRef(target);
++    if (call.failed()) {
++        error = "the download failed";
++        return false;
++    }
++    if (done != JNI_TRUE) error = update_error(call);
++    return done == JNI_TRUE;
++}
++
 +InstallResult update_install(std::string &error) {
 +    Call call;
 +    if (!call.ok()) {
@@ -337,6 +456,50 @@ index 5073494..1e4e056 100644
  std::optional<std::string> pick_folder() {
      Call call;
      if (!call.ok()) return std::nullopt;
+diff --git a/host/corpus_library.cpp b/host/corpus_library.cpp
+index ec17aaf..092963e 100644
+--- a/host/corpus_library.cpp
++++ b/host/corpus_library.cpp
+@@ -62,6 +62,10 @@ std::optional<CorpusLibrary> open_corpus_library(const std::filesystem::path &pa
+ }
+ 
+ std::filesystem::path variant_corpus_path(const ProfileVariant &variant) {
++#if defined(PORTABLEKIT_ANDROID_APP)
++    // An APK holds its native libraries in one flat folder, as lib<name>.so: the build packs corpora/<key>.so as libcorpus_<key>.so.
++    return executable_directory() / ("libcorpus_" + std::string(variant.key) + ".so");
++#endif
+ #if defined(_WIN32)
+     const char *extension = ".dll";
+ #elif defined(__APPLE__)
+diff --git a/host/corpus_library.hpp b/host/corpus_library.hpp
+index 2f87ab8..145c3cc 100644
+--- a/host/corpus_library.hpp
++++ b/host/corpus_library.hpp
+@@ -32,7 +32,7 @@ struct CorpusLibrary {
+                                                                std::string &error);
+ 
+ // Where a port's build puts an edition's corpus: corpora/<key>.<ext> next to
+-// the executable.
++// the executable; in the Android app, libcorpus_<key>.so among its libraries.
+ [[nodiscard]] std::filesystem::path variant_corpus_path(const ProfileVariant &variant);
+ 
+ } // namespace portablekit
+diff --git a/packaging/android/build_apk.sh b/packaging/android/build_apk.sh
+index 1cae59e..5d1e625 100755
+--- a/packaging/android/build_apk.sh
++++ b/packaging/android/build_apk.sh
+@@ -107,6 +107,11 @@ shopt -s nullglob
+ overlays=("$build_dir"/bin/overlays/libovl*.so)
+ if [[ -n "$overlay_limit" ]]; then overlays=("${overlays[@]:0:$overlay_limit}"); fi
+ if [[ ${#overlays[@]} -gt 0 ]]; then cp "${overlays[@]}" "$lib/"; fi
++# An edition's corpus (bin/corpora/<key>.so) goes in as libcorpus_<key>.so: a flat folder of lib*.so is all an APK has
++# (host/corpus_library.cpp looks for that name).
++for corpus in "$build_dir"/bin/corpora/*.so; do
++    cp "$corpus" "$lib/libcorpus_$(basename "$corpus")"
++done
+ strip="$(ls -d "$ANDROID_NDK"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)"
+ "$strip" --strip-unneeded "$lib"/*.so
+ # Every function a packed library imports must be in Android $min_sdk's system
 diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
 index 3662aa2..f6f2905 100644
 --- a/host/ui/updater.cpp
@@ -494,10 +657,10 @@ index 3662aa2..f6f2905 100644
  #if defined(_WIN32)
      return g_status.state == State::Ready && g_helper != nullptr;
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 4c381fe..ac846f1 100644
+index 4c381fe..514533b 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
-@@ -1834,6 +1917,14 @@ bool Menu::update_dialog() {
+@@ -1834,6 +1926,14 @@ bool Menu::update_dialog() {
              progress_bar(u.progress, "Unpacking the update");
              paragraph("Please wait. The game closes and opens again by itself when this is done.", colors::kTextDim);
          } else if (u.state == updater::State::Ready) {
@@ -512,7 +675,7 @@ index 4c381fe..ac846f1 100644
              paragraph("Done. The game will now close and reopen automatically.", colors::kTextDim);
              if (updater::launch_installer()) {
                  quit_ = true;
-@@ -1842,12 +1933,20 @@ bool Menu::update_dialog() {
+@@ -1842,12 +1942,20 @@ bool Menu::update_dialog() {
                  paragraph("The installer could not be started.", colors::kDanger);
                  if (big_button("Close", width)) update_open_ = false;
              }
