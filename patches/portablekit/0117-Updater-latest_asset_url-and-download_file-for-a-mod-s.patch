@@ -1,0 +1,139 @@
+From 8516733eeb6eb6d7100215f139626988f5f64e22 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 18 Nov 2026 12:09:40 +0100
+Subject: [PATCH] Updater: latest_asset_url and download_file, for a mod's data
+
+A release file looked up by name, and a file downloaded through a .part file with its size checked, on Windows, Linux and macOS.
+---
+ host/ui/updater.cpp | 86 +++++++++++++++++++++++++++++++++++++++++++++
+ host/ui/updater.hpp | 11 ++++++
+ 2 files changed, 97 insertions(+)
+
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index f6f2905..349d99c 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -374,6 +374,92 @@ Status status() {
+     return g_status;
+ }
+ 
++std::string latest_asset_url(const std::string &name, std::string &error) {
++    std::string body;
++#if defined(PK_UPDATER)
++    if (!http_get(kLatestApi, [&](const char *data, std::size_t n) { body.append(data, n); }, nullptr, error)) return {};
++#elif defined(PK_UPDATER_ANDROID)
++    const std::optional<std::string> text = android::update_get(kLatestApi, error);
++    if (!text) return {};
++    body = *text;
++#else
++    error = "the release list is not available here";
++    return {};
++#endif
++    for (std::size_t at = body.find("\"browser_download_url\""); at != std::string::npos;
++         at = body.find("\"browser_download_url\"", at + 1u)) {
++        const std::string url = json_string(body, "browser_download_url", at);
++        if (url.size() >= name.size() && url.compare(url.size() - name.size(), name.size(), name) == 0) return url;
++    }
++    error = "the latest release has no " + name;
++    return {};
++}
++
++bool download_file(const std::string &url, const std::filesystem::path &target, std::uint64_t expected_size,
++                   const std::function<void(std::uint64_t, std::uint64_t)> &progress, std::string &error) {
++#if defined(PK_UPDATER)
++    std::error_code ec;
++    std::filesystem::create_directories(target.parent_path(), ec);
++    std::filesystem::path partial = target;
++    partial += ".part";
++    std::uint64_t written = 0;
++    bool ok = false;
++    {
++        std::ofstream out(partial, std::ios::binary | std::ios::trunc);
++        if (!out) {
++            error = "cannot write " + partial.string();
++            return false;
++        }
++        std::uint64_t previous_size = 0;
++        {
++            const std::lock_guard<std::mutex> lock(g_mutex);
++            previous_size = g_zip_size;
++            g_zip_size = expected_size;  // the curl download reports its progress against this
++        }
++        ok = http_get(url, [&](const char *data, std::size_t n) {
++                 out.write(data, static_cast<std::streamsize>(n));
++                 written += n;
++             },
++             [&](std::uint64_t done, std::uint64_t total) {
++                 if (progress) progress(done, total != 0u ? total : expected_size);
++             },
++             error);
++        {
++            const std::lock_guard<std::mutex> lock(g_mutex);
++            g_zip_size = previous_size;
++        }
++        out.close();
++        if (ok && !out) {
++            error = "writing the file failed (is the disk full?)";
++            ok = false;
++        }
++    }
++    if (ok && expected_size != 0u && written != expected_size) {
++        error = "the file is " + std::to_string(written) + " bytes, not the " + std::to_string(expected_size) + " expected";
++        ok = false;
++    }
++    if (!ok) {
++        std::filesystem::remove(partial, ec);
++        if (error.empty()) error = "the download failed";
++        return false;
++    }
++    std::filesystem::remove(target, ec);
++    std::filesystem::rename(partial, target, ec);
++    if (ec) {
++        error = "the downloaded file could not be kept: " + ec.message();
++        return false;
++    }
++    return true;
++#else
++    (void)url;
++    (void)target;
++    (void)expected_size;
++    (void)progress;
++    error = "this platform downloads through its own code";
++    return false;
++#endif
++}
++
+ #if defined(_WIN32)
+ namespace {
+ 
+diff --git a/host/ui/updater.hpp b/host/ui/updater.hpp
+index d28488c..509d4f9 100644
+--- a/host/ui/updater.hpp
++++ b/host/ui/updater.hpp
+@@ -1,5 +1,8 @@
+ #pragma once
+ 
++#include <cstdint>
++#include <filesystem>
++#include <functional>
+ #include <string>
+ 
+ // Checks GitHub for a newer release and installs it over the program's own files. The check runs once, on a
+@@ -31,6 +34,14 @@ bool launch_installer();
+ 
+ [[nodiscard]] std::string local_version();
+ 
++// The download address of the file named `name` among the latest release's files; empty, with the reason in `error`, when there is none.
++[[nodiscard]] std::string latest_asset_url(const std::string &name, std::string &error);
++// Downloads `url` into `target` (through target.part, renamed when it is whole), telling `progress` how much is in. When `expected_size`
++// is above 0 the file must be exactly that long. False with the reason in `error`. Windows, Linux and macOS; the Android app downloads
++// through its own code (platform/android_jni.hpp).
++[[nodiscard]] bool download_file(const std::string &url, const std::filesystem::path &target, std::uint64_t expected_size,
++                                 const std::function<void(std::uint64_t, std::uint64_t)> &progress, std::string &error);
++
+ // True when `latest` is a newer release than `local` (git describe text: "v1.0", "v1.0-8-g424ca06-dirty").
+ // A build made after a release is not older than it.
+ [[nodiscard]] bool is_newer(const std::string &latest, const std::string &local);
+-- 
+2.54.0.windows.1
+

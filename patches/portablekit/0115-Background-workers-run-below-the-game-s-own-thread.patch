@@ -1,0 +1,109 @@
+From f1670148aef6338b9093fb64e4c45c11fbbeceb4 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 18 Nov 2026 11:59:38 +0100
+Subject: [PATCH] Background workers run below the game's own thread
+
+The HD texture decoders and the pipeline prewarm ran at the same priority as the game and present threads, so on a computer with few cores
+decoding a texture pack could take the CPU from the game and make it stutter. They now lower their own priority (below normal on Windows, nice 10 on Linux and
+Android, utility QoS on macOS). <prefix>_WORKER_PRIORITY=0 leaves it as it was.
+---
+ host/gpu/texture_pack.cpp    |  2 ++
+ host/gpu/vulkan_renderer.cpp |  3 +++
+ host/worker_priority.hpp     | 38 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 43 insertions(+)
+ create mode 100644 host/worker_priority.hpp
+
+diff --git a/host/gpu/texture_pack.cpp b/host/gpu/texture_pack.cpp
+index 0b808c9..7561cb3 100644
+--- a/host/gpu/texture_pack.cpp
++++ b/host/gpu/texture_pack.cpp
+@@ -1,5 +1,6 @@
+ #include "../profile.hpp"
+ #include "texture_pack.hpp"
++#include "../worker_priority.hpp"
+ 
+ #include <algorithm>
+ #include <bit>
+@@ -628,6 +629,7 @@ std::filesystem::path TexturePack::resolve(const std::string &name) {
+ }
+ 
+ void TexturePack::loader_main() {
++    portablekit::lower_worker_priority();
+     for (;;) {
+         Replacement *replacement = nullptr;
+         {
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 0c8b200..a8814b9 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -3,6 +3,7 @@
+ #include "portablekit_build_label.hpp"
+ #include "ui/input_script.hpp"
+ #include "vulkan_renderer.hpp"
++#include "../worker_priority.hpp"
+ 
+ #include "frame_interpolation.hpp"
+ #include "ge_census.hpp"
+@@ -1026,6 +1027,7 @@ private:
+         finished_.notify_all();
+     }
+     void work() {
++        portablekit::lower_worker_priority();
+         std::unique_lock<std::mutex> guard(lock_);
+         for (;;) {
+             wake_.wait(guard, [this] { return stopping_ || !queue_.empty(); });
+@@ -7220,6 +7222,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
+         keys.push_back(key_from(words));
+     }
+     prewarm->thread = std::thread([this, keys = std::move(keys)] {
++        portablekit::lower_worker_priority();
+         const auto start = std::chrono::steady_clock::now();
+         std::uint32_t made = 0u;
+         for (const PipelineKey &key : keys) {
+diff --git a/host/worker_priority.hpp b/host/worker_priority.hpp
+new file mode 100644
+index 0000000..081bd24
+--- /dev/null
++++ b/host/worker_priority.hpp
+@@ -0,0 +1,38 @@
++#pragma once
++
++// Background workers (HD texture decoding, the pipeline prewarm) must not take the CPU from the game's own thread and the present
++// thread: on a computer with few cores they ran at the same priority and the game stuttered whenever a texture pack was decoding.
++// Call this first thing on such a thread. It only ever lowers the calling thread's priority, needs no privilege, and does nothing where
++// the platform has no cheap way. <prefix>_WORKER_PRIORITY=0 leaves the priority as it was, for comparing.
++#include "profile.hpp"
++
++#include <cstring>
++
++#if defined(_WIN32)
++#define WIN32_LEAN_AND_MEAN
++#define NOMINMAX
++#include <windows.h>
++#elif defined(__linux__) || defined(__ANDROID__)
++#include <sys/resource.h>
++#include <sys/syscall.h>
++#include <unistd.h>
++#elif defined(__APPLE__)
++#include <pthread.h>
++#endif
++
++namespace portablekit {
++
++inline void lower_worker_priority() {
++    if (const char *off = env("WORKER_PRIORITY"); off != nullptr && std::strcmp(off, "0") == 0) return;
++#if defined(_WIN32)
++    // Below normal, not the background mode: that one also lowers the disk priority, and these workers read files.
++    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
++#elif defined(__linux__) || defined(__ANDROID__)
++    // A nice value is per thread on Linux when it is set by the thread id.
++    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
++#elif defined(__APPLE__)
++    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
++#endif
++}
++
++} // namespace portablekit
+-- 
+2.54.0.windows.1
+

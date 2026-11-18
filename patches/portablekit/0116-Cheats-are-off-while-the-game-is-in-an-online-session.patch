@@ -1,0 +1,47 @@
+From a37e8367dbafb619a15c1954d7054b7fa479557d Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 18 Nov 2026 12:08:14 +0100
+Subject: [PATCH] Cheats are off while the game is in an online session
+
+apply_cheats does nothing while the game is hosting, joining or in an ad hoc group, and the Cheats page says so. Nothing in the cheats file
+changes, so they come back when the session ends.
+---
+ host/ui/menu.cpp | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 9058c77..b5fc938 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -1708,6 +1708,8 @@ void Menu::cheats() {
+     load_cheats();
+     CheatFile &f = cheat_file();
+     section("Cheats");
++    const bool online = adhoc_session_active();
++    if (online) info_row("Online", "Cheats are off while you play online. They come back when the session ends.");
+     if (button_row("Open the cheats file",
+                    {false, {}, std::string("Edit ") + portablekit::game().disc_id + ".ini in PSP/CHEATS, in PPSSPP's format."})) {
+         std::error_code ec;
+@@ -1750,7 +1752,8 @@ void Menu::cheats() {
+             if (title.empty()) title = "Cheat " + std::to_string(i + 1);
+             const auto found = cheat_stats().find(i);
+             std::string note;
+-            if (f.codes[i].empty()) note = "No code lines";
++            if (online) note = "Off while online";
++            else if (f.codes[i].empty()) note = "No code lines";
+             else if (found == cheat_stats().end()) note = "Not run yet";
+             else if (found->second.unsupported != 0u) note = "Unsupported code type";
+             else if (found->second.skipped != 0u && found->second.writes == 0u) note = "Writes outside game memory";
+@@ -2115,6 +2118,9 @@ void add_menu_rows(void (*rows)()) {
+ }
+ 
+ void apply_cheats(psprecomp::Runtime &runtime) {
++    // Cheats are off while the game is in an online session (hosting, joining or in a group), and come back when it ends. Nothing in
++    // the cheats file changes: they are only not applied. The other players' games cannot be told, so this only keeps this one honest.
++    if (adhoc_session_active()) return;
+     const std::lock_guard<std::mutex> lock(cheat_mutex());
+     load_cheats();
+     const CheatFile &f = cheat_file();
+-- 
+2.54.0.windows.1
+
