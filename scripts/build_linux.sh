@@ -121,6 +121,8 @@ cp -f "$ROOT/scripts/linux_deps.sh" "$REL/linux_deps.sh"
 mkdir -p "$REL/data/ms0/PSP/CHEATS"
 [ -d "$ROOT/release/data/ms0/PSP/CHEATS" ] && cp -a "$ROOT/release/data/ms0/PSP/CHEATS/." "$REL/data/ms0/PSP/CHEATS/"
 if [ -d "$ROOT/release/data/textures" ]; then mkdir -p "$REL/data/textures"; cp -a "$ROOT/release/data/textures/." "$REL/data/textures/"; else echo "Note: no release/data/textures: the package has no texture pack."; fi
+# The texture pack's zip can carry read-only folders; cp -a keeps that, and rm could not clear them afterwards.
+chmod -R u+rwX "$REL/data" 2>/dev/null || true
 # Textures live in data/textures only, never in the root of the package.
 rm -rf "$REL/textures"
 # Logs are the player's own (running the game from this folder makes data/logs): they never travel in a package.
