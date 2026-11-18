@@ -92,7 +92,7 @@ if ($WithEmendatus -and (Test-Path $modsSrc)) {
     # An explicit allowlist: only these files of release\mods travel, so no other mod can ship by being left in the folder.
     foreach ($allowed in "emendatus_assets.bin") {
         $file = Join-Path $modsSrc $allowed
-        if (Test-Path $file) { Copy-Item $file $modsDst -Force } else { Write-Warning "$allowed is not in release\mods: the package has no Emendatus data" }
+        if (Test-Path $file) { Copy-Item $file $modsDst -Force } else { throw "$allowed is not in release\mods: the Emendatus Mod ships in every package (use -WithoutEmendatus to leave it out on purpose)" }
     }
 }
 if (-not $WithEmendatus) { Remove-Item -Recurse -Force (Join-Path $stage "corpora") -ErrorAction SilentlyContinue }
