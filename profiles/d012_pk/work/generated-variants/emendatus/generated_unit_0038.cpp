@@ -20,9 +20,10 @@ static inline bool d012_hook_ok(std::uint32_t a) {
     }
     return !off && a >= lo && a <= hi;
 }
-static inline void d012_hook_trace(std::uint32_t a) {
+static inline void d012_hook_trace(std::uint32_t a, std::uint32_t r4, std::uint32_t r5, std::uint32_t r6) {
     static int total = 0;
-    if (total < 200) { ++total; std::fprintf(stderr, "[hook] %08X\n", a); }
+    static const bool on = std::getenv("D012_HOOK_TRACE") != nullptr;
+    if (on && total < 100000) { ++total; { static std::FILE *tf = std::fopen("d012_trace.log", "a"); if (tf) { std::fprintf(tf, "[hook] %08X a0=%08X a1=%08X a2=%08X\n", a, r4, r5, r6); std::fflush(tf); } } }
 }
 #include <limits>
 
@@ -16272,7 +16273,7 @@ L_0889F28C:
     ctx.gpr[2] = (0u < ctx.gpr[2] ? 1u : 0u);
     goto L_0889F290;
 L_0889F290:
-    if (d012_hook_ok(0x0889F290u) && aot_mem.aot_load32(0x0889F290u) == 0x0A2D6578u && (d012_hook_trace(0x0889F290u), true)) { ctx.pc = 0x08B595E0u; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }
+    if (d012_hook_ok(0x0889F290u) && aot_mem.aot_load32(0x0889F290u) == 0x0A2D6578u && (d012_hook_trace(0x0889F290u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) {  ctx.pc = 0x08B595E0u; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-16));
     goto L_0889F294;
 L_0889F294:
@@ -16337,7 +16338,7 @@ L_0889F2D4:
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-16));
     goto L_0889F2D8;
 L_0889F2D8:
-    if (d012_hook_ok(0x0889F2D8u) && aot_mem.aot_load32(0x0889F2D8u) == 0x0A2D6555u && (d012_hook_trace(0x0889F2D8u), true)) { ctx.pc = 0x08B59554u; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }
+    if (d012_hook_ok(0x0889F2D8u) && aot_mem.aot_load32(0x0889F2D8u) == 0x0A2D6555u && (d012_hook_trace(0x0889F2D8u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) { aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(4), ctx.gpr[31]); ctx.pc = 0x08B59554u; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[16]);
     goto L_0889F2DC;
 L_0889F2DC:

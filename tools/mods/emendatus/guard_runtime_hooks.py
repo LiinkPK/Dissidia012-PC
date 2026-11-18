@@ -18,7 +18,7 @@ SKIP = {0x088470DC, 0x088470E0, 0x088470E4, 0x088470E8, 0x088470EC, 0x088470F0, 
 
 def guard_for(address, word):
     # the hook is live exactly when the plugin has written it into the game's memory
-    return "(d012_hook_ok(0x%08Xu) && aot_mem.aot_load32(0x%08Xu) == 0x%08Xu && (d012_hook_trace(0x%08Xu), true))" % (address, address, word, address)
+    return "(d012_hook_ok(0x%08Xu) && aot_mem.aot_load32(0x%08Xu) == 0x%08Xu && (d012_hook_trace(0x%08Xu, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true))" % (address, address, word, address)
 
 
 def load_patches():
@@ -39,7 +39,9 @@ def main():
             units[p] = f.read()
     done = 0
     changed = set()
-    for address, orig, new in load_patches():
+    patches = load_patches()
+    patched_addresses = {address for address, _, _ in patches}
+    for address, orig, new in patches:
         label = "L_%08X:\n" % address
         hits = [p for p, t in units.items() if label in t]
         if len(hits) != 1:
@@ -57,7 +59,8 @@ def main():
             block = text[start:end]
             original_target = (orig & 0x03FFFFFF) << 2
             new_target = (new & 0x03FFFFFF) << 2
-            direct = re.search(r"if \((rt\.invoke_chained_direct<[^>]*>\(ctx, &aot_mem\))", block)
+            # only the call to this jal's own target counts: a later call in the same block is another jal
+            direct = re.search(r"if \((rt\.invoke_chained_direct<[^>]*0x%08Xu>\(ctx, &aot_mem\))" % original_target, block)
             plain = "ctx.pc = 0x%08Xu;" % original_target
             if direct:
                 call = direct.group(1)
@@ -74,8 +77,25 @@ def main():
                 continue
             text = text[:start] + swapped + text[end:]
         elif new >> 26 in (2, 3):
-            # an instruction replaced by a jump: take the jump at once when the block is there
-            hook = "    if %s { ctx.pc = 0x%08Xu; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }\n" % (guard, (new & 0x03FFFFFF) << 2)
+            # an instruction replaced by a jump: take the jump when the block is there. The instruction after the jump is
+            # its delay slot and still runs first, so its statements (as the corpus has them) go in front of the jump;
+            # a delay slot the mod made a nop needs nothing.
+            delay = ""
+            if address + 4 not in patched_addresses:
+                slot_label = "L_%08X:" % (address + 4)
+                for other in units.values():
+                    at = other.find(slot_label)
+                    if at < 0:
+                        continue
+                    body = other[at + len(slot_label):]
+                    lines = []
+                    for line in body.splitlines(True)[1:]:
+                        if line.lstrip().startswith("goto L_"):
+                            break
+                        lines.append(line.strip())
+                    delay = " ".join(l for l in lines if l and not l.startswith("//"))
+                    break
+            hook = "    if %s { %s ctx.pc = 0x%08Xu; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }\n" % (guard, delay, (new & 0x03FFFFFF) << 2)
             text = text[:start + len(label)] + hook + text[start + len(label):]
         else:
             continue

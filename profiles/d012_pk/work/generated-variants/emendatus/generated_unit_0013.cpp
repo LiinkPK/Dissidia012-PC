@@ -20,9 +20,10 @@ static inline bool d012_hook_ok(std::uint32_t a) {
     }
     return !off && a >= lo && a <= hi;
 }
-static inline void d012_hook_trace(std::uint32_t a) {
+static inline void d012_hook_trace(std::uint32_t a, std::uint32_t r4, std::uint32_t r5, std::uint32_t r6) {
     static int total = 0;
-    if (total < 200) { ++total; std::fprintf(stderr, "[hook] %08X\n", a); }
+    static const bool on = std::getenv("D012_HOOK_TRACE") != nullptr;
+    if (on && total < 100000) { ++total; { static std::FILE *tf = std::fopen("d012_trace.log", "a"); if (tf) { std::fprintf(tf, "[hook] %08X a0=%08X a1=%08X a2=%08X\n", a, r4, r5, r6); std::fflush(tf); } } }
 }
 #include <limits>
 
@@ -6372,7 +6373,7 @@ L_08838918:
 L_0883891C:
     ctx.gpr[31] = (0x08838924u);
     ctx.gpr[7] = (ctx.gpr[19] | 0u);
-    if (d012_hook_ok(0x0883891Cu) && aot_mem.aot_load32(0x0883891Cu) == 0x0EFFA878u && (d012_hook_trace(0x0883891Cu), true)) { ctx.pc = 0x0BFEA1E0u; if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08838924u) goto L_08838924; return; }
+    if (d012_hook_ok(0x0883891Cu) && aot_mem.aot_load32(0x0883891Cu) == 0x0EFFA878u && (d012_hook_trace(0x0883891Cu, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) { ctx.pc = 0x0BFEA1E0u; if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08838924u) goto L_08838924; return; }
     goto L_088394B8;
 L_08838920:
     ctx.gpr[7] = (ctx.gpr[19] | 0u);
@@ -6458,7 +6459,7 @@ L_0883897C:
 L_08838980:
     ctx.gpr[31] = (0x08838988u);
     ctx.gpr[7] = (ctx.gpr[9] | 0u);
-    if (d012_hook_ok(0x08838980u) && aot_mem.aot_load32(0x08838980u) == 0x0EFFA878u && (d012_hook_trace(0x08838980u), true)) { ctx.pc = 0x0BFEA1E0u; if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08838988u) goto L_08838988; return; }
+    if (d012_hook_ok(0x08838980u) && aot_mem.aot_load32(0x08838980u) == 0x0EFFA878u && (d012_hook_trace(0x08838980u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) { ctx.pc = 0x0BFEA1E0u; if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08838988u) goto L_08838988; return; }
     goto L_088394B8;
 L_08838984:
     ctx.gpr[7] = (ctx.gpr[9] | 0u);

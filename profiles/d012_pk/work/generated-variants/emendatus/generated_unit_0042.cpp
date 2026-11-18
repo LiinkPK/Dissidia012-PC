@@ -20,9 +20,10 @@ static inline bool d012_hook_ok(std::uint32_t a) {
     }
     return !off && a >= lo && a <= hi;
 }
-static inline void d012_hook_trace(std::uint32_t a) {
+static inline void d012_hook_trace(std::uint32_t a, std::uint32_t r4, std::uint32_t r5, std::uint32_t r6) {
     static int total = 0;
-    if (total < 200) { ++total; std::fprintf(stderr, "[hook] %08X\n", a); }
+    static const bool on = std::getenv("D012_HOOK_TRACE") != nullptr;
+    if (on && total < 100000) { ++total; { static std::FILE *tf = std::fopen("d012_trace.log", "a"); if (tf) { std::fprintf(tf, "[hook] %08X a0=%08X a1=%08X a2=%08X\n", a, r4, r5, r6); std::fflush(tf); } } }
 }
 #include <limits>
 
@@ -4455,7 +4456,7 @@ L_088AC0FC:
 L_088AC100:
     ctx.gpr[31] = (0x088AC108u);
     ctx.gpr[4] = (ctx.gpr[16] + static_cast<std::uint32_t>(480));
-    ctx.pc = (d012_hook_ok(0x088AC100u) && aot_mem.aot_load32(0x088AC100u) == 0x0EAEF980u && (d012_hook_trace(0x088AC100u), true)) ? 0x0ABBE600u : 0x089C5858u;
+    ctx.pc = (d012_hook_ok(0x088AC100u) && aot_mem.aot_load32(0x088AC100u) == 0x0EAEF980u && (d012_hook_trace(0x088AC100u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? 0x0ABBE600u : 0x089C5858u;
     return;
 L_088AC104:
     ctx.gpr[4] = (ctx.gpr[16] + static_cast<std::uint32_t>(480));
@@ -8481,7 +8482,7 @@ L_088AD194:
 L_088AD198:
     ctx.gpr[31] = (0x088AD1A0u);
     // nop
-    ctx.pc = (d012_hook_ok(0x088AD198u) && aot_mem.aot_load32(0x088AD198u) == 0x0EAEF988u && (d012_hook_trace(0x088AD198u), true)) ? 0x0ABBE620u : 0x089C5878u;
+    ctx.pc = (d012_hook_ok(0x088AD198u) && aot_mem.aot_load32(0x088AD198u) == 0x0EAEF988u && (d012_hook_trace(0x088AD198u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? 0x0ABBE620u : 0x089C5878u;
     return;
 L_088AD19C:
     // nop
@@ -12910,7 +12911,7 @@ L_088AE4C0:
 L_088AE4C4:
     ctx.gpr[31] = (0x088AE4CCu);
     ctx.gpr[4] = (ctx.gpr[19] | 0u);
-    ctx.pc = (d012_hook_ok(0x088AE4C4u) && aot_mem.aot_load32(0x088AE4C4u) == 0x0EAEF980u && (d012_hook_trace(0x088AE4C4u), true)) ? 0x0ABBE600u : 0x089C5858u;
+    ctx.pc = (d012_hook_ok(0x088AE4C4u) && aot_mem.aot_load32(0x088AE4C4u) == 0x0EAEF980u && (d012_hook_trace(0x088AE4C4u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? 0x0ABBE600u : 0x089C5858u;
     return;
 L_088AE4C8:
     ctx.gpr[4] = (ctx.gpr[19] | 0u);
@@ -14537,7 +14538,7 @@ L_088AEAF0:
 L_088AEAF4:
     ctx.gpr[31] = (0x088AEAFCu);
     // nop
-    ctx.pc = (d012_hook_ok(0x088AEAF4u) && aot_mem.aot_load32(0x088AEAF4u) == 0x0EAEF988u && (d012_hook_trace(0x088AEAF4u), true)) ? 0x0ABBE620u : 0x089C5878u;
+    ctx.pc = (d012_hook_ok(0x088AEAF4u) && aot_mem.aot_load32(0x088AEAF4u) == 0x0EAEF988u && (d012_hook_trace(0x088AEAF4u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? 0x0ABBE620u : 0x089C5878u;
     return;
 L_088AEAF8:
     // nop
@@ -16171,7 +16172,7 @@ L_088AF1EC:
 L_088AF1F0:
     ctx.gpr[31] = (0x088AF1F8u);
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(2020));
-    ctx.pc = (d012_hook_ok(0x088AF1F0u) && aot_mem.aot_load32(0x088AF1F0u) == 0x0EAEF980u && (d012_hook_trace(0x088AF1F0u), true)) ? 0x0ABBE600u : 0x089C5858u;
+    ctx.pc = (d012_hook_ok(0x088AF1F0u) && aot_mem.aot_load32(0x088AF1F0u) == 0x0EAEF980u && (d012_hook_trace(0x088AF1F0u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? 0x0ABBE600u : 0x089C5858u;
     return;
 L_088AF1F4:
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(2020));
@@ -17943,7 +17944,7 @@ L_088AF960:
 L_088AF964:
     ctx.gpr[31] = (0x088AF96Cu);
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(2020));
-    ctx.pc = (d012_hook_ok(0x088AF964u) && aot_mem.aot_load32(0x088AF964u) == 0x0EAEF980u && (d012_hook_trace(0x088AF964u), true)) ? 0x0ABBE600u : 0x089C5858u;
+    ctx.pc = (d012_hook_ok(0x088AF964u) && aot_mem.aot_load32(0x088AF964u) == 0x0EAEF980u && (d012_hook_trace(0x088AF964u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? 0x0ABBE600u : 0x089C5858u;
     return;
 L_088AF968:
     ctx.gpr[4] = (ctx.gpr[4] + static_cast<std::uint32_t>(2020));
@@ -18143,7 +18144,7 @@ L_088AFA18:
 L_088AFA1C:
     ctx.gpr[31] = (0x088AFA24u);
     // nop
-    ctx.pc = (d012_hook_ok(0x088AFA1Cu) && aot_mem.aot_load32(0x088AFA1Cu) == 0x0EAEF988u && (d012_hook_trace(0x088AFA1Cu), true)) ? 0x0ABBE620u : 0x089C5878u;
+    ctx.pc = (d012_hook_ok(0x088AFA1Cu) && aot_mem.aot_load32(0x088AFA1Cu) == 0x0EAEF988u && (d012_hook_trace(0x088AFA1Cu, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? 0x0ABBE620u : 0x089C5878u;
     return;
 L_088AFA20:
     // nop

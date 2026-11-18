@@ -10674,10 +10674,10 @@ L_0ABBE5FC:
     // nop
     goto L_0ABBE600;
 L_0ABBE600:
-    // nop
+    ctx.gpr[25] = (2747u << 16u);
     goto L_0ABBE604;
 L_0ABBE604:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 50944u);
     goto L_0ABBE608;
 L_0ABBE608:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(1656));
@@ -10702,10 +10702,10 @@ L_0ABBE61C:
     // nop
     goto L_0ABBE620;
 L_0ABBE620:
-    // nop
+    ctx.gpr[25] = (2747u << 16u);
     goto L_0ABBE624;
 L_0ABBE624:
-    // nop
+    ctx.gpr[25] = (ctx.gpr[25] | 50944u);
     goto L_0ABBE628;
 L_0ABBE628:
     ctx.gpr[24] = (ctx.gpr[25] + static_cast<std::uint32_t>(1844));
