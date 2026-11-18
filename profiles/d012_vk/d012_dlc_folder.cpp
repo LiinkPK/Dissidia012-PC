@@ -268,19 +268,8 @@ fs::path default_dlc_folder() {
 }
 
 void open_browser() {
-#if defined(PORTABLEKIT_ANDROID_APP)
-    // Android's own folder picker: the app has no access to arbitrary paths, only to what the player picks. The picked folder is
-    // kept as a document (its access is made persistent by GameActivity), and the game reads the DLC from it as it asks for it.
-    if (const auto tree = portablekit::android::pick_folder()) {
-        const std::string root = portablekit::android::tree_root(*tree);
-        if (!root.empty()) {
-            g_found = describe(root);
-            save_setting(root);
-            std::cout << "[dlc] DLC is read from the folder chosen in Android's picker (" << g_found << ")\n";
-        }
-    }
-    return;
-#endif
+    // On Android too: with all files access (asked for in the browser itself) any folder is a plain path, read where it is. A
+    // folder chosen earlier in Android's picker (a content:// document) still works.
     ui::FileBrowser::Options options;
     options.extensions = {};
     options.filter_name = "folders";
