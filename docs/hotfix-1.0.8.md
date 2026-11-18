@@ -4,9 +4,10 @@ Written from a code review. Nothing here has been built or run yet; "Status" say
 
 ## Changelog (draft)
 
-- The Emendatus Mod ships by default in the Windows, Linux and macOS packages (`-WithoutEmendatus` for Windows, `WITHOUT_EMENDATUS=1` for the Linux and macOS scripts leave it out). The Linux and macOS scripts stop with an error if the corpus or `release/mods/emendatus_assets.bin` is missing.
+- The Emendatus Mod ships by default in the Windows, Linux and macOS packages (`-WithoutEmendatus` for Windows, `WITHOUT_EMENDATUS=1` for the Linux and macOS scripts leave it out). The Linux and macOS scripts warn if the corpus or `release/mods/emendatus_assets.bin` is missing (the file is git-ignored, so a CI checkout never has it); `STRICT_EMENDATUS=1` makes that an error.
 - Android: the APK already carries every overlay library, so the mod's code ships; the 338 MB of new data is looked for in `mods/` of the app's data folder when it is not beside the program.
 - Memory expansion (Gojo's heap edits) for the stock game too, not only with the Emendatus Mod: a new "expanded" edition. It needs its corpus generated and built once (below); until then the stock executable runs as before.
+- Multiplayer: the Emendatus Mod and the stock game never play each other (the product code carries an edition mark; the Join list hides the other edition). Patch `0111` and `d012_profile.cpp`. Untested.
 - Fixed "The update failed: ... d012_update_progress.txt is being used by another process"; "Try again" now starts clean.
 - Android: in-app update. The release is read and the APK downloaded in Java and handed to Android's installer (Install button; the download page is the fallback if it fails). Untested.
 - Android: System > DLC uses Android's own folder picker and reads the DLC from the picked folder through the system (the old in-app browser could not see the player's folders on Android 11 and later). Untested.

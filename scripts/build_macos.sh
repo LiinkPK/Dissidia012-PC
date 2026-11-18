@@ -96,8 +96,16 @@ if [ "${WITHOUT_EMENDATUS:-0}" != 1 ]; then
   for f in "$B1"/corpora/*; do [ -f "$f" ] && join "corpora/$(basename "$f")" "$REL/corpora/$(basename "$f")"; done
   cp -a "$B1"/mods/. "$REL/mods/" 2>/dev/null || true
   [ -d "$ROOT/release/mods" ] && cp -a "$ROOT/release/mods/." "$REL/mods/"
-  [ -f "$REL/mods/emendatus_assets.bin" ] || { echo "ERROR: release/mods/emendatus_assets.bin is missing (WITHOUT_EMENDATUS=1 builds an app without the Emendatus Mod)"; exit 1; }
-  [ -n "$(ls -A "$REL/corpora" 2>/dev/null)" ] || { echo "ERROR: no edition corpus in $B1/corpora, so the Emendatus Mod cannot run (WITHOUT_EMENDATUS=1 leaves it out)"; exit 1; }
+  # The 338 MB of new data is not in the repository (a CI checkout does not have it): an app without it still runs, and the mod stays
+  # off until the file is put in mods/. STRICT_EMENDATUS=1 makes a missing file or corpus an error.
+  if [ ! -f "$REL/mods/emendatus_assets.bin" ]; then
+    echo "WARNING: release/mods/emendatus_assets.bin is missing: the app has no Emendatus data (the mod cannot run until it is put in mods/)"
+    [ "${STRICT_EMENDATUS:-0}" = 1 ] && exit 1
+  fi
+  if [ -z "$(ls -A "$REL/corpora" 2>/dev/null)" ]; then
+    echo "WARNING: no edition corpus in $B1/corpora: the Emendatus Mod cannot run in this app"
+    [ "${STRICT_EMENDATUS:-0}" = 1 ] && exit 1
+  fi
 else
   rm -f "$REL"/overlays/*ovl089DD4C0_battle_85688873* "$REL"/overlays/*ovl089DD4C0_menu_56F41D05* "$REL"/overlays/*ovl0A601000_suppreacc_* "$REL"/overlays/*ovl0ABBC700_plugin_* "$REL"/overlays/*ovl0BFE8000_block2_*
 fi

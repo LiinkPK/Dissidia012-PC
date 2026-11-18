@@ -21,6 +21,8 @@
 #include <span>
 #include <string_view>
 
+bool d012_emendatus_on();  // d012_vk/d012_emendatus.cpp: the Emendatus Mod is running
+
 namespace d012_braviest_turning {
 void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_vk/d012_braviest_turning.cpp
 }
@@ -133,6 +135,10 @@ GameProfile build(const Release &r) {
         .save_folders = r.saves,
 
         .adhoc_product_code = r.disc_id,
+        // The Emendatus Mod changes the game's data, so it only plays the Emendatus Mod and the stock game (with or without the
+        // memory expansion, which changes no gameplay) only plays the stock game: the product code carries the mark.
+        .adhoc_edition_mark = 'E',
+        .adhoc_edition_active = &::d012_emendatus_on,
 
         // The buttons a PSP lacks, which the battle shortcuts use (L3 EX, L2 dodge, R2 dash, R3 recentres the camera;
         // d012_camera.cpp).
