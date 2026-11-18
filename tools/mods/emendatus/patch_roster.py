@@ -43,6 +43,10 @@ def apply(corpus):
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
         "        { static bool traced = false; if (!traced) { traced = true; std::fprintf(stderr, \"[roster-mod] position 33 -> slot 16\\n\"); } }\n"
         "    }\n"
+        "    if (!g_d012_grid_party && (static_cast<std::int32_t>(ctx.gpr[17]) == -2 || ctx.gpr[17] == 32u)) {  // the Random cell (-2) and Original Quest's Free cell (32): the last place of the second row (slot 33), whatever the number of fighters before it\n"
+        "        ctx.gpr[5] = 33u;\n"
+        "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
+        "    }\n"
         "    ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);", "slot of position 33 in unit 0040")
     unit40.write_text(with_cstdio(text), encoding="utf-8", newline="\n")
 

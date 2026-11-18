@@ -197,7 +197,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -la packages
-          # The app downloads the Emendatus data from the data-pack release (emendatus_assets.bin as a file of its own): it is taken out of data.zip and put there.
+          # The Android app downloads the Emendatus files one by one from the emendatus-data release: they are taken out of data.zip and put there (data-pack is left as it is).
           curl -fL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/data.zip" "https://github.com/$GITHUB_REPOSITORY/releases/download/data-pack/data.zip"
           unzip -q -o "$RUNNER_TEMP/data.zip" "mods/*" -d "$RUNNER_TEMP/em"
           rm -f "$RUNNER_TEMP/data.zip"
@@ -206,4 +206,5 @@ jobs:
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" \
               --notes "Draft made by the build. Add the Windows zip, write the notes and publish."
           gh release upload "$TAG" packages/* --repo "$GITHUB_REPOSITORY" --clobber
-          gh release upload data-pack "$RUNNER_TEMP"/em/mods/*  --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view emendatus-data --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create emendatus-data --repo "$GITHUB_REPOSITORY" --title "Emendatus data" --notes "The Emendatus Mod files, one by one, for the Android app to download. data.zip in the data-pack release is unchanged."
+          gh release upload emendatus-data "$RUNNER_TEMP"/em/mods/* --repo "$GITHUB_REPOSITORY" --clobber

@@ -490,6 +490,12 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         // start of the list, and counting them put its first cell in the sixth column (the 11 + 22 shape).
         const std::uint8_t flags = g_ld8(g, layout + 0x14u);
         if ((flags & 1u) == 0u || (flags & 0x2Cu) != 0u) continue;
+        // The Party roster's first five cell layouts have no sprite (they are at (-1, -1) in the trace): they are not cells of the grid,
+        // and counting them put every real cell five places late and her cell five places off.
+        {
+            const std::uint32_t first_sprite = g_ld32(g, layout);
+            if (first_sprite == 0u || !in_guest(g, first_sprite, 0x40u)) continue;
+        }
         if (trace_roster) {
             const std::uint32_t cell_sprite = g_ld32(g, layout);
             const bool has_sprite = cell_sprite != 0u && in_guest(g, cell_sprite, 0x40u);
@@ -533,6 +539,28 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
     if (trace_roster && roster_trace != g_last_roster_trace) {  // only when the grid changes
         g_last_roster_trace = roster_trace;
         std::fprintf(stderr, "[roster] rank:(game x,y)%s\n", roster_trace.c_str());
+        // Which character each cell is: the select table's character ids in row order, and the list of characters the screen builds
+        // its cells from (the unlocked ones; 8 bytes each, at +32 of the select screen object, 0x08D4E440 in the runs seen). The cells
+        // are made from that list, so the r-th cell of the grid is the r-th list entry's character once the table order is applied.
+        const bool on = d012_emendatus_on();
+        const std::uint32_t table = on ? 0x0BFEB200u : 0x08A864D0u;
+        std::string ids = "[roster-ids] mod " + std::string(on ? "on" : "off") + ", table ids by row:";
+        char word[24];
+        for (unsigned r = 0; r < (on ? 34u : 33u); ++r) {
+            std::snprintf(word, sizeof word, " %02X", static_cast<unsigned>(g_ld16s(g, table + r * 12u + 8u)) & 0xFFFFu);
+            ids += word;
+        }
+        constexpr std::uint32_t kScreen = 0x08D4E440u;
+        const std::uint32_t list = in_guest(g, kScreen, 0x40u) ? g_ld32(g, kScreen + 32u) : 0u;
+        ids += "; screen list:";
+        for (unsigned i = 0; list != 0u && in_guest(g, list, 0x10u) && i < 40u; ++i) {
+            const std::uint32_t id = g_ld32(g, list + i * 8u);
+            if (id == 0u || id > 0x40u) break;
+            std::snprintf(word, sizeof word, " %02X", id);
+            ids += word;
+        }
+        ids += "; cells drawn " + std::to_string(position - trailing_hidden) + " of " + std::to_string(position);
+        std::fprintf(stderr, "%s\n", ids.c_str());
     }
     // Placement of two cells, decided here from the game's own cells before anything draws (the renderer follows). The last cell layouts
     // do not draw in the Quick Battle select (their flags are those of the hover state), so the visible cells are fewer there:
@@ -546,7 +574,12 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         const bool mod = d012_emendatus_on();
         const bool cpu_select = mod ? visible == 34u : visible == 33u;
         // Customization has no Random cell (32 visible cells with the mod): she is the last one there.
-        if (mod && visible == 32u) g_d012_roster_extra_rank = 31;
+        // Original Quest (mode 2) has the CPU select's order (Chaos after Feral Chaos, read from the table the overlay put in order) and no
+        // cell of hers at all: its 33 visible cells are the 32 fighters and the "Free" cell, which stays where the game puts it (the end
+        // of the second row). Moving one to the 17th place put "Free" there while the cursor still went to the end of the row.
+        const bool cpu_order = mod && g_ld16s(g, 0x0BFEB200u + 29u * 12u + 8u) == 0x17;
+        if (mod && cpu_order && visible == 33u) g_d012_roster_extra_rank = -1;
+        else if (mod && visible == 32u) g_d012_roster_extra_rank = 31;
         else if (mod && (visible == 33u || visible == 34u)) g_d012_roster_extra_rank = static_cast<int>(visible) - 2;
         (void)cpu_select;  // Chaos's place after Feral Chaos is in the grid code's order table now (the cursor follows it)
     }
@@ -575,7 +608,10 @@ void order_roster_table(Guest *g) {
         if (id < 1 || id > 0x20) return;
         if (id >= 32) seen_mask_hi |= 1u << (id - 32);
     }
-    if (rows[0][4] == order[0] && rows[31][4] == order[31]) return;  // already in the new order
+    // Already in the new order: the menu overlay puts the table in order itself when a select screen opens, and its end differs by screen
+    // (CPU select: Chaos after Feral Chaos; the others: Chaos last, where the game hides it), so only the two rows' starts are compared.
+    // Rewriting the table here made it disagree with the cells the game had already built from it.
+    if (rows[0][4] == order[0] && rows[16][4] == order[16]) return;
     if (seen_mask_hi != 1u) return;                                    // 0x20 once
     std::int16_t sorted[32][6];
     for (unsigned r = 0; r < 32u; ++r) {

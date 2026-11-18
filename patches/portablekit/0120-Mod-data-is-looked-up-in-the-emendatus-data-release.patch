@@ -1,21 +1,21 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Wed, 18 Nov 2026 16:00:00 +0100
-Subject: [PATCH] Mod data is looked up in the data-pack release
+Subject: [PATCH] Mod data is looked up in the emendatus-data release
 
-latest_asset_url reads the data-pack release, which is always published, instead of the latest release, which is a draft until published.
+latest_asset_url reads the emendatus-data release, which is always published, instead of the latest release, which is a draft until published.
 ---
 
 diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
-index 349d99c..d7231ee 100644
+index 349d99c..44093c8 100644
 --- a/host/ui/updater.cpp
 +++ b/host/ui/updater.cpp
 @@ -48,6 +48,8 @@ namespace portablekit::ui::updater {
  namespace {
  
  constexpr const char *kLatestApi = "https://api.github.com/repos/LiinkPK/Dissidia012-PC/releases/latest";
-+// The mod data (emendatus_assets.bin) is a file of the data-pack release, which is always published: not of the latest release, which is a draft until the player-facing notes are written.
-+constexpr const char *kDataPackApi = "https://api.github.com/repos/LiinkPK/Dissidia012-PC/releases/tags/data-pack";
++// The mod data (the files of the mods folder, one by one: the app cannot open a zip) is in the emendatus-data release, which is always published: not in the latest release, which is a draft until published.
++constexpr const char *kDataPackApi = "https://api.github.com/repos/LiinkPK/Dissidia012-PC/releases/tags/emendatus-data";
  
  std::string kLocalVersion() {
      const char *version = portablekit::game().release_version;
