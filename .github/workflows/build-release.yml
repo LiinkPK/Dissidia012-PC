@@ -73,7 +73,7 @@ jobs:
   macos:
     needs: check
     if: ${{ !inputs.skip_macos }}
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
