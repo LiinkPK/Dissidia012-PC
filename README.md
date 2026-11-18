@@ -26,8 +26,16 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 >
 <hr>
 
->[!IMPORTANT]
->**Just want to play?** Download the zip from the [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases/latest) page, run the `requirements` script, put your ISO in `game\` and start `d012_native.exe` (or simply `d012_native` on Linux). The rest of this page is for building from source.
+## Download
+
+| Platform | Download | Notes |
+| --- | --- | --- |
+| Windows 10 / 11 (64-bit) | [d012_native-windows.zip](https://github.com/LiinkPK/Dissidia012-PC/releases/latest/download/d012_native-windows.zip) | Run the `requirements` script once, put your ISO in `game\`, start `d012_native.exe` |
+| Linux | [d012_native-linux.tar.gz](https://github.com/LiinkPK/Dissidia012-PC/releases/latest/download/d012_native-linux.tar.gz) | Put your ISO in `game/`, start `d012_native` |
+| macOS (Apple Silicon and Intel) | [d012_native-macos.tar.gz](https://github.com/LiinkPK/Dissidia012-PC/releases/latest/download/d012_native-macos.tar.gz) | Universal app |
+| Android 10+ | [d012_native-android.apk](https://github.com/LiinkPK/Dissidia012-PC/releases/latest/download/d012_native-android.apk) | The Emendatus data is downloaded once inside the app |
+
+All releases: [Releases](https://github.com/LiinkPK/Dissidia012-PC/releases). You need your own ISO. The rest of this page is for building from source.
 
 ## Repository layout
 
