@@ -4,27 +4,6 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-static inline bool d012_hook_ok(std::uint32_t a) {
-    // D012_NO_HOOKS=1 turns every Emendatus hook off; D012_HOOK_RANGE=lo-hi (hex) keeps only the hooks whose site is in that range.
-    static bool init = false, off = false;
-    static std::uint32_t lo = 0u, hi = 0xFFFFFFFFu;
-    if (!init) {
-        init = true;
-        off = std::getenv("D012_NO_HOOKS") != nullptr;
-        if (const char *r = std::getenv("D012_HOOK_RANGE")) {
-            unsigned long l = 0, h = 0;
-            if (std::sscanf(r, "%lx-%lx", &l, &h) == 2) { lo = static_cast<std::uint32_t>(l); hi = static_cast<std::uint32_t>(h); }
-        }
-    }
-    return !off && a >= lo && a <= hi;
-}
-static inline void d012_hook_trace(std::uint32_t a, std::uint32_t r4, std::uint32_t r5, std::uint32_t r6) {
-    static int total = 0;
-    static const bool on = std::getenv("D012_HOOK_TRACE") != nullptr;
-    if (on && total < 100000) { ++total; { static std::FILE *tf = std::fopen("d012_trace.log", "a"); if (tf) { std::fprintf(tf, "[hook] %08X a0=%08X a1=%08X a2=%08X\n", a, r4, r5, r6); std::fflush(tf); } } }
-}
 #include <limits>
 
 namespace psprecomp {
@@ -8711,7 +8690,6 @@ L_088452FC:
 L_08845300:
     ctx.gpr[31] = (0x08845308u);
     ctx.gpr[7] = (ctx.gpr[19] | 0u);
-    if (d012_hook_ok(0x08845300u) && aot_mem.aot_load32(0x08845300u) == 0x0EFFA820u && (d012_hook_trace(0x08845300u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) { ctx.pc = 0x0BFEA080u; if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08845308u) goto L_08845308; return; }
     goto L_088450A8;
 L_08845304:
     ctx.gpr[7] = (ctx.gpr[19] | 0u);
@@ -10464,7 +10442,7 @@ L_08845A18:
 L_08845A1C:
     ctx.gpr[31] = (0x08845A24u);
     ctx.gpr[4] = (ctx.gpr[21] | 0u);
-    if (((d012_hook_ok(0x08845A1Cu) && aot_mem.aot_load32(0x08845A1Cu) == 0x0EFFA800u && (d012_hook_trace(0x08845A1Cu, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA000u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0022_entry, 22u, 576u, 0x0885C93Cu>(ctx, &aot_mem)) && ctx.pc == 0x08845A24u) goto L_08845A24;
+    if (rt.invoke_chained_direct<&recomp_unit_0022_entry, 22u, 576u, 0x0885C93Cu>(ctx, &aot_mem) && ctx.pc == 0x08845A24u) goto L_08845A24;
     return;
 L_08845A20:
     ctx.gpr[4] = (ctx.gpr[21] | 0u);
@@ -10559,7 +10537,7 @@ L_08845A7C:
 L_08845A80:
     ctx.gpr[31] = (0x08845A88u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845A80u) && aot_mem.aot_load32(0x08845A80u) == 0x0EFFA808u && (d012_hook_trace(0x08845A80u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845A88u) goto L_08845A88;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845A88u) goto L_08845A88;
     return;
 L_08845A84:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -10645,7 +10623,7 @@ L_08845AD4:
 L_08845AD8:
     ctx.gpr[31] = (0x08845AE0u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845AD8u) && aot_mem.aot_load32(0x08845AD8u) == 0x0EFFA808u && (d012_hook_trace(0x08845AD8u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845AE0u) goto L_08845AE0;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845AE0u) goto L_08845AE0;
     return;
 L_08845ADC:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -10731,7 +10709,7 @@ L_08845B2C:
 L_08845B30:
     ctx.gpr[31] = (0x08845B38u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845B30u) && aot_mem.aot_load32(0x08845B30u) == 0x0EFFA808u && (d012_hook_trace(0x08845B30u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845B38u) goto L_08845B38;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845B38u) goto L_08845B38;
     return;
 L_08845B34:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -10817,7 +10795,7 @@ L_08845B84:
 L_08845B88:
     ctx.gpr[31] = (0x08845B90u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845B88u) && aot_mem.aot_load32(0x08845B88u) == 0x0EFFA808u && (d012_hook_trace(0x08845B88u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845B90u) goto L_08845B90;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845B90u) goto L_08845B90;
     return;
 L_08845B8C:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -10899,7 +10877,7 @@ L_08845BDC:
 L_08845BE0:
     ctx.gpr[31] = (0x08845BE8u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845BE0u) && aot_mem.aot_load32(0x08845BE0u) == 0x0EFFA808u && (d012_hook_trace(0x08845BE0u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845BE8u) goto L_08845BE8;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845BE8u) goto L_08845BE8;
     return;
 L_08845BE4:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -11258,7 +11236,7 @@ L_08845D84:
 L_08845D88:
     ctx.gpr[31] = (0x08845D90u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845D88u) && aot_mem.aot_load32(0x08845D88u) == 0x0EFFA808u && (d012_hook_trace(0x08845D88u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845D90u) goto L_08845D90;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845D90u) goto L_08845D90;
     return;
 L_08845D8C:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -11378,7 +11356,7 @@ L_08845E0C:
 L_08845E10:
     ctx.gpr[31] = (0x08845E18u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845E10u) && aot_mem.aot_load32(0x08845E10u) == 0x0EFFA808u && (d012_hook_trace(0x08845E10u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845E18u) goto L_08845E18;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845E18u) goto L_08845E18;
     return;
 L_08845E14:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -11496,7 +11474,7 @@ L_08845E94:
 L_08845E98:
     ctx.gpr[31] = (0x08845EA0u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845E98u) && aot_mem.aot_load32(0x08845E98u) == 0x0EFFA808u && (d012_hook_trace(0x08845E98u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845EA0u) goto L_08845EA0;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845EA0u) goto L_08845EA0;
     return;
 L_08845E9C:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -11614,7 +11592,7 @@ L_08845F1C:
 L_08845F20:
     ctx.gpr[31] = (0x08845F28u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845F20u) && aot_mem.aot_load32(0x08845F20u) == 0x0EFFA808u && (d012_hook_trace(0x08845F20u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845F28u) goto L_08845F28;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845F28u) goto L_08845F28;
     return;
 L_08845F24:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -11741,7 +11719,7 @@ L_08845FA8:
 L_08845FAC:
     ctx.gpr[31] = (0x08845FB4u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    if (((d012_hook_ok(0x08845FACu) && aot_mem.aot_load32(0x08845FACu) == 0x0EFFA808u && (d012_hook_trace(0x08845FACu, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08845FB4u) goto L_08845FB4;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08845FB4u) goto L_08845FB4;
     return;
 L_08845FB0:
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
@@ -11902,7 +11880,7 @@ L_08846058:
 L_0884605C:
     ctx.gpr[31] = (0x08846064u);
     ctx.gpr[4] = (ctx.gpr[23] | 0u);
-    if (((d012_hook_ok(0x0884605Cu) && aot_mem.aot_load32(0x0884605Cu) == 0x0EFFA808u && (d012_hook_trace(0x0884605Cu, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x08846064u) goto L_08846064;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x08846064u) goto L_08846064;
     return;
 L_08846060:
     ctx.gpr[4] = (ctx.gpr[23] | 0u);
@@ -12001,7 +11979,7 @@ L_088460BC:
 L_088460C0:
     ctx.gpr[31] = (0x088460C8u);
     ctx.gpr[4] = (ctx.gpr[23] | 0u);
-    if (((d012_hook_ok(0x088460C0u) && aot_mem.aot_load32(0x088460C0u) == 0x0EFFA808u && (d012_hook_trace(0x088460C0u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA020u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem)) && ctx.pc == 0x088460C8u) goto L_088460C8;
+    if (rt.invoke_chained_direct<&recomp_unit_0076_entry, 76u, 1338u, 0x08935524u>(ctx, &aot_mem) && ctx.pc == 0x088460C8u) goto L_088460C8;
     return;
 L_088460C4:
     ctx.gpr[4] = (ctx.gpr[23] | 0u);
@@ -13115,7 +13093,7 @@ L_088465E0:
 L_088465E4:
     ctx.gpr[31] = (0x088465ECu);
     ctx.gpr[6] = (ctx.gpr[2] | 0u);
-    if (((d012_hook_ok(0x088465E4u) && aot_mem.aot_load32(0x088465E4u) == 0x0EFFA810u && (d012_hook_trace(0x088465E4u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) ? (ctx.pc = 0x0BFEA040u, rt.invoke_chained_call(ctx, &aot_mem)) : rt.invoke_chained_direct<&recomp_unit_0015_entry, 15u, 3023u, 0x08842F78u>(ctx, &aot_mem)) && ctx.pc == 0x088465ECu) goto L_088465EC;
+    if (rt.invoke_chained_direct<&recomp_unit_0015_entry, 15u, 3023u, 0x08842F78u>(ctx, &aot_mem) && ctx.pc == 0x088465ECu) goto L_088465EC;
     return;
 L_088465E8:
     ctx.gpr[6] = (ctx.gpr[2] | 0u);

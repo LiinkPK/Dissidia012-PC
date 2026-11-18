@@ -14829,7 +14829,7 @@ L_08AA45A4:
 L_08AA45A8:
     ctx.gpr[31] = (0x08AA45B0u);
     ctx.gpr[7] = (ctx.gpr[6] & 65535u);
-    ctx.pc = 0x0BFE9E68u;
+    ctx.pc = 0x0BFEF8D4u;
     if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AA45B0u) goto L_08AA45B0;
     return;
 L_08AA45AC:
@@ -14904,7 +14904,7 @@ L_08AA45FC:
 L_08AA4600:
     ctx.gpr[31] = (0x08AA4608u);
     ctx.gpr[7] = (ctx.gpr[6] & 65535u);
-    ctx.pc = 0x0BFE9E88u;
+    ctx.pc = 0x0BFEF8D4u;
     if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08AA4608u) goto L_08AA4608;
     return;
 L_08AA4604:

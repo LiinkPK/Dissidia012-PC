@@ -3,7 +3,7 @@
   "emission": "single_copy_basic_blocks",
   "partitioning": "fixed_executable_address_span",
   "discovered_function_seeds": 6854,
-  "unique_emitted_instructions": 255814,
+  "unique_emitted_instructions": 255805,
   "unique_registered_block_entries": 389921,
   "translation_units": 96,
   "rewritten_translation_units": 96,

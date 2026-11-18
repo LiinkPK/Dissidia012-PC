@@ -120,7 +120,7 @@ def normalized(text):
     return HASH.sub(r"\g<1>" + "0" * 16, text)
 
 
-def merge_menu(base_dir, edited_dir, new_dir):
+def merge_menu(base_dir, edited_dir, new_dir, prefer_patched=False):
     """Puts the edits that edited_dir has over base_dir onto new_dir's units. Returns the conflicts, by unit."""
     new_hash = new_dir.name.rsplit("_", 1)[1]
     conflicts = []
@@ -134,8 +134,13 @@ def merge_menu(base_dir, edited_dir, new_dir):
             for tag, text in (("ours", edited), ("base", base), ("theirs", read(new_dir / unit.name))):
                 paths[tag] = Path(tmp) / tag
                 write(paths[tag], normalized(text))
-            result = subprocess.run(["git", "merge-file", "-p", "-L", "hand edits", "-L", "stock menu", "-L", "patched menu", str(paths["ours"]), str(paths["base"]), str(paths["theirs"])],
-                                    capture_output=True, text=True, encoding="utf-8")
+            command = ["git", "merge-file", "-p", "-L", "hand edits", "-L", "stock menu", "-L", "patched menu", str(paths["ours"]), str(paths["base"]), str(paths["theirs"])]
+            if prefer_patched:
+                command.insert(3, "--theirs")  # a hunk both sides changed takes the patched menu's code
+            clean = subprocess.run(command[:3] + command[4:] if prefer_patched else command, capture_output=True, text=True, encoding="utf-8")
+            result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+            if prefer_patched and clean.returncode:
+                print(f"{unit.name}: {clean.returncode} hunk(s) both sides changed: the patched menu's code was kept there")
         if result.returncode < 0 or result.returncode > 127:
             raise SystemExit(f"git merge-file failed on {unit.name}: {result.stderr}")
         merged = re.sub(r"(ovl[0-9A-F]{8}_[a-z]+_)0{16}", r"\g<1>" + new_hash, result.stdout)
@@ -217,6 +222,7 @@ def main():
     parser.add_argument("--executable-elf", type=Path, help="the executable as the game runs it (EBOOT.ELF of the patched disc): its hash is the one the "
                         "corpus is checked against, when --patched-dir holds images with the plugin's runtime patches baked in (apply_runtime_patches.py)")
     parser.add_argument("--battle-code-size", type=int, help="hash this many bytes of the battle overlay after its header (the older Emendatus mod\'s battle overlay shares its first 4 KB; 20416 tells them apart)")
+    parser.add_argument("--prefer-patched", action="store_true", help="where a hand edit of the stock menu and the patched menu changed the same lines, keep the patched menu's code (the hunks are reported)")
     parser.add_argument("--main-only", action="store_true", help="only make the executable's corpus again (the overlay corpora stay as they are)")
     options = parser.parse_args()
     if not options.recompiler.is_file():
@@ -283,7 +289,7 @@ def main():
         edited_menu = next((d for d in (options.work / "overlays").iterdir() if d.name.endswith("_" + stock_hash)), None)
         if edited_menu is None:
             raise SystemExit(f"the stock menu corpus ({stock_hash}) is not in {options.work / 'overlays'}")
-        conflicts = merge_menu(base_menu, edited_menu, corpus_dir(new, "menu"))
+        conflicts = merge_menu(base_menu, edited_menu, corpus_dir(new, "menu"), options.prefer_patched)
         if conflicts:
             print(f"\nStopped: {len(conflicts)} unit(s) have conflicts ({', '.join(conflicts)}). Nothing was written to {options.work}.\n"
                   f"The merged files are in {staging}; fix the <<<<<<< markers there and copy them over by hand.")

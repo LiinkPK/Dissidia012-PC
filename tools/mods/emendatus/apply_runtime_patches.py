@@ -57,7 +57,16 @@ def read_tables(assets):
         count = struct.unpack_from("<I", block, offset)[0]
         return [struct.unpack_from("<%dI" % (size // 4), block, offset + 4 + i * size) for i in range(count)]
 
-    return table(SWAP_TABLE, 12), table(RELOC_TABLE, 16)
+    # The newer plugin keeps the reloc table at block + 0x33A0 (32 entries); the older one had it at + 0x3400. Take the place where the count
+    # is small and the first entry is an address of the game.
+    def plausible(offset):
+        count = struct.unpack_from("<I", block, offset)[0]
+        return 0 < count < 256 and 0x08800000 <= struct.unpack_from("<I", block, offset + 4)[0] < 0x0A000000
+
+    reloc = next((o for o in (RELOC_TABLE, 0x33A0) if plausible(o)), None)
+    if reloc is None:
+        raise SystemExit("no reloc table found in the plugin's block (neither at +0x3400 nor at +0x33A0)")
+    return table(SWAP_TABLE, 12), table(reloc, 16)
 
 
 def relocated(orig, kind, delta):
