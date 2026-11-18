@@ -2,7 +2,7 @@
 <img width="1366" height="200" alt="GitHub Banner" src="https://github.com/user-attachments/assets/6512d139-da17-4b6a-b6fd-c5078f5600c9" />
 </p>
 
-![microsoft](https://www.readmecodegen.com/api/social-icon?name=microsoft&size=32&reverseBackground=true&showText=true&text=Windows)![apple](https://www.readmecodegen.com/api/social-icon?name=apple&size=32&reverseBackground=true&showText=true&text=macOS)![linux](https://www.readmecodegen.com/api/social-icon?name=linux&size=32&background=%23f59e0b&theme=dark&color=%23ffffff&showText=true)![android](https://www.readmecodegen.com/api/social-icon?name=android&size=32&reverseBackground=true&showText=true)
+![microsoft](https://www.readmecodegen.com/api/social-icon?name=microsoft&size=32&reverseBackground=true&showText=true&text=Windows)![linux](https://www.readmecodegen.com/api/social-icon?name=linux&size=32&background=%23f59e0b&theme=dark&color=%23ffffff&showText=true)![apple](https://www.readmecodegen.com/api/social-icon?name=apple&size=32&reverseBackground=true&showText=true&text=macOS)![android](https://www.readmecodegen.com/api/social-icon?name=android&size=32&reverseBackground=true&showText=true)
 
 
 **_Early BETA_**
