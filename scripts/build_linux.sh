@@ -143,6 +143,7 @@ tar -C "$REL" -czf "$TMP_TAR"   --exclude='game/*' --exclude='data/mods/*' --exc
 # Leave only the tar in dist/. What the player put in the empty folders (an ISO, DLC, mods, saves) is never deleted: those
 # folders are kept, with a warning.
 rm -f "$TARBALL"
+chmod -R u+rwX "$REL/data" 2>/dev/null || true
 KEPT=()
 for own in "$REL/game" "$REL/data/mods" "$REL/data/ms0/PSP/GAME" "$REL/data/ms0/PSP/SAVEDATA"; do
   [ -n "$(ls -A "$own" 2>/dev/null)" ] && KEPT+=("$own")
