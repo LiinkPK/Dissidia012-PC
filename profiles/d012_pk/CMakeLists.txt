@@ -45,7 +45,8 @@ endforeach()
 
 if(WIN32)
     # Icon of the .exe itself (Explorer, taskbar); the window icon is set at runtime
-    target_sources(d012_native PRIVATE "${D012_PROFILE_DIR}/host/d012.rc")
+    include("${D012_PROFILE_DIR}/host/d012_version_rc.cmake")
+    target_sources(d012_native PRIVATE "${D012_RC_FILE}")
     target_link_libraries(d012_native PRIVATE winmm gdi32 user32)
 endif()
 
