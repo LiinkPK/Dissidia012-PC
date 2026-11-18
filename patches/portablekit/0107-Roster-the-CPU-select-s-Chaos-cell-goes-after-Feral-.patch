@@ -1,0 +1,99 @@
+From 5af7313f516e67aeb9cfc31a65ce532fa49ea58a Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 18 Nov 2026 02:14:37 +0100
+Subject: [PATCH] Roster: the CPU select's Chaos cell goes after Feral Chaos;
+ stray frame pieces follow the frame's offset
+
+g_d012_roster_chaos_rank is set by the profile (d012_hud_layout.cpp); without
+it the profile does not link.
+---
+ host/gpu/vulkan_renderer.cpp | 44 ++++++++++++++++++++++++------------
+ 1 file changed, 29 insertions(+), 15 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 5fe1739..44998f9 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -77,6 +77,7 @@
+ float g_d012_roster_cells[40][2];
+ int g_d012_roster_count = 0;
+ int g_d012_roster_extra_rank = -1;  // draw number of the roster cell that goes to the 17th place of the first row, or -1 (set by the profile)
++int g_d012_roster_chaos_rank = -1;  // draw number of the CPU select's Chaos cell, which goes after Feral Chaos (place 29), or -1
+ 
+ namespace portablekit::gpu {
+ std::atomic<float> g_d012_model_scale{1.0f};  // the replayed 3D model's size about the screen centre,
+@@ -88,20 +89,25 @@ std::atomic<bool> g_d012_defer_3d{false};      // set by the profile while the s
+ // so they never end up in the source tree root.
+ static bool g_text_trace_active = false;  // true while the two traced frames are being drawn
+ 
+-// The Quick Battle roster: cell number p (in the order the game draws them) sits at column p of the first row up to 15, then in the
+-// second row. With the Emendatus mod's new character the game draws her cell after the 31 fighters and before Random; the profile
+-// sets g_d012_roster_extra_rank to her draw number and she goes to the 17th cell of the first row, right of Lightning, which is
+-// where the game's own navigation puts her. The cells drawn after her move up one place.
++// The Quick Battle / CPU / Labyrinth roster: cell number p (in the order the game draws them) sits at column p of the first row up to
++// 15, then in the second row. The profile (d012_hud_layout.cpp) reads the cells from the game before they draw and names two of them:
++// g_d012_roster_extra_rank, the Emendatus mod's new character, goes to the 17th cell of the first row, right of Lightning, where the
++// game's own navigation puts her; g_d012_roster_chaos_rank, the CPU select's Chaos, goes after Feral Chaos (place 29), so the second
++// row keeps the Chaos fighters together and Shantotto and Prishe after them. The cells in between move one place.
+ static void roster_grid_cell(int rank, int &row, int &col) {
+-    const int extra = g_d012_roster_extra_rank;
+-    int p = rank;
+-    if (extra >= 0) {
+-        if (rank == extra) {
+-            row = 0;
+-            col = 16;
+-            return;
+-        }
+-        if (rank > extra) p = rank - 1;
++    const int top = g_d012_roster_extra_rank;
++    if (top >= 0 && rank == top) {
++        row = 0;
++        col = 16;
++        return;
++    }
++    int p = top >= 0 && rank > top ? rank - 1 : rank;
++    int chaos = g_d012_roster_chaos_rank;
++    if (chaos >= 0) {
++        if (top >= 0 && chaos > top) --chaos;
++        constexpr int kChaosPlace = 29;
++        if (p == chaos) p = kChaosPlace;
++        else if (p >= kChaosPlace && p < chaos) ++p;
+     }
+     row = p < 16 ? 0 : 1;
+     col = p - 16 * row;
+@@ -9130,6 +9136,9 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                                 best = c;
+                             }
+                         }
++                        // The offset of the cursor frame (see the tall edges below), kept for the pieces that lie in no cell's tile.
++                        static float frame_tx = 0.0f, frame_ty = 0.0f;
++                        static bool frame_valid = false;
+                         if (best >= 0) {
+                             const float ox = impl.roster_drawn[best][0], oy = impl.roster_drawn[best][1];
+                             int row = 0, col = 0;
+@@ -9141,8 +9150,6 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                                 // The outer glow pieces lie on the line between two cells, so they cannot choose a cell
+                                 // themselves. The tall edges, inside one cell vertically, fix the frame's offset and every
+                                 // other piece of the frame takes the same offset.
+-                                static float frame_tx = 0.0f, frame_ty = 0.0f;
+-                                static bool frame_valid = false;
+                                 const bool tall_edge = y1 - y0 >= 25.0f && x1 - x0 <= 3.0f;
+                                 if (tall_edge) {
+                                     frame_tx = nx - 28.0f - ox;
+@@ -9169,6 +9176,13 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                                     impl.scratch[i].y += (tile_y - oy) - up;
+                                 }
+                             }
++                        } else if (is_frame && frame_valid && x0 < 345.0f) {
++                            // A piece of the frame in no cell's tile (the outer glow next to a moved cell): it takes the offset of
++                            // the rest of the frame instead of staying where the game drew it, which was on another cell.
++                            for (std::size_t i = first; i < first + group; ++i) {
++                                impl.scratch[i].x = 7.0f + (impl.scratch[i].x + frame_tx) * 0.65f;
++                                impl.scratch[i].y = 203.0f + (impl.scratch[i].y + frame_ty) * 0.65f;
++                            }
+                         } else if (x0 >= 345.0f) {
+                             // Not on a roster cell: the Party panel's slot frame and the hand pointing at its slots or OK
+                             // (x 345 and over in the game's coordinates) follow the panel, shrunk to 85% about (480, 151).
+-- 
+2.54.0.windows.1
+
