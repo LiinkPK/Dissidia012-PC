@@ -74,6 +74,12 @@ constexpr ProfileVariant kVariants[] = {
     {"emendatus", "Emendatus mod, with its new character",
      "832063088cf2dd3b4c064cb06a9c2d1a6c8eb74bfabfbdd0a7a79b5c0c894572",
      "832063088cf2dd3b4c064cb06a9c2d1a6c8eb74bfabfbdd0a7a79b5c0c894572"},
+    // The stock executable with Gojo's memory expansion (bigger heaps for the game's own allocator; the Emendatus mod's executable
+    // has the same edits). The port makes it from the disc's own executable when its corpus is built in (d012_expansion.cpp,
+    // profiles/d012_pk/work/generated-variants/expanded/, made by tools/mods/expansion/make_expanded_corpus.py).
+    {"expanded", "Stock executable with the memory expansion",
+     "9eac94624fb7e058973372fa914eed4a2fd27b895626da1f68d7bf7e2124cf93",
+     "9eac94624fb7e058973372fa914eed4a2fd27b895626da1f68d7bf7e2124cf93"},
 };
 
 // Frame interpolation's distances, in the game's world units. Battle's world is in metres or close to it: the
