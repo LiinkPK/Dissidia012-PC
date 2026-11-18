@@ -110,6 +110,7 @@ The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
 - Neo
 - Eskie
 - Yokai
+- ObscureFolklore
 - Henrik Rydgård ([PPSSPP](https://github.com/hrydgard/PPSSPP))
 - [TeamGDB](https://github.com/TeamGDB)
 - [BasedYuki](https://github.com/BasedYuki/the-3rd-birthday-recomp)
