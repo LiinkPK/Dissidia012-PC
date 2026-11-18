@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 18 Nov 2026 15:00:00 +0100
+Subject: [PATCH] worker_priority keeps windows.h's far and near macros out
+
+windows.h defines near and far as empty macros; the header now reaches the renderer, whose frame interpolation check has a lambda named far, so the Windows build failed with C2513.
+---
+
+diff --git a/host/worker_priority.hpp b/host/worker_priority.hpp
+index 081bd24..0f5aca5 100644
+--- a/host/worker_priority.hpp
++++ b/host/worker_priority.hpp
+@@ -12,6 +12,9 @@
+ #define WIN32_LEAN_AND_MEAN
+ #define NOMINMAX
+ #include <windows.h>
++// windows.h defines near and far as empty macros, which break any later code that names a variable "far".
++#undef near
++#undef far
+ #elif defined(__linux__) || defined(__ANDROID__)
+ #include <sys/resource.h>
+ #include <sys/syscall.h>
+-- 
+2.43.0
+
