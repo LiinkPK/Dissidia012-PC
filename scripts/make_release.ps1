@@ -89,11 +89,11 @@ $modsSrc = Join-Path $root "release\mods"
 if ($WithEmendatus -and (Test-Path $modsSrc)) {
     $modsDst = Join-Path $stage "mods"
     New-Item -ItemType Directory -Force $modsDst | Out-Null
-    # An explicit allowlist: only these files of release\mods travel, so no other mod can ship by being left in the folder.
-    foreach ($allowed in "emendatus_assets.bin") {
-        $file = Join-Path $modsSrc $allowed
-        if (Test-Path $file) { Copy-Item $file $modsDst -Force } else { throw "$allowed is not in release\mods: the Emendatus Mod ships in every package (use -WithoutEmendatus to leave it out on purpose)" }
-    }
+    # The whole release\mods folder travels, over the files the build made there; the big data file must be among them.
+    Copy-Item (Join-Path $modsSrc "*") $modsDst -Recurse -Force
+    if (-not (Test-Path (Join-Path $modsDst "emendatus_assets.bin"))) { throw "emendatus_assets.bin is not in release\mods: the Emendatus Mod ships in every package (use -WithoutEmendatus to leave it out on purpose)" }
+} elseif ($WithEmendatus) {
+    throw "release\mods is missing: the Emendatus Mod ships in every package (use -WithoutEmendatus to leave it out on purpose)"
 }
 if (-not $WithEmendatus) { Remove-Item -Recurse -Force (Join-Path $stage "corpora") -ErrorAction SilentlyContinue }
 # data\logs and data\screenshots are never packed, whichever way they got in.

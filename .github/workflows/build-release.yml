@@ -49,7 +49,7 @@ jobs:
       - name: Emendatus data (338 MB, in the data pack as mods/emendatus_assets.bin; the build fails without it)
         run: |
           mkdir -p release/mods
-          cp release/data/mods/emendatus_assets.bin release/mods/emendatus_assets.bin
+          cp -a release/data/mods/. release/mods/
           test "$(wc -c < release/mods/emendatus_assets.bin)" -eq 337965056
       - name: Newer Vulkan headers (Ubuntu 22.04's are too old; this keeps its older C library, so the build runs on more distros)
         run: |
@@ -119,7 +119,7 @@ jobs:
       - name: Emendatus data (338 MB, in the data pack as mods/emendatus_assets.bin; the build fails without it)
         run: |
           mkdir -p release/mods
-          cp release/data/mods/emendatus_assets.bin release/mods/emendatus_assets.bin
+          cp -a release/data/mods/. release/mods/
           test "$(wc -c < release/mods/emendatus_assets.bin)" -eq 337965056
       - name: "Build and package (universal, Intel and Apple Silicon)"
         run: STRICT_EMENDATUS=1 UNIVERSAL=1 bash scripts/build_macos.sh
@@ -194,11 +194,11 @@ jobs:
           ls -la packages
           # The app downloads the Emendatus data from the data-pack release (emendatus_assets.bin as a file of its own): it is taken out of data.zip and put there.
           curl -fL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/data.zip" "https://github.com/$GITHUB_REPOSITORY/releases/download/data-pack/data.zip"
-          mkdir -p "$RUNNER_TEMP/em" && unzip -j -o "$RUNNER_TEMP/data.zip" mods/emendatus_assets.bin -d "$RUNNER_TEMP/em"
+          unzip -q -o "$RUNNER_TEMP/data.zip" "mods/*" -d "$RUNNER_TEMP/em"
           rm -f "$RUNNER_TEMP/data.zip"
-          test "$(wc -c < "$RUNNER_TEMP/em/emendatus_assets.bin")" -eq 337965056
+          test "$(wc -c < "$RUNNER_TEMP/em/mods/emendatus_assets.bin")" -eq 337965056
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "$TAG" \
               --notes "Draft made by the build. Add the Windows zip, write the notes and publish."
           gh release upload "$TAG" packages/* --repo "$GITHUB_REPOSITORY" --clobber
-          gh release upload data-pack "$RUNNER_TEMP/em/emendatus_assets.bin" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload data-pack "$RUNNER_TEMP"/em/mods/*  --repo "$GITHUB_REPOSITORY" --clobber

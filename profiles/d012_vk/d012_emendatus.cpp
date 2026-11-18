@@ -767,27 +767,40 @@ void download_into(std::string folder) {
     g_done = 0;
     g_total = kEmTailSize;
     std::string error;
-    const std::string url = portablekit::ui::updater::latest_asset_url("emendatus_assets.bin", error);
-    if (url.empty()) {
-        set_phase(Phase::Failed, error);
-        return;
-    }
-    set_phase(Phase::Downloading);
-    const std::filesystem::path target = portablekit::install::path_from_utf8(folder) / "mods" / "emendatus_assets.bin";
+    // The whole mods/ folder of the data pack: the big data file and the new character's files. The small files are fetched again every
+    // time (a few MB, so a changed one is always replaced); the big one only when its size is not the expected one.
+    static const char *const kModFiles[] = {"emendatus_assets.bin", "p_sev120.objx", "D_SEV120.gmo", "D_SEV120.objx",
+                                            "P_SEV120_1P.gmo",      "P_SEV120_2P.gmo", "P_SEV120_3P.gmo"};
+    for (const char *file : kModFiles) {
+        const std::string name = file;
+        const bool big = name == "emendatus_assets.bin";
+        const std::filesystem::path target = portablekit::install::path_from_utf8(folder) / "mods" / name;
+        std::error_code ec;
+        if (big && std::filesystem::file_size(target, ec) == kEmTailSize && !ec) continue;
+        set_phase(Phase::Finding);
+        const std::string url = portablekit::ui::updater::latest_asset_url(name, error);
+        if (url.empty()) {
+            set_phase(Phase::Failed, error);
+            return;
+        }
+        set_phase(Phase::Downloading);
+        g_done = 0;
+        g_total = big ? kEmTailSize : 0;
 #if defined(PORTABLEKIT_ANDROID_APP)
-    const bool ok = portablekit::android::download_to(url, portablekit::install::path_to_utf8(target), kEmTailSize, error);
+        const bool ok = portablekit::android::download_to(url, portablekit::install::path_to_utf8(target), big ? kEmTailSize : 0u, error);
 #else
-    const bool ok = portablekit::ui::updater::download_file(
-        url, target, kEmTailSize,
-        [](std::uint64_t done, std::uint64_t total) {
-            g_done = done;
-            g_total = total;
-        },
-        error);
+        const bool ok = portablekit::ui::updater::download_file(
+            url, target, big ? kEmTailSize : 0u,
+            [](std::uint64_t done, std::uint64_t total) {
+                g_done = done;
+                g_total = total;
+            },
+            error);
 #endif
-    if (!ok) {
-        set_phase(Phase::Failed, error);
-        return;
+        if (!ok) {
+            set_phase(Phase::Failed, error);
+            return;
+        }
     }
     try {
         const std::filesystem::path dir = portablekit::install::user_data_directory();
@@ -814,9 +827,10 @@ void rows() {
         ui::info_row("Emendatus data", "This build does not include the Emendatus Mod's code");
         return;
     }
-    ui::info_row("Emendatus data", phase == Phase::Done ? "Installed" : "Not installed (a 322 MB download, once)");
+    const bool installed = phase == Phase::Done || assets_present();
+    ui::info_row("Emendatus data", installed ? "Installed" : "Not installed (a 322 MB download, once)");
     if (phase == Phase::Finding) {
-        ui::info_row("Status", "Looking for the file in the latest release…");
+        ui::info_row("Status", "Looking for the files in the data-pack release…");
         return;
     }
     if (phase == Phase::Downloading) {
@@ -832,6 +846,16 @@ void rows() {
         return;
     }
     if (phase == Phase::Failed) ui::info_row("Download failed", error);
+    if (installed) {
+        // Already there: fetch again only what differs, into the folder it is in (the big file stays when its size is right).
+        ui::RowOptions options;
+        options.description = "Downloads the mod's small files again and the big one only if it is not whole, replacing what differs.";
+        if (ui::button_row("Update the Emendatus files###emupdate", options)) {
+            const std::filesystem::path where = assets_path().parent_path().parent_path();
+            std::thread(download_into, portablekit::install::path_to_utf8(where)).detach();
+        }
+        return;
+    }
     static std::vector<Choice> places = choices();
     for (const Choice &choice : places) {
         const bool room = choice.free_bytes > kEmTailSize + (256ull << 20);
