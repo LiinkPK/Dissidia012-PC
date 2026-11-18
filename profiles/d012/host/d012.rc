@@ -4,8 +4,8 @@
 
 // What Windows shows for the program (Task Manager's Apps list, file properties).
 1 VERSIONINFO
-FILEVERSION 0,20,0,0
-PRODUCTVERSION 0,20,0,0
+FILEVERSION 1,0,9,0
+PRODUCTVERSION 1,0,9,0
 FILEFLAGSMASK 0x3fL
 FILEFLAGS 0x0L
 FILEOS VOS_NT_WINDOWS32
@@ -18,11 +18,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "PSPRecomp"
             VALUE "FileDescription", "Dissidia 012 Final Fantasy HD Remastered"
-            VALUE "FileVersion", "0.20.0.0"
+            VALUE "FileVersion", "1.0.9.0"
             VALUE "InternalName", "Dissidia 012 Final Fantasy HD Remastered"
             VALUE "OriginalFilename", "d012_native.exe"
             VALUE "ProductName", "Dissidia 012 Final Fantasy HD Remastered"
-            VALUE "ProductVersion", "0.20.0.0"
+            VALUE "ProductVersion", "1.0.9.0"
         END
     END
     BLOCK "VarFileInfo"
