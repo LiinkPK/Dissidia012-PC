@@ -149,10 +149,12 @@ static const std::uint16_t kEntryIds_ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041
 std::uint32_t g_d012_grid_cols = 17u;
 std::uint32_t g_d012_grid_rows = 2u;
 std::uint32_t g_d012_grid_party = 0u;
+std::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared
 
 static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std::uint32_t mode) {
     // The Party roster is laid out like the CPU roster now (2 rows, the last cell "Remove from Party" after Random).
     g_d012_grid_party = 0u;
+    g_d012_select_mode = mode;
     g_d012_grid_cols = g_d012_grid_party ? 10u : 17u;
     g_d012_grid_rows = g_d012_grid_party ? 4u : 2u;
     constexpr std::uint32_t kTable = 0x0BFEB200u;  // the mod's table (stock 0x08A864D0)

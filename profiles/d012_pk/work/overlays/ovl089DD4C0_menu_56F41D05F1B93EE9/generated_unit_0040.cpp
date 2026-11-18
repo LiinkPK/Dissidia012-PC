@@ -10,7 +10,7 @@ static std::FILE *d012_trace_file() { static std::FILE *f = std::fopen("d012_tra
 #include <limits>
 
 namespace psprecomp {
-extern std::uint32_t g_d012_grid_cols, g_d012_grid_rows, g_d012_grid_party;
+extern std::uint32_t g_d012_grid_cols, g_d012_grid_rows, g_d012_grid_party, g_d012_select_mode;
 static const std::uint16_t kEntryIds_ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0040[4096] = {
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
     33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
@@ -13705,8 +13705,9 @@ L_08A7FBB8:
         aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
         { static bool traced = false; if (!traced) { traced = true; std::fprintf(stderr, "[roster-mod] position 33 -> slot 16\n"); } }
     }
-    if (!g_d012_grid_party && static_cast<std::int32_t>(ctx.gpr[17]) == -2) {  // the Random cell: the last place of the second row (slot 33), whatever the number of fighters before it
-        ctx.gpr[5] = 33u;
+    if (!g_d012_grid_party && (static_cast<std::int32_t>(ctx.gpr[17]) == -2 || static_cast<std::int32_t>(ctx.gpr[17]) == -3)) {  // the Random cell (-2) and the Party's "Remove from Party" cell (-3), wherever the count of fighters before them would put them
+        // Random is under Lightning (slot 32) in the Quick Battle player select and the Party roster, where Aerith is at the end of the top row; "Remove" is under her (slot 33). In the CPU select Random is under her.
+        ctx.gpr[5] = static_cast<std::int32_t>(ctx.gpr[17]) == -3 ? 33u : ((g_d012_select_mode == 0u || g_d012_select_mode == 5u) ? 32u : 33u);
         aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
     }
     ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);

@@ -34,6 +34,7 @@ def apply(corpus):
     unit41 = next(corpus.glob("generated_unit_0041.cpp"))
 
     text = unit40.read_text(encoding="utf-8")
+    text = replace_once(text, "extern std::uint32_t g_d012_grid_cols, g_d012_grid_rows, g_d012_grid_party;", "extern std::uint32_t g_d012_grid_cols, g_d012_grid_rows, g_d012_grid_party, g_d012_select_mode;", "select mode extern")
     # the slot of position p is final here (a5, also stored at 0(sp)); position 33 is the new character's row
     text = replace_once(
         text, "L_08A7FBB8:\n    ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);",
@@ -43,8 +44,9 @@ def apply(corpus):
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
         "        { static bool traced = false; if (!traced) { traced = true; std::fprintf(stderr, \"[roster-mod] position 33 -> slot 16\\n\"); } }\n"
         "    }\n"
-        "    if (!g_d012_grid_party && static_cast<std::int32_t>(ctx.gpr[17]) == -2) {  // the Random cell: the last place of the second row (slot 33), whatever the number of fighters before it\n"
-        "        ctx.gpr[5] = 33u;\n"
+        "    if (!g_d012_grid_party && (static_cast<std::int32_t>(ctx.gpr[17]) == -2 || static_cast<std::int32_t>(ctx.gpr[17]) == -3)) {  // the Random cell (-2) and the Party's \"Remove from Party\" cell (-3), wherever the count of fighters before them would put them\n"
+        "        // Random is under Lightning (slot 32) in the Quick Battle player select and the Party roster, where Aerith is at the end of the top row; \"Remove\" is under her (slot 33). In the CPU select Random is under her.\n"
+        "        ctx.gpr[5] = static_cast<std::int32_t>(ctx.gpr[17]) == -3 ? 33u : ((g_d012_select_mode == 0u || g_d012_select_mode == 5u) ? 32u : 33u);\n"
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
         "    }\n"
         "    ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);", "slot of position 33 in unit 0040")
@@ -52,6 +54,8 @@ def apply(corpus):
 
     text = unit41.read_text(encoding="utf-8")
     text = replace_once(text, "constexpr std::uint32_t kTable = 0x08A864D0u;", "constexpr std::uint32_t kTable = 0x0BFEB200u;  // the mod's table (stock 0x08A864D0)", "table address")
+    text = replace_once(text, "std::uint32_t g_d012_grid_party = 0u;\n", "std::uint32_t g_d012_grid_party = 0u;\nstd::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared\n", "select mode global")
+    text = replace_once(text, "    g_d012_grid_party = 0u;\n", "    g_d012_grid_party = 0u;\n    g_d012_select_mode = mode;\n", "select mode set")
     text = replace_once(text, "static std::int16_t original[33][6];", "static std::int16_t original[34][6];", "original copy size")
     text = replace_once(text, "for (int r = 0; r < 33; ++r)\n            for (int c = 0; c < 6; ++c)\n                original[r][c]",
                         "for (int r = 0; r < 34; ++r)\n            for (int c = 0; c < 6; ++c)\n                original[r][c]", "copy loop")

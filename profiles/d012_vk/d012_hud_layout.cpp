@@ -580,6 +580,8 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         const bool cpu_order = mod && g_ld16s(g, 0x0BFEB200u + 29u * 12u + 8u) == 0x17;
         if (mod && cpu_order && (visible == 32u || visible == 33u)) g_d012_roster_extra_rank = -1;  // Original Quest: no Chaos, no new character
         else if (mod && visible == 32u) g_d012_roster_extra_rank = 31;
+        // Party roster (the Quick Battle player order, 34 real cells): the fighters, her, Random and "Remove from Party"; she is the third from the end.
+        else if (mod && !cpu_order && visible == 34u) g_d012_roster_extra_rank = 31;
         else if (mod && (visible == 33u || visible == 34u)) g_d012_roster_extra_rank = static_cast<int>(visible) - 2;
         (void)cpu_select;  // Chaos's place after Feral Chaos is in the grid code's order table now (the cursor follows it)
     }
