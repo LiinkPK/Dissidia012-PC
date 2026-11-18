@@ -111,7 +111,8 @@ if [ "${WITHOUT_EMENDATUS:-0}" != 1 ]; then
   mkdir -p "$REL/corpora" "$REL/mods"
   cp -a "$BUILD"/bin/corpora/. "$REL/corpora/" 2>/dev/null || true
   cp -a "$BUILD"/bin/mods/. "$REL/mods/" 2>/dev/null || true
-  [ -d "$ROOT/release/mods" ] && cp -a "$ROOT/release/mods/." "$REL/mods/"
+  # An explicit allowlist: only these files of release/mods travel, so no other mod ships by being left in the folder.
+  for allowed in emendatus_assets.bin; do [ -f "$ROOT/release/mods/$allowed" ] && cp -a "$ROOT/release/mods/$allowed" "$REL/mods/"; done
   # The 338 MB of new data is not in the repository (a CI checkout does not have it): a package without it still runs, and the mod stays
   # off until the file is put in mods/. STRICT_EMENDATUS=1 makes a missing file or corpus an error.
   if [ ! -f "$REL/mods/emendatus_assets.bin" ]; then

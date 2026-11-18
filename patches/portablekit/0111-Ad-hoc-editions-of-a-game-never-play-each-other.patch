@@ -7,23 +7,19 @@ A profile can name editions that change the game data (the Emendatus Mod). While
 product code the game logs in with is replaced by the edition mark, so its players are another product to every ad hoc server and
 only meet players of the same edition. The Join list leaves hosts of the other edition out and says how many.
 ---
-diff --git a/host/profile.hpp b/host/profile.hpp
-index b89696d..1e265ee 100644
---- a/host/profile.hpp
-+++ b/host/profile.hpp
-@@ -234,6 +234,12 @@ struct GameProfile {
-     // agree on it, so it is the original release's code even when the port's
-     // disc id is a different one.
-     const char *adhoc_product_code;
-+    // Editions of one game that must not play each other (a mod that changes the game's data). While `adhoc_edition_active()` is
-+    // true, the first character of the product code the game logs in with is replaced by `adhoc_edition_mark`, so those players are
-+    // another product to every ad hoc server, this port's own or any other, and only meet players of the same edition. The Join list
-+    // leaves hosts of the other edition out. Both unset: no editions.
-+    char adhoc_edition_mark = 0;
-+    bool (*adhoc_edition_active)() = nullptr;
- 
-     // --- Controls ----------------------------------------------------------
-     // What the triggers may press instead of L and R, for the way this game is
+diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
+index 6bd8829..4124933 100644
+--- a/host/adhoc/host.cpp
++++ b/host/adhoc/host.cpp
+@@ -70,7 +70,7 @@ bool adhoc_host_start() {
+         adhoc::Discovery::get().start_announcing(config.adhocctl_port, [server] {
+             adhoc::Announcement info;
+             info.name = adhoc_player_name();
+-            info.product = portablekit::game().adhoc_product_code;
++            info.product = portablekit::adhoc_effective_product(portablekit::game().adhoc_product_code);
+             info.players = static_cast<unsigned>(server->status().players.size());
+             return info;
+         });
 diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
 index c41a0b1..f503b1c 100644
 --- a/host/adhoc/session.hpp
@@ -42,10 +38,10 @@ index c41a0b1..f503b1c 100644
  [[nodiscard]] std::string adhoc_player_name();
  
 diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
-index fcc7fc2..0f345ca 100644
+index 42fe769..0f345ca 100644
 --- a/host/hle/hle_adhoc.cpp
 +++ b/host/hle/hle_adhoc.cpp
-@@ -242,7 +243,7 @@ void start_client() {
+@@ -243,7 +243,7 @@ void start_client() {
      identity.server = s.adhoc ? adhoc_server_address() : std::string{};
      identity.nickname = nickname();
      identity.mac = own_mac();
@@ -54,7 +50,7 @@ index fcc7fc2..0f345ca 100644
      Client::get().start(identity);
  }
  
-@@ -974,11 +975,30 @@ std::string adhoc_player_name() { return nickname(); }
+@@ -975,6 +975,22 @@ std::string adhoc_player_name() { return nickname(); }
  
  bool adhoc_networking_on() { return state().ctl_initialized || state().adhoc_initialized; }
  
@@ -77,32 +73,28 @@ index fcc7fc2..0f345ca 100644
  bool adhoc_session_active() {
      const adhoc::Diagnostics d = Client::get().diagnostics();
      return adhoc_hosting() || Client::get().in_group() || d.joining.has_value() || d.rejoin_ms.has_value();
- }
+diff --git a/host/profile.hpp b/host/profile.hpp
+index b89696d..1e265ee 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -234,6 +234,12 @@ struct GameProfile {
+     // agree on it, so it is the original release's code even when the port's
+     // disc id is a different one.
+     const char *adhoc_product_code;
++    // Editions of one game that must not play each other (a mod that changes the game's data). While `adhoc_edition_active()` is
++    // true, the first character of the product code the game logs in with is replaced by `adhoc_edition_mark`, so those players are
++    // another product to every ad hoc server, this port's own or any other, and only meet players of the same edition. The Join list
++    // leaves hosts of the other edition out. Both unset: no editions.
++    char adhoc_edition_mark = 0;
++    bool (*adhoc_edition_active)() = nullptr;
  
-+// This machine's virtual MAC, for sceNetAdhocMatching (hle_adhoc_matching.cpp).
-+adhoc::Mac adhoc_own_mac() { return own_mac(); }
-+
- void register_adhoc(HleRegistrar &hle) {
-     register_net(hle);
-     register_adhocctl(hle);
-diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
-index 5edd4b4..4124933 100644
---- a/host/adhoc/host.cpp
-+++ b/host/adhoc/host.cpp
-@@ -69,7 +70,7 @@ bool adhoc_host_start() {
-         adhoc::Discovery::get().start_announcing(config.adhocctl_port, [server] {
-             adhoc::Announcement info;
-             info.name = adhoc_player_name();
--            info.product = portablekit::game().adhoc_product_code;
-+            info.product = portablekit::adhoc_effective_product(portablekit::game().adhoc_product_code);
-             info.players = static_cast<unsigned>(server->status().players.size());
-             return info;
-         });
+     // --- Controls ----------------------------------------------------------
+     // What the triggers may press instead of L and R, for the way this game is
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 4c381fe..514533b 100644
+index ac846f1..514533b 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
-@@ -1465,7 +1519,13 @@ void play_together() {
+@@ -1519,7 +1519,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -117,7 +109,7 @@ index 4c381fe..514533b 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1479,6 +1539,9 @@ void play_together() {
+@@ -1533,6 +1539,9 @@ void play_together() {
              adhoc_join(address);
      }
      if (hosts.empty()) info_row("On this network", "Looking for hosted sessions…");
