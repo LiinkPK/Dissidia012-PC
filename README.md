@@ -8,6 +8,8 @@
 **_Early BETA_**
 
 [![Build release](https://github.com/LiinkPK/Dissidia012-PC/actions/workflows/build-release.yml/badge.svg)](https://github.com/LiinkPK/Dissidia012-PC/actions/workflows/build-release.yml)
+[![members](https://live-members-count.rohansrma.me/api/discord-members?guildId=1297810668975689778)](https://discord.gg/W9rcyMJ7br)
+
 </div>
 
 # PSPRecomp — Dissidia 012 PC Port
@@ -123,3 +125,9 @@ The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
 - [TeamGDB](https://github.com/TeamGDB)
 - [BasedYuki](https://github.com/BasedYuki/the-3rd-birthday-recomp)
 - **Everyone in my amazing [Discord community](https://discord.gg/W9rcyMJ7br)** ❤️
+
+## Join the community!
+
+[![discord](https://www.readmecodegen.com/api/social-icon?name=discord&size=80&animation=pulse&animationDuration=5&reverseBackground=true&link=https%3A%2F%2Fdiscord.gg%2FW9rcyMJ7br)](https://discord.gg/W9rcyMJ7br)
+
+[![Members](https://live-members-count.rohansrma.me/api/discord-members?guildId=1297810668975689778&color=5865F2&label=Members&scale=1.2)](https://discord.gg/W9rcyMJ7br)
