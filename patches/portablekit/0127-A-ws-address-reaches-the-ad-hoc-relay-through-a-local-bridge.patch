@@ -1,0 +1,439 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 19 Nov 2026 00:00:00 +0100
+Subject: [PATCH] A ws:// address reaches the ad hoc relay through a local bridge
+
+An ad hoc server address that starts with ws:// is a relay that is only reachable over WebSocket (a Cloudflare Worker). A bridge inside the process listens on 127.0.0.1 ports 27312 and 27313 and forwards each connection, byte for byte, to ws://host/ctl and ws://host/relay in binary frames; the client talks to the bridge unchanged. The bridge is generic: a table of local port and path, so another service can use it. Nothing changes for an address without the ws:// prefix.
+---
+
+diff --git a/cmake/PortableKit.cmake b/cmake/PortableKit.cmake
+index 7629c5b..330e344 100644
+--- a/cmake/PortableKit.cmake
++++ b/cmake/PortableKit.cmake
+@@ -82,6 +82,7 @@ set(PORTABLEKIT_HOST_SOURCES
+     host/adhoc/portmap_soap.cpp
+     host/adhoc/portmap_stun.cpp
+     host/adhoc/portmap_upnp.cpp
++    host/adhoc/ws_bridge.cpp
+     host/hle/hle_extensions.cpp
+     host/hle/hle_extension_host.cpp
+     host/extension_keys.cpp
+diff --git a/host/adhoc/client.cpp b/host/adhoc/client.cpp
+index 7a13ef5..5723df7 100644
+--- a/host/adhoc/client.cpp
++++ b/host/adhoc/client.cpp
+@@ -2,6 +2,7 @@
+ #include "adhoc/client.hpp"
+ 
+ #include "adhoc/sockets.hpp"
++#include "adhoc/ws_bridge.hpp"
+ 
+ #include <algorithm>
+ #include <atomic>
+@@ -1057,6 +1058,20 @@ struct Client::Impl {
+                 for (auto &[handle, socket] : streams) add(socket.link);
+             }
+             if (!to_resolve.empty()) {
++                // ws://host: a relay that is only reachable over WebSocket. A bridge inside this process turns the plain
++                // TCP this client speaks into WebSocket, and the client talks to the bridge on this computer.
++                if (to_resolve.compare(0, 5u, "ws://") == 0) {
++                    std::string bridge_error;
++                    if (!ws_bridge_start(to_resolve, {{kAdhocctlPort, "/ctl"}, {kRelayPort, "/relay"}}, bridge_error)) {
++                        std::lock_guard lock(mutex);
++                        resolving = false;
++                        ++failed_attempts;
++                        if (failed_attempts == 1u || failed_attempts % 10u == 0u) report(bridge_error);
++                        ctl_retry_at = Clock::now() + ctl_backoff.next();
++                        continue;
++                    }
++                    to_resolve = "127.0.0.1";
++                }
+                 std::string host;
+                 std::uint16_t port = kAdhocctlPort;
+                 split_server(to_resolve, host, port);
+diff --git a/host/adhoc/ws_bridge.cpp b/host/adhoc/ws_bridge.cpp
+new file mode 100644
+index 0000000..a5701aa
+--- /dev/null
++++ b/host/adhoc/ws_bridge.cpp
+@@ -0,0 +1,251 @@
++#include "adhoc/ws_bridge.hpp"
++
++#include "adhoc/client.hpp"
++#include "adhoc/sockets.hpp"
++#include "adhoc/ws_frame.hpp"
++
++#include <atomic>
++#include <chrono>
++#include <memory>
++#include <mutex>
++#include <thread>
++
++namespace portablekit::adhoc {
++namespace {
++
++using namespace net;
++using Clock = std::chrono::steady_clock;
++using Flag = std::shared_ptr<std::atomic<bool>>;
++
++constexpr int kPollMs = 100;
++constexpr auto kConnectTimeout = std::chrono::seconds(8);
++
++void note(const std::string &line) { Client::log("[adhoc-bridge] " + line, false); }
++
++// What is waiting on `s`, appended to `out`: bytes read, 0 for nothing yet, -1 once closed or broken.
++int read_some(Socket s, std::string &out) {
++    char buffer[16 * 1024];
++    const auto count = ::recv(s, buffer, static_cast<int>(sizeof(buffer)), 0);
++    if (count > 0) {
++        out.append(buffer, static_cast<std::size_t>(count));
++        return static_cast<int>(count);
++    }
++    return count < 0 && would_block(socket_error()) ? 0 : -1;
++}
++
++bool send_all(Socket s, const std::string &data, const Flag &quit) {
++    std::size_t sent = 0;
++    while (sent < data.size() && !*quit) {
++        const auto count = ::send(s, data.data() + sent, static_cast<int>(data.size() - sent), kSendFlags);
++        if (count > 0) {
++            sent += static_cast<std::size_t>(count);
++            continue;
++        }
++        if (count < 0 && !would_block(socket_error())) return false;
++        PollEntry entry{};
++        entry.fd = s;
++        entry.events = POLLOUT;
++        poll_sockets(&entry, 1u, kPollMs);
++    }
++    return sent == data.size();
++}
++
++Socket connect_remote(const std::string &host, const std::string &port, const Flag &quit) {
++    addrinfo hints{};
++    hints.ai_socktype = SOCK_STREAM;
++    addrinfo *found = nullptr;
++    if (getaddrinfo(host.c_str(), port.c_str(), &hints, &found) != 0 || found == nullptr) {
++        note("cannot resolve " + host);
++        return kNoSocket;
++    }
++    Socket result = kNoSocket;
++    for (const addrinfo *a = found; a != nullptr && result == kNoSocket && !*quit; a = a->ai_next) {
++        const Socket s = ::socket(a->ai_family, a->ai_socktype, a->ai_protocol);
++        if (s == kNoSocket) continue;
++        set_nonblocking(s);
++        const int rc = ::connect(s, a->ai_addr, static_cast<socklen_t>(a->ai_addrlen));
++        bool ok = rc == 0;
++        if (!ok && connect_pending(socket_error())) {
++            const auto until = Clock::now() + kConnectTimeout;
++            while (!*quit && Clock::now() < until) {
++                PollEntry entry{};
++                entry.fd = s;
++                entry.events = POLLOUT;
++                if (poll_sockets(&entry, 1u, kPollMs) > 0) {
++                    int error = 0;
++                    socklen_t length = sizeof(error);
++                    getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&error), &length);
++                    ok = error == 0;
++                    break;
++                }
++            }
++        }
++        if (ok) result = s;
++        else close_socket(s);
++    }
++    freeaddrinfo(found);
++    if (result != kNoSocket) {
++        set_option(result, IPPROTO_TCP, TCP_NODELAY, 1);
++        no_sigpipe(result);
++    }
++    return result;
++}
++
++// Reads the server's answer to the upgrade; whatever follows the headers stays in `rest`.
++bool finish_handshake(Socket s, std::string &rest, const Flag &quit) {
++    std::string answer;
++    const auto until = Clock::now() + kConnectTimeout;
++    while (!*quit && Clock::now() < until) {
++        const auto end = answer.find("\r\n\r\n");
++        if (end != std::string::npos) {
++            rest = answer.substr(end + 4u);
++            return answer.compare(0, 12u, "HTTP/1.1 101") == 0;
++        }
++        PollEntry entry{};
++        entry.fd = s;
++        entry.events = POLLIN;
++        if (poll_sockets(&entry, 1u, kPollMs) > 0 && read_some(s, answer) < 0) return false;
++    }
++    return false;
++}
++
++// One local connection, both ways, until either side ends.
++void serve(Socket local, std::string host, std::string port, std::string path, Flag quit) {
++    const Socket remote = connect_remote(host, port, quit);
++    std::string frames;
++    bool ready = remote != kNoSocket && send_all(remote, ws::handshake_request(host, path), quit) &&
++                 finish_handshake(remote, frames, quit);
++    if (!ready) note("cannot open ws://" + host + path);
++    while (ready && !*quit) {
++        std::uint8_t opcode = 0;
++        std::string payload;
++        while (ready && ws::decode(frames, opcode, payload)) {
++            if (opcode == 2u || opcode == 0u) ready = send_all(local, payload, quit);
++            else if (opcode == 9u) ready = send_all(remote, ws::encode(10u, payload.data(), payload.size()), quit);
++            else if (opcode == 8u) ready = false;
++        }
++        if (!ready) break;
++        PollEntry entries[2]{};
++        entries[0].fd = local;
++        entries[0].events = POLLIN;
++        entries[1].fd = remote;
++        entries[1].events = POLLIN;
++        if (poll_sockets(entries, 2u, kPollMs) <= 0) continue;
++        if (entries[0].revents != 0) {
++            std::string data;
++            if (read_some(local, data) < 0) break;
++            if (!data.empty()) ready = send_all(remote, ws::encode(2u, data.data(), data.size()), quit);
++        }
++        if (ready && entries[1].revents != 0 && read_some(remote, frames) < 0) break;
++    }
++    if (remote != kNoSocket) close_socket(remote);
++    close_socket(local);
++}
++
++Socket listen_local(std::uint16_t port, std::string &error) {
++    const Socket s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++    if (s == kNoSocket) { error = "cannot make a socket"; return kNoSocket; }
++#if defined(_WIN32)
++    set_option(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1);
++#else
++    set_option(s, SOL_SOCKET, SO_REUSEADDR, 1);
++#endif
++    sockaddr_in address{};
++    address.sin_family = AF_INET;
++    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
++    address.sin_port = htons(port);
++    if (::bind(s, reinterpret_cast<const sockaddr *>(&address), sizeof(address)) != 0 || ::listen(s, 16) != 0 ||
++        !set_nonblocking(s)) {
++        close_socket(s);
++        error = "TCP port " + std::to_string(port) + " on this computer is in use by another program";
++        return kNoSocket;
++    }
++    return s;
++}
++
++struct Bridge {
++    WinsockSession winsock;
++    std::mutex mutex;
++    std::string url;
++    std::string signature;  // routes, to tell a repeat from a change
++    Flag quit;
++    std::vector<std::thread> listeners;
++};
++
++Bridge &bridge() {
++    static Bridge instance;
++    return instance;
++}
++
++void listen_loop(Socket listener, std::string host, std::string port, std::string path, Flag quit) {
++    while (!*quit) {
++        PollEntry entry{};
++        entry.fd = listener;
++        entry.events = POLLIN;
++        if (poll_sockets(&entry, 1u, kPollMs) <= 0) continue;
++        const Socket client = ::accept(listener, nullptr, nullptr);
++        if (client == kNoSocket) continue;
++        set_nonblocking(client);
++        set_option(client, IPPROTO_TCP, TCP_NODELAY, 1);
++        no_sigpipe(client);
++        std::thread(serve, client, host, port, path, quit).detach();
++    }
++    close_socket(listener);
++}
++
++} // namespace
++
++bool parse_ws_url(const std::string &url, std::string &host, std::string &port) {
++    if (url.compare(0, 5u, "ws://") != 0) return false;
++    std::string rest = url.substr(5u);
++    const auto slash = rest.find('/');
++    if (slash != std::string::npos) rest.resize(slash);
++    port = "80";
++    const auto colon = rest.rfind(':');
++    if (colon != std::string::npos && rest.find(']') == std::string::npos) {
++        port = rest.substr(colon + 1u);
++        rest.resize(colon);
++    }
++    host = rest;
++    return !host.empty() && !port.empty();
++}
++
++bool ws_bridge_start(const std::string &url, const std::vector<BridgeRoute> &routes, std::string &error) {
++    std::string host, port;
++    if (!parse_ws_url(url, host, port)) { error = "not a ws:// address: " + url; return false; }
++    Bridge &b = bridge();
++    std::lock_guard lock(b.mutex);
++    std::string signature = url;
++    for (const auto &route : routes) signature += "|" + std::to_string(route.local_port) + route.path;
++    if (b.quit && !*b.quit && b.signature == signature) return true;
++    if (b.quit) *b.quit = true;
++    for (auto &thread : b.listeners) if (thread.joinable()) thread.join();
++    b.listeners.clear();
++    b.quit = std::make_shared<std::atomic<bool>>(false);
++    std::vector<Socket> sockets;
++    for (const auto &route : routes) {
++        const Socket s = listen_local(route.local_port, error);
++        if (s == kNoSocket) {
++            for (const Socket open : sockets) close_socket(open);
++            *b.quit = true;
++            return false;
++        }
++        sockets.push_back(s);
++    }
++    for (std::size_t i = 0; i < routes.size(); ++i)
++        b.listeners.emplace_back(listen_loop, sockets[i], host, port, routes[i].path, b.quit);
++    b.url = url;
++    b.signature = signature;
++    note("forwarding to ws://" + host + ":" + port);
++    return true;
++}
++
++void ws_bridge_stop() {
++    Bridge &b = bridge();
++    std::lock_guard lock(b.mutex);
++    if (b.quit) *b.quit = true;
++    for (auto &thread : b.listeners) if (thread.joinable()) thread.join();
++    b.listeners.clear();
++}
++
++} // namespace portablekit::adhoc
+diff --git a/host/adhoc/ws_bridge.hpp b/host/adhoc/ws_bridge.hpp
+new file mode 100644
+index 0000000..fc48b8e
+--- /dev/null
++++ b/host/adhoc/ws_bridge.hpp
+@@ -0,0 +1,27 @@
++#pragma once
++
++// A local TCP port that forwards to a WebSocket path, byte for byte: whatever a program writes to 127.0.0.1:<port> is
++// sent in binary frames to ws://<host>/<path>, and the binary frames that come back are written to the program. It lets
++// a client that speaks plain TCP use a service that is only reachable over WebSocket (a Cloudflare Worker, for one),
++// with no change to the client. It runs inside the process, so it exists only while the game does.
++#include <cstdint>
++#include <string>
++#include <vector>
++
++namespace portablekit::adhoc {
++
++struct BridgeRoute {
++    std::uint16_t local_port{};  // listened on 127.0.0.1
++    std::string path;            // "/ctl"
++};
++
++// "ws://host[:port]" (the path is added per route); false for anything else.
++[[nodiscard]] bool parse_ws_url(const std::string &url, std::string &host, std::string &port);
++
++// Starts listening for each route; false with `error` set when a port cannot be taken. Calling it again with the same
++// url and routes is a no-op that returns true; a different url restarts the bridge.
++[[nodiscard]] bool ws_bridge_start(const std::string &url, const std::vector<BridgeRoute> &routes, std::string &error);
++
++void ws_bridge_stop();
++
++} // namespace portablekit::adhoc
+diff --git a/host/adhoc/ws_frame.hpp b/host/adhoc/ws_frame.hpp
+new file mode 100644
+index 0000000..3625b03
+--- /dev/null
++++ b/host/adhoc/ws_frame.hpp
+@@ -0,0 +1,87 @@
++#pragma once
++
++// The little of WebSocket (RFC 6455) the ad hoc bridge needs: the client handshake, masked binary frames out,
++// and unmasked frames in.
++#include <cstddef>
++#include <cstdint>
++#include <random>
++#include <string>
++
++namespace portablekit::adhoc::ws {
++
++inline std::string base64(const std::string &data) {
++    static constexpr char kTable[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
++    std::string out;
++    for (std::size_t i = 0; i < data.size(); i += 3) {
++        const std::uint32_t a = static_cast<std::uint8_t>(data[i]);
++        const std::uint32_t b = i + 1 < data.size() ? static_cast<std::uint8_t>(data[i + 1]) : 0u;
++        const std::uint32_t c = i + 2 < data.size() ? static_cast<std::uint8_t>(data[i + 2]) : 0u;
++        const std::uint32_t v = (a << 16u) | (b << 8u) | c;
++        out += kTable[(v >> 18u) & 63u];
++        out += kTable[(v >> 12u) & 63u];
++        out += i + 1 < data.size() ? kTable[(v >> 6u) & 63u] : '=';
++        out += i + 2 < data.size() ? kTable[v & 63u] : '=';
++    }
++    return out;
++}
++
++inline std::string random_bytes(std::size_t count) {
++    static thread_local std::random_device device;
++    std::string out;
++    for (std::size_t i = 0; i < count; ++i) out.push_back(static_cast<char>(device() & 0xFFu));
++    return out;
++}
++
++inline std::string handshake_request(const std::string &host, const std::string &path) {
++    return "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
++           "Sec-WebSocket-Key: " + base64(random_bytes(16)) + "\r\nSec-WebSocket-Version: 13\r\n\r\n";
++}
++
++// One masked frame from a client. opcode 2 = binary, 8 = close, 10 = pong.
++inline std::string encode(std::uint8_t opcode, const char *data, std::size_t size) {
++    std::string out;
++    out.push_back(static_cast<char>(0x80u | opcode));
++    if (size < 126u) {
++        out.push_back(static_cast<char>(0x80u | size));
++    } else if (size < 65536u) {
++        out.push_back(static_cast<char>(0x80u | 126u));
++        out.push_back(static_cast<char>(size >> 8u));
++        out.push_back(static_cast<char>(size & 0xFFu));
++    } else {
++        out.push_back(static_cast<char>(0x80u | 127u));
++        for (int shift = 56; shift >= 0; shift -= 8) out.push_back(static_cast<char>((static_cast<std::uint64_t>(size) >> shift) & 0xFFu));
++    }
++    const std::string mask = random_bytes(4);
++    out += mask;
++    for (std::size_t i = 0; i < size; ++i) out.push_back(static_cast<char>(data[i] ^ mask[i & 3u]));
++    return out;
++}
++
++// Takes one complete frame off the front of `buffer`: true with its opcode and payload, false when more is needed.
++inline bool decode(std::string &buffer, std::uint8_t &opcode, std::string &payload) {
++    if (buffer.size() < 2u) return false;
++    const auto b1 = static_cast<std::uint8_t>(buffer[1]);
++    std::size_t length = b1 & 0x7Fu;
++    std::size_t at = 2u;
++    if (length == 126u) {
++        if (buffer.size() < 4u) return false;
++        length = (static_cast<std::size_t>(static_cast<std::uint8_t>(buffer[2])) << 8u) | static_cast<std::uint8_t>(buffer[3]);
++        at = 4u;
++    } else if (length == 127u) {
++        if (buffer.size() < 10u) return false;
++        length = 0u;
++        for (std::size_t i = 2u; i < 10u; ++i) length = (length << 8u) | static_cast<std::uint8_t>(buffer[i]);
++        at = 10u;
++    }
++    const bool masked = (b1 & 0x80u) != 0u;  // a server never masks; handled anyway
++    if (masked) at += 4u;
++    if (buffer.size() < at + length) return false;
++    opcode = static_cast<std::uint8_t>(buffer[0]) & 0x0Fu;
++    payload.assign(buffer, at, length);
++    if (masked)
++        for (std::size_t i = 0; i < length; ++i) payload[i] = static_cast<char>(payload[i] ^ buffer[at - 4u + (i & 3u)]);
++    buffer.erase(0, at + length);
++    return true;
++}
++
++} // namespace portablekit::adhoc::ws
+-- 
+2.43.0
+
