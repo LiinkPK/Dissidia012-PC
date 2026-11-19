@@ -16,7 +16,7 @@ PK="${PORTABLEKIT_ROOT:-$ROOT/third_party/PortableKit-d012}"
 OUT="${OUT_DIR:-$ROOT/out/android}"
 REL="${REL_DIR:-$ROOT/dist}"
 API=29
-APP_ID="${APP_ID:-io.github.liinkpk.dissidia012}"
+APP_ID="${APP_ID:-io.github.liinkpk.d012hd}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu)}"
 GEN_OPT="${GEN_OPT:-1}"
 if [ -r /proc/meminfo ]; then RAM_GIB=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1048576 )); else RAM_GIB=$(( $(sysctl -n hw.memsize) / 1073741824 )); fi
