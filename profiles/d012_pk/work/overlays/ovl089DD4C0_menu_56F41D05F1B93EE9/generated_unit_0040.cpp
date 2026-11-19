@@ -13706,6 +13706,7 @@ L_08A7FBB8:
         ctx.gpr[5] = static_cast<std::int32_t>(ctx.gpr[17]) == -3 ? 33u : ((g_d012_select_mode == 0u || g_d012_select_mode == 5u) ? 32u : 33u);
         aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);
     }
+    { static int slot_lines = 0; if (slot_lines < 400) { ++slot_lines; std::fprintf(stderr, "[roster-slot] row %d pos(s0) %d slot %u mode %u\n", static_cast<int>(ctx.gpr[17]), static_cast<int>(ctx.gpr[16]), ctx.gpr[5], g_d012_select_mode); } }
     ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);
     goto L_08A7FBBC;
 L_08A7FBBC:
@@ -13885,6 +13886,7 @@ L_08A7FC84:
     ctx.gpr[4] = (aot_mem.aot_load32(ctx.gpr[4] + static_cast<std::uint32_t>(30768)));
     goto L_08A7FC88;
 L_08A7FC88:
+    { static int icon_lines = 0; if (icon_lines < 400) { ++icon_lines; std::fprintf(stderr, "[roster-icon] row %d pos %d a5 %08X a6 %u a7 %u\n", static_cast<int>(ctx.gpr[17]), static_cast<int>(ctx.gpr[16]), ctx.gpr[5], ctx.gpr[6] & 255u, ctx.gpr[7] & 65535u); } }
     ctx.gpr[31] = (0x08A7FC90u);
     ctx.gpr[7] = (ctx.gpr[7] & 65535u);
     ctx.pc = 0x088D0984u;

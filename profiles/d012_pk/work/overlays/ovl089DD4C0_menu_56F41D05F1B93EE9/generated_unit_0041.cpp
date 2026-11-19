@@ -150,8 +150,8 @@ std::uint32_t g_d012_grid_cols = 17u;
 std::uint32_t g_d012_grid_rows = 2u;
 std::uint32_t g_d012_grid_party = 0u;
 std::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared
-// The mod's new character is on the Quick Battle player and CPU selects and the Party roster only; every other select screen (Arcade, Original Quest...) is the stock game's.
-static inline bool d012_new_character_screen() { return g_d012_select_mode == 0u || g_d012_select_mode == 1u || g_d012_select_mode == 5u; }
+// The Arcade selects (Standard, Time Attack, Labyrinth) share one screen object whose words at +8 and +20 are 0x22 and 0x20 (Quick Battle: 0x1D and 0x21); the new character is not on them, as in the stock game.
+template <class M> static inline bool d012_arcade_select(M &m, std::uint32_t screen) { return m.aot_load32(screen + 8u) == 0x22u && m.aot_load32(screen + 20u) == 0x20u; }
 
 static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std::uint32_t mode) {
     // The Party roster is laid out like the CPU roster now (2 rows, the last cell "Remove from Party" after Random).
@@ -187,7 +187,7 @@ static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std:
     std::fprintf(stderr, "[roster-mod] table 0x%08X ids:", kTable);
     for (int r = 0; r < 34; ++r) std::fprintf(stderr, " %02X", static_cast<unsigned>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + 8)) & 0xFFFFu));
     std::fprintf(stderr, " (screen %08X mode %u; words:", screen, mode);
-    for (std::uint32_t w = 0; w < 24u; ++w) std::fprintf(stderr, " %X", m.aot_load32(screen + w * 4u));
+    for (std::uint32_t w = 0; w < 32u; ++w) std::fprintf(stderr, " %X", m.aot_load32(screen + w * 4u));
     std::fprintf(stderr, ")\n");
 }
 void ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(CorpusRuntime &rt, AllegrexContext &ctx, std::uint16_t direct_entry_id, AotFastView &aot_mem) {
@@ -18910,7 +18910,7 @@ L_08A85080:
     ctx.gpr[5] = (ctx.gpr[5] + static_cast<std::uint32_t>(2));
     goto L_08A85084;
 L_08A85084:
-    if (!g_d012_grid_party && d012_new_character_screen() && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21
+    if (!g_d012_grid_party && !d012_arcade_select(aot_mem, ctx.gpr[19]) && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21
         const std::uint32_t list = aot_mem.aot_load32(ctx.gpr[19] + 32u);
         if (list != 0u && aot_mem.aot_load32(list + (ctx.gpr[18] - 1u) * 8u) != 0x21u) {
             aot_mem.aot_store32(list + ctx.gpr[18] * 8u, 0x21u);
@@ -18928,7 +18928,8 @@ L_08A8508C:
     goto L_08A85090;
 L_08A85090:
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));
-    if (!g_d012_grid_party && ((ctx.gpr[30] == 2u && ctx.gpr[4] == 0x17u) || (ctx.gpr[4] == 0x21u && !d012_new_character_screen()))) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos; only the Quick Battle player and CPU selects and the Party roster have the new character, every other select is the stock game's
+    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game
+    if (!g_d012_grid_party && ctx.gpr[4] == 0x21u && d012_arcade_select(aot_mem, ctx.gpr[19])) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // the Arcade selects have no new character either
     goto L_08A85094;
 L_08A85094:
     ctx.gpr[17] = (0u | 0u);
@@ -19338,7 +19339,7 @@ L_08A8522C:
     // Two rows of 16 (the game split 6 / 10 / 10 / 6): the first row's cells are positions 0..15, the rest 16..31.
     {
         const std::uint32_t w = aot_mem.aot_load32(ctx.gpr[19] + 40u), list = aot_mem.aot_load32(ctx.gpr[19] + 32u);
-        std::fprintf(stderr, "[roster-mod] cells counted %u, list %08X count %u ids:", ctx.gpr[22], list, ctx.gpr[18]);
+        std::fprintf(stderr, "[roster-mod] cells counted %u, builder mode(fp) %u, list %08X count %u ids:", ctx.gpr[22], ctx.gpr[30], list, ctx.gpr[18]);
         for (std::uint32_t i = 0; i < ctx.gpr[18] && i < 40u; ++i) std::fprintf(stderr, " %d", static_cast<int>(aot_mem.aot_load32(list + i * 8u)));
         std::fprintf(stderr, "; 08B24328:");
         for (std::uint32_t i = 0; i < 8u; ++i) std::fprintf(stderr, " %08X", aot_mem.aot_load32(0x08B24328u + i * 4u));
