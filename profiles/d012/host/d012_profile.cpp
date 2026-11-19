@@ -36,7 +36,7 @@ namespace {
 
 // The version of this release, as its GitHub tag. Change it here for every release: the in-game update check
 // compares it with the newest release on https://github.com/LiinkPK/Dissidia012-PC/releases.
-constexpr const char *kReleaseVersion = "v1.0.9";
+constexpr const char *kReleaseVersion = "v1.1.1";
 
 // The game names its saves "ms0:/PSP/SAVEDATA/%s%s": the disc id followed by the slot.
 constexpr SaveFolder kSaveFolders[] = {
@@ -139,6 +139,7 @@ GameProfile build(const Release &r) {
         // memory expansion, which changes no gameplay) only plays the stock game: the product code carries the mark.
         .adhoc_edition_mark = 'E',
         .adhoc_edition_active = &::d012_emendatus_on,
+        .adhoc_relay_server = "relay.linkgarcia.com",
 
         // The buttons a PSP lacks, which the battle shortcuts use (L3 EX, L2 dodge, R2 dash, R3 recentres the camera;
         // d012_camera.cpp).

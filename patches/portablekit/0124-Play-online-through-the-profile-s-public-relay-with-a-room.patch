@@ -1,0 +1,295 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 19 Nov 2026 00:00:00 +0100
+Subject: [PATCH] Play online through the profile's public relay, with a room
+
+A profile can name a public ad hoc server (adhoc_relay_server). The Network page gets a Room and a Play online button: the room is folded into the product code the game logs in with, so players in different rooms never meet on the relay and the server and login format are unchanged. When the relay cannot be reached in 12 s, the game hosts directly with an opened router port and shows the address to share.
+---
+
+diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
+index 4124933..ac509c6 100644
+--- a/host/adhoc/host.cpp
++++ b/host/adhoc/host.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <mutex>
++#include <random>
+ 
+ namespace portablekit {
+ namespace {
+@@ -125,6 +126,25 @@ void adhoc_shutdown() noexcept {
+     adhoc::Client::get().shutdown();
+ }
+ 
++std::string adhoc_new_room() {
++    // No 0/O or 1/I: a room code is read out to a friend.
++    static constexpr char kLetters[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
++    std::random_device random;
++    std::string room;
++    for (int i = 0; i < 4; ++i) room += kLetters[random() % (sizeof(kLetters) - 1u)];
++    return room;
++}
++
++bool adhoc_join_relay() {
++    const std::string relay = adhoc_relay_address();
++    if (relay.empty()) return false;
++    settings::Settings &s = settings::current();
++    if (adhoc_room_code(s.adhoc_room).empty() && settings::overridden_by("network.room").empty())
++        s.adhoc_room = adhoc_new_room();
++    adhoc_join(relay);
++    return true;
++}
++
+ void adhoc_join(const std::string &address) {
+     if (address.empty()) return;
+     if (adhoc_hosting()) {
+diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
+index f503b1c..d7188a3 100644
+--- a/host/adhoc/session.hpp
++++ b/host/adhoc/session.hpp
+@@ -21,6 +21,17 @@ void adhoc_apply_settings(bool switch_now = false);
+ // The product code a player logs in with: the game's, with the profile's edition mark (see GameProfile::adhoc_edition_mark) when
+ // the running edition has one. Players of different editions are different products to a server, so they never meet.
+ [[nodiscard]] std::string adhoc_effective_product(std::string product);
++// The profile's public relay ("host" or "host:port"), empty when the port has none.
++[[nodiscard]] std::string adhoc_relay_address();
++// True while the game is set to go on line through that relay (not while this instance hosts).
++[[nodiscard]] bool adhoc_relay_selected();
++// Four letters or digits made from a room name (empty for a name with none): the room as it goes into the product code.
++[[nodiscard]] std::string adhoc_room_code(const std::string &room);
++// A new random room name of four characters, easy to read out loud.
++[[nodiscard]] std::string adhoc_new_room();
++// Goes on line through the public relay in the Room setting (a new room is made when it is empty): turns ad hoc play on and uses
++// it at once. Stops hosting first. False when the profile has no relay.
++bool adhoc_join_relay();
+ // True when a host's or player's product code is of the edition this instance runs.
+ [[nodiscard]] bool adhoc_same_edition(const std::string &product);
+ 
+diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
+index 0f345ca..0227fff 100644
+--- a/host/hle/hle_adhoc.cpp
++++ b/host/hle/hle_adhoc.cpp
+@@ -27,6 +27,8 @@
+ #include "psprecomp/common.hpp"
+ 
+ #include <algorithm>
++#include <cctype>
++#include <cstdint>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <iostream>
+@@ -975,11 +977,52 @@ std::string adhoc_player_name() { return nickname(); }
+ 
+ bool adhoc_networking_on() { return state().ctl_initialized || state().adhoc_initialized; }
+ 
++namespace {
++
++std::string lower_ascii(std::string text) {
++    for (char &c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++    return text;
++}
++
++} // namespace
++
++std::string adhoc_room_code(const std::string &room) {
++    std::string name;
++    for (const char c : room)
++        if (std::isalnum(static_cast<unsigned char>(c))) name += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
++    if (name.empty()) return {};
++    std::uint32_t hash = 2166136261u;  // FNV-1a
++    for (const char c : name) hash = (hash ^ static_cast<std::uint8_t>(c)) * 16777619u;
++    static constexpr char kDigits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
++    std::string code(4, '0');
++    std::uint32_t value = hash % (36u * 36u * 36u * 36u);
++    for (int i = 3; i >= 0; --i, value /= 36u) code[static_cast<std::size_t>(i)] = kDigits[value % 36u];
++    return code;
++}
++
++std::string adhoc_relay_address() {
++    const char *relay = game().adhoc_relay_server;
++    return relay != nullptr ? std::string(relay) : std::string();
++}
++
++bool adhoc_relay_selected() {
++    const std::string relay = adhoc_relay_address();
++    if (relay.empty() || adhoc_hosting()) return false;
++    const settings::Settings &s = settings::current();
++    return s.adhoc && lower_ascii(s.adhoc_server) == lower_ascii(relay);
++}
++
+ std::string adhoc_effective_product(std::string product) {
+     const GameProfile &profile = game();
+     if (profile.adhoc_edition_mark != 0 && profile.adhoc_edition_active != nullptr && profile.adhoc_edition_active() &&
+         !product.empty())
+         product[0] = profile.adhoc_edition_mark;
++    // On the public relay the room is the last four characters of the product code: the server keeps products apart, so
++    // players in different rooms never see each other, and the login format is the ordinary one.
++    if (product.size() == 9u && adhoc_relay_selected()) {
++        const std::string code = adhoc_room_code(settings::current().adhoc_room);
++        if (!code.empty()) product.replace(5u, 4u, code);
++    }
+     return product;
+ }
+ 
+diff --git a/host/profile.hpp b/host/profile.hpp
+index 1e265ee..5b834ea 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -240,6 +240,10 @@ struct GameProfile {
+     // leaves hosts of the other edition out. Both unset: no editions.
+     char adhoc_edition_mark = 0;
+     bool (*adhoc_edition_active)() = nullptr;
++    // A public ad hoc server (this port's own stand-alone relay) that players connect out to, so nobody forwards a port: "host" or
++    // "host:port". Empty: none. A room name (the Room setting) is folded into the product code, so players in different rooms never
++    // meet on it. The Network page offers it first and falls back to hosting with an opened router port when it cannot be reached.
++    const char *adhoc_relay_server = "";
+ 
+     // --- Controls ----------------------------------------------------------
+     // What the triggers may press instead of L and R, for the way this game is
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index ad54f67..d9e903b 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -259,6 +259,7 @@ const std::vector<Field> &fields() {
+          [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 100u, s.volume); },
+          [](const Settings &s) { return std::to_string(s.volume); }, nullptr},
+         BOOL_FIELD("audio.mute", mute),
++        BOOL_FIELD("input.swap_shoulders", swap_shoulders),
+         {"input.confirm", "PAD_FACE",
+          [](Settings &s, const std::string &t) {
+              if (t == "south") s.confirm_south = true;
+@@ -395,6 +396,12 @@ const std::vector<Field> &fields() {
+              return true;
+          },
+          [](const Settings &s) { return s.adhoc_server; }, [](Settings &s, const char *t) { s.adhoc_server = t; }},
++        {"network.room", "ADHOC_ROOM",
++         [](Settings &s, const std::string &t) {
++             s.adhoc_room = t;
++             return true;
++         },
++         [](const Settings &s) { return s.adhoc_room; }, [](Settings &s, const char *t) { s.adhoc_room = t; }},
+         {"network.nickname", "ADHOC_NICKNAME",
+          [](Settings &s, const std::string &t) {
+              s.adhoc_nickname = t;
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 23f3292..c5a7571 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -81,6 +81,8 @@ struct Settings {
+     // east one. The default follows the console the profile describes: south
+     // where cross confirms, east where circle does.
+     bool confirm_south{};
++    // The bumpers (L1, R1) and the triggers (L2, R2) trade places, for a hand that finds the triggers easier (Steam Deck).
++    bool swap_shoulders{};
+     float dead_zone{0.15f};
+     // The left stick's circle stretched to the PSP nub's square range, so a
+     // full diagonal reaches the corner (input/stick.hpp). Off passes the
+@@ -136,6 +138,7 @@ struct Settings {
+     bool adhoc{};                      // wireless switch on: the game may go on line
+     std::string adhoc_server;          // host or host:port of the server; empty: none
+     std::string adhoc_nickname;        // shown to other players; empty: the player name
++    std::string adhoc_room;            // the room on the profile's public relay: players with the same room meet
+     std::string adhoc_mac;             // this player's virtual MAC, made up on first use
+     std::vector<std::string> adhoc_recent;  // sessions joined lately, the latest first
+     std::uint32_t adhoc_host_port{27312};   // the built-in server's adhocctl port; the relay is on the next
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index b5fc938..759f233 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -930,6 +930,11 @@ bool address_character(char32_t c) {
+            c == U':' || c == U'-' || c == U'[' || c == U']';
+ }
+ 
++// A room name: letters and digits.
++bool room_character(char32_t c) {
++    return (c >= U'0' && c <= U'9') || (c >= U'a' && c <= U'z') || (c >= U'A' && c <= U'Z');
++}
++
+ // Only for a game that tilts (GameProfile::tilt).
+ void Menu::tilt_controls() {
+     const TiltControls *tilt = portablekit::game().tilt;
+@@ -1066,6 +1071,12 @@ void Menu::controls() {
+         s.confirm_south = !s.confirm_south;
+         settings::save();
+     }
++    if (toggle_row("Trigger buttons swap", s.swap_shoulders,
++                   options_for("input.swap_shoulders",
++                               "Swaps the bumper buttons (LB, RB) with the trigger buttons (LT, RT)."))) {
++        s.swap_shoulders = !s.swap_shoulders;
++        settings::save();
++    }
+     int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
+     if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
+                    options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
+@@ -1300,6 +1311,7 @@ void Menu::controls() {
+             if (settings::overridden_by(key).empty()) value = fallback;
+         };
+         restore("input.confirm", s.confirm_south, d.confirm_south);
++        restore("input.swap_shoulders", s.swap_shoulders, d.swap_shoulders);
+         restore("input.dead_zone", s.dead_zone, d.dead_zone);
+         restore("input.stick_square", s.stick_square, d.stick_square);
+         restore("input.trigger", s.trigger, d.trigger);
+@@ -1472,6 +1484,54 @@ void play_together() {
+     static std::string copied;
+     static std::string typed_address;
+     section("Play together");
++    // Through the profile's public relay: nobody opens a port, and a room code is all the others need. When the relay cannot be
++    // reached, this game hosts directly instead (the router's ports are opened, see below) and shows the address to share.
++    static bool relay_fell_back = false;
++    if (!adhoc_relay_address().empty()) {
++        static bool relay_timing = false;
++        static Clock::time_point relay_since;
++        if (!adhoc_hosting()) {
++            if (text_row("room", "Room", s.adhoc_room, 12u, true, room_character,
++                         {false, {},
++                          "Players with the same room meet on the relay. Make one up, or press Play online to get one, "
++                          "and tell it to your friends. Changing it applies at once."})) {
++                settings::save();
++                if (adhoc_relay_selected()) adhoc_apply_settings(true);
++            }
++            const bool relay_on = adhoc_relay_selected();
++            if (button_row((relay_on ? "Playing online###relay" : "Play online###relay"),
++                           {false, {},
++                            "Goes on line through the public relay in your room: no address to type and no port to open. "
++                            "Then everyone enters the Online Guild Hall."})) {
++                relay_fell_back = false;
++                relay_timing = false;
++                adhoc_join_relay();
++            }
++            if (adhoc_relay_selected()) {
++                const adhoc::Diagnostics rd = adhoc::Client::get().diagnostics();
++                if (rd.state == adhoc::ServerState::Online) {
++                    relay_timing = false;
++                    info_row("Relay", "Connected. Room " + s.adhoc_room + ": share it with the others.");
++                } else {
++                    if (!relay_timing) {
++                        relay_timing = true;
++                        relay_since = Clock::now();
++                    }
++                    info_row("Relay", "Connecting...");
++                    if (Clock::now() - relay_since > std::chrono::seconds(12)) {
++                        // The relay is down, or this network blocks it: host directly with an opened router port instead.
++                        relay_fell_back = true;
++                        relay_timing = false;
++                        adhoc_host_start();
++                    }
++                }
++            } else {
++                relay_timing = false;
++            }
++        }
++        if (relay_fell_back && adhoc_hosting())
++            info_row("Relay", "Not reachable, so this game hosts directly. Share the internet address below.");
++    }
+     if (adhoc_hosting()) {
+         const adhoc::ServerStatus status = adhoc_host_status();
+         const std::string suffix =
+@@ -1697,6 +1757,7 @@ void Menu::network() {
+         };
+         restore("network.adhoc", s.adhoc, defaults.adhoc);
+         restore("network.server", s.adhoc_server, defaults.adhoc_server);
++        restore("network.room", s.adhoc_room, defaults.adhoc_room);
+         restore("network.nickname", s.adhoc_nickname, defaults.adhoc_nickname);
+         settings::save();
+         adhoc_apply_settings();

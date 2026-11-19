@@ -1,0 +1,6 @@
+base=0x0BFE8000
+name=block2
+size=32768
+code_size=24400
+hash=0x6D9E1DBECA149744
+source=BLOCK2.ELF
