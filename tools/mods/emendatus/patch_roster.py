@@ -49,15 +49,12 @@ def apply(corpus):
         "        ctx.gpr[5] = static_cast<std::int32_t>(ctx.gpr[17]) == -3 ? 33u : ((g_d012_select_mode == 0u || g_d012_select_mode == 5u) ? 32u : 33u);\n"
         "        aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(0), ctx.gpr[5]);\n"
         "    }\n"
-        "    { static int slot_lines = 0; if (slot_lines < 400) { ++slot_lines; std::fprintf(stderr, \"[roster-slot] row %d pos(s0) %d slot %u mode %u\\n\", static_cast<int>(ctx.gpr[17]), static_cast<int>(ctx.gpr[16]), ctx.gpr[5], g_d012_select_mode); } }\n"
         "    ctx.gpr[7] = (ctx.gpr[17] + ctx.gpr[17]);", "slot of position 33 in unit 0040")
     unit40.write_text(with_cstdio(text), encoding="utf-8", newline="\n")
 
     text = unit41.read_text(encoding="utf-8")
     text = replace_once(text, "constexpr std::uint32_t kTable = 0x08A864D0u;", "constexpr std::uint32_t kTable = 0x0BFEB200u;  // the mod's table (stock 0x08A864D0)", "table address")
-    text = replace_once(text, "std::uint32_t g_d012_grid_party = 0u;\n", "std::uint32_t g_d012_grid_party = 0u;\nstd::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared\n"
-                        "// The Arcade selects (Standard, Time Attack, Labyrinth) share one screen object whose words at +8 and +20 are 0x22 and 0x20 (Quick Battle: 0x1D and 0x21); the new character is not on them, as in the stock game.\n"
-                        "template <class M> static inline bool d012_arcade_select(M &m, std::uint32_t screen) { return m.aot_load32(screen + 8u) == 0x22u && m.aot_load32(screen + 20u) == 0x20u; }\n", "select mode global")
+    text = replace_once(text, "std::uint32_t g_d012_grid_party = 0u;\n", "std::uint32_t g_d012_grid_party = 0u;\nstd::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared\n", "select mode global")
     text = replace_once(text, "    g_d012_grid_party = 0u;\n", "    g_d012_grid_party = 0u;\n    g_d012_select_mode = mode;\n", "select mode set")
     text = replace_once(text, "static std::int16_t original[33][6];", "static std::int16_t original[34][6];", "original copy size")
     text = replace_once(text, "for (int r = 0; r < 33; ++r)\n            for (int c = 0; c < 6; ++c)\n                original[r][c]",
@@ -68,9 +65,7 @@ def apply(corpus):
         "            break;\n        }\n    }\n"
         "    std::fprintf(stderr, \"[roster-mod] table 0x%08X ids:\", kTable);\n"
         "    for (int r = 0; r < 34; ++r) std::fprintf(stderr, \" %02X\", static_cast<unsigned>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + 8)) & 0xFFFFu));\n"
-        "    std::fprintf(stderr, \" (screen %08X mode %u; words:\", screen, mode);\n"
-        "    for (std::uint32_t w = 0; w < 32u; ++w) std::fprintf(stderr, \" %X\", m.aot_load32(screen + w * 4u));\n"
-        "    std::fprintf(stderr, \")\\n\");\n"
+        "    std::fprintf(stderr, \" (screen %08X mode %u)\\n\", screen, mode);\n"
         "}\n"
         "void ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(", "roster trace")
     # the port's character description on hover reads the table by slot: the mod's table, 34 rows, ids up to 0x21
@@ -85,7 +80,7 @@ def apply(corpus):
         text, "L_08A85084:" + NL + "    ctx.gpr[22] = (0u | 0u);",
         NL.join([
             "L_08A85084:",
-            "    if (!g_d012_grid_party && !d012_arcade_select(aot_mem, ctx.gpr[19]) && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21",
+            "    if (!g_d012_grid_party && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21",
             "        const std::uint32_t list = aot_mem.aot_load32(ctx.gpr[19] + 32u);",
             "        if (list != 0u && aot_mem.aot_load32(list + (ctx.gpr[18] - 1u) * 8u) != 0x21u) {",
             "            aot_mem.aot_store32(list + ctx.gpr[18] * 8u, 0x21u);",
@@ -98,15 +93,14 @@ def apply(corpus):
     text = replace_once(
         text, "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));",
         "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));" + NL +
-        "    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game" +
-        NL + "    if (!g_d012_grid_party && ctx.gpr[4] == 0x21u && d012_arcade_select(aot_mem, ctx.gpr[19])) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // the Arcade selects have no new character either",
+        "    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game",
         "Original Quest rows")
     # trace: how many cells the builder counted, and the list of characters it picked them from
     text = replace_once(
         text, "    if (!g_d012_grid_party) {\n        if (ctx.gpr[22] >= 17u) {",
         "    {\n"
         "        const std::uint32_t w = aot_mem.aot_load32(ctx.gpr[19] + 40u), list = aot_mem.aot_load32(ctx.gpr[19] + 32u);\n"
-        "        std::fprintf(stderr, \"[roster-mod] cells counted %u, builder mode(fp) %u, list %08X count %u ids:\", ctx.gpr[22], ctx.gpr[30], list, ctx.gpr[18]);\n"
+        "        std::fprintf(stderr, \"[roster-mod] cells counted %u, list %08X count %u ids:\", ctx.gpr[22], list, ctx.gpr[18]);\n"
         "        for (std::uint32_t i = 0; i < ctx.gpr[18] && i < 40u; ++i) std::fprintf(stderr, \" %d\", static_cast<int>(aot_mem.aot_load32(list + i * 8u)));\n"
         "        std::fprintf(stderr, \"; 08B24328:\");\n"
         "        for (std::uint32_t i = 0; i < 8u; ++i) std::fprintf(stderr, \" %08X\", aot_mem.aot_load32(0x08B24328u + i * 4u));\n"
