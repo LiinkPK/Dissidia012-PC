@@ -32,7 +32,7 @@ $localFiles = "data\settings.ini", "data\pipeline_cache.bin", "data\pipeline_key
 # data\screenshots): they never ship.
 $localFolders = "data\logs", "data\screenshots", "logs"
 # Test leftovers and old copies that must not ship.
-$junk = "*.stale*", "*.old", "*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak",
+$junk = "*.stale*", "*.old", "*.old-*", "*.old.*","*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak",
     # what the test switches write beside the exe: traces, crash dumps and trigger files
     "roster_*.txt", "roster_trigger", "text_trace.txt", "text_trigger", "live.txt", "crash_report.txt", "*.dmp"
 # Linux and macOS files never go in the Windows zip: the shell scripts, the Linux binary and libraries, the .dylib files, and the Carlito font

@@ -4,8 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # Built on the PortableKit branch "d012": upstream PortableKit plus the patch series of the open-source port
 # third_party/dissidia012-pc (stencil, pixel mask, streaming music, movies, the present thread and more), and
 # built from that port's host code, which is credited and MIT-licensed (third_party/dissidia012-pc/LICENSE).
-# The game's generated code and overlay libraries are made from the player's own disc and never committed; they
-# live in work/ (generated/ and overlays/).
+# The game's generated code and overlay libraries are made from the player's own disc and never committed; they # live in work/ (generated/ and overlays/).
 project(Dissidia012 VERSION 0.2.0 LANGUAGES C CXX)
 if(WIN32)
     enable_language(RC)
