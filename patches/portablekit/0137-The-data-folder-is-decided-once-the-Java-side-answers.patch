@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 19 Nov 2026 00:00:00 +0100
+Subject: [PATCH] The data folder is decided once the Java side answers
+
+user_data_directory() asked for all files access once and kept the answer for the run, but before the activity exists every Java call says no, so a call that came early would have kept the private folder for the whole run. The answer is kept only once access is granted or the Java side answers at all (android::java_ready()), and the decision is made under a lock because several threads ask.
+---
+
+diff --git a/host/install/user_data.cpp b/host/install/user_data.cpp
+index 5476942..6e079db 100644
+--- a/host/install/user_data.cpp
++++ b/host/install/user_data.cpp
+@@ -6,6 +6,7 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <fstream>
++#include <mutex>
+ #include <string>
+ #include <system_error>
+ 
+@@ -119,8 +120,16 @@ std::filesystem::path user_data_directory() {
+     if (const char *dir = portablekit::env("DATA_DIR"); dir != nullptr && *dir != '\0') return path_from_utf8(dir);
+ #if defined(PORTABLEKIT_ANDROID_APP)
+     // Decided once per run: the folder in the phone's shared storage when the app may use it (see shared_data.hpp), else the private one.
+-    static const std::filesystem::path chosen =
+-        choose_data_root(private_data_directory(), shared_data_directory(), portablekit::android::all_files_access());
++    // Not before the Java side answers: a "no" given too early would keep the private folder for the whole run.
++    static std::mutex decision_lock;
++    static std::filesystem::path chosen;
++    static bool decided = false;
++    const std::lock_guard<std::mutex> guard(decision_lock);
++    if (!decided) {
++        const bool access = portablekit::android::all_files_access();
++        chosen = choose_data_root(private_data_directory(), shared_data_directory(), access);
++        decided = access || portablekit::android::java_ready();
++    }
+     return chosen;
+ #elif defined(PORTABLEKIT_HAS_SDL)
+     char *pref = SDL_GetPrefPath(portablekit::game().data_organization, portablekit::game().data_application);
+diff --git a/host/platform/android_jni.cpp b/host/platform/android_jni.cpp
+index 4be0539..2f28d30 100644
+--- a/host/platform/android_jni.cpp
++++ b/host/platform/android_jni.cpp
+@@ -81,6 +81,11 @@ void relaunch() {
+     call.failed();
+ }
+ 
++bool java_ready() {
++    Call call;
++    return call.ok();
++}
++
+ bool all_files_access() {
+     Call call;
+     if (!call.ok()) return false;
+diff --git a/host/platform/android_jni.hpp b/host/platform/android_jni.hpp
+index 27fc07c..de993de 100644
+--- a/host/platform/android_jni.hpp
++++ b/host/platform/android_jni.hpp
+@@ -28,6 +28,8 @@ void relaunch();
+ // Whether the app may read and write any folder (saves, cheats, mods, textures wherever the player keeps them), and the request
+ // for it: the system's settings page for the app, which the player leaves by going back to the game.
+ [[nodiscard]] bool all_files_access();
++// Whether the Java side answers yet: before the activity exists every call here says no.
++[[nodiscard]] bool java_ready();
+ void request_all_files_access();
+ 
+ // A folder the player picks, as a tree URI; nothing when cancelled.
+-- 
+2.43.0
+

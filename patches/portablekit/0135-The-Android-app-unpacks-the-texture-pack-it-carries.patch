@@ -1,0 +1,149 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 19 Nov 2026 00:00:00 +0100
+Subject: [PATCH] The Android app unpacks the texture pack it carries
+
+An APK that carries assets/textures (build_apk.sh TEXTURE_DIR) copies it into textures/ of the data folder at the first start, before the game thread begins, so the HD pack is in place without any import. A marker file holds a hash of textures/manifest.txt: when it matches nothing is copied, and after an update with another pack the files with the wrong size are replaced. A file with the right size is kept, a copy that stopped goes on where it stopped, nothing is ever deleted, and the copy is skipped when the phone lacks the room.
+---
+
+diff --git a/host/platform/android_app.cpp b/host/platform/android_app.cpp
+index f5c6539..c62872b 100644
+--- a/host/platform/android_app.cpp
++++ b/host/platform/android_app.cpp
+@@ -5,6 +5,7 @@
+ // stack the other platforms give their main thread.
+ 
+ #include "app_paths.hpp"
++#include "install/user_data.hpp"
+ #include "profile.hpp"
+ 
+ #include <SDL3/SDL.h>
+@@ -16,7 +17,9 @@
+ #include <cstdio>
+ #include <filesystem>
+ #include <fstream>
++#include <sstream>
+ #include <string>
++#include <vector>
+ 
+ int portablekit_main(int argc, char **argv);
+ 
+@@ -85,6 +88,107 @@ void unpack_bundled_fonts() {
+     portablekit::set_bundled_resource_directory(root);
+ }
+ 
++// The APK carries the game's HD texture pack (assets/textures, with textures/manifest.txt: one "path<TAB>size" line per file), so nobody has
++// to import it. It is copied into textures/ of the data folder on the first start, and again after an update that brings another pack.
++// A marker file in that folder holds a hash of the manifest: when it matches, nothing is copied. A file already there with the right
++// size is kept, so a copy that was interrupted goes on where it stopped. Nothing in the folder is ever deleted.
++void unpack_bundled_textures() {
++    SDL_IOStream *list = SDL_IOFromFile("textures/manifest.txt", "rb");
++    if (list == nullptr) return;  // this APK carries no pack
++    std::size_t length = 0;
++    void *text = SDL_LoadFile_IO(list, &length, true);
++    if (text == nullptr) return;
++    const std::string manifest(static_cast<const char *>(text), length);
++    SDL_free(text);
++
++    std::uint64_t hash = 1469598103934665603ull;  // FNV-1a of the manifest's text
++    for (const unsigned char c : manifest) hash = (hash ^ c) * 1099511628211ull;
++    const std::string stamp = std::to_string(hash) + " " + std::to_string(manifest.size());
++
++    const std::filesystem::path root = portablekit::install::user_data_directory() / "textures";
++    const std::filesystem::path marker = root / ".bundled_textures";
++    {
++        std::ifstream in(marker);
++        std::string have;
++        std::getline(in, have);
++        if (have == stamp) return;
++    }
++
++    struct Item {
++        std::string path;
++        std::uint64_t size;
++    };
++    std::vector<Item> items;
++    std::uint64_t total = 0;
++    std::istringstream lines(manifest);
++    std::string line;
++    while (std::getline(lines, line)) {
++        const std::size_t tab = line.find('\t');
++        if (tab == std::string::npos) continue;
++        Item item{line.substr(0, tab), std::strtoull(line.c_str() + tab + 1, nullptr, 10)};
++        if (item.path.empty() || item.path.find("..") != std::string::npos) continue;
++        total += item.size;
++        items.push_back(std::move(item));
++    }
++
++    std::error_code ec;
++    std::filesystem::create_directories(root, ec);
++    const std::filesystem::space_info space = std::filesystem::space(root, ec);
++    if (!ec && space.available < total + (64ull << 20)) {
++        std::fprintf(stderr, "[textures] not enough room for the bundled texture pack: %llu MiB needed, %llu MiB free\n",
++                     static_cast<unsigned long long>(total >> 20), static_cast<unsigned long long>(space.available >> 20));
++        return;
++    }
++
++    std::fprintf(stderr, "[textures] copying the bundled texture pack (%zu files, %llu MiB) to %s\n", items.size(),
++                 static_cast<unsigned long long>(total >> 20), root.string().c_str());
++    std::vector<char> buffer(1u << 20);
++    std::uint64_t done = 0;
++    unsigned next_report = 10;
++    bool failed = false;
++    for (const Item &item : items) {
++        const std::filesystem::path target = root / std::filesystem::path(std::u8string(item.path.begin(), item.path.end()));
++        if (std::filesystem::file_size(target, ec) == item.size && !ec) {
++            done += item.size;
++            continue;
++        }
++        std::filesystem::create_directories(target.parent_path(), ec);
++        SDL_IOStream *in = SDL_IOFromFile(("textures/" + item.path).c_str(), "rb");
++        if (in == nullptr) {
++            std::fprintf(stderr, "[textures] cannot read %s from the APK\n", item.path.c_str());
++            failed = true;
++            continue;
++        }
++        const std::filesystem::path partial = target.string() + ".partial";
++        bool ok = true;
++        {
++            std::ofstream out(partial, std::ios::binary | std::ios::trunc);
++            for (;;) {
++                const std::size_t got = SDL_ReadIO(in, buffer.data(), buffer.size());
++                if (got == 0) break;
++                out.write(buffer.data(), static_cast<std::streamsize>(got));
++            }
++            ok = static_cast<bool>(out);
++        }
++        SDL_CloseIO(in);
++        if (ok) std::filesystem::rename(partial, target, ec);
++        if (!ok || ec) {
++            std::filesystem::remove(partial, ec);
++            std::fprintf(stderr, "[textures] cannot write %s\n", target.string().c_str());
++            failed = true;
++            continue;
++        }
++        done += item.size;
++        if (total != 0 && done * 100u / total >= next_report) {
++            std::fprintf(stderr, "[textures] %u%%\n", next_report);
++            next_report += 10;
++        }
++    }
++    if (failed) return;  // no marker: the next start tries again, keeping what was copied
++    std::ofstream(marker, std::ios::trunc) << stamp << "\n";
++    std::fprintf(stderr, "[textures] the bundled texture pack is in place\n");
++}
++
+ } // namespace
+ 
+ int main(int argc, char *argv[]) {
+@@ -92,6 +196,7 @@ int main(int argc, char *argv[]) {
+     // Back opens the in-game menu instead of leaving the app.
+     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+     unpack_bundled_fonts();
++    unpack_bundled_textures();
+     Launch launch{argc, argv, 1};
+     pthread_attr_t attributes;
+     pthread_attr_init(&attributes);
+-- 
+2.43.0
+

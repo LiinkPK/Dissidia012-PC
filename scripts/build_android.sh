@@ -101,10 +101,20 @@ fi
 echo "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5  $FONT_CACHE/NotoSansCJKjp-Regular.otf" > "$FONT_CACHE/font.sha256"
 if command -v sha256sum >/dev/null 2>&1; then sha256sum -c "$FONT_CACHE/font.sha256"; else shasum -a 256 -c "$FONT_CACHE/font.sha256"; fi
 
+echo "== the HD texture pack: inside the APK, so nobody has to import it =="
+# TEXTURE_DIR is the textures folder (textures.ini in it, or in a folder of it); by default the repo's release/data/textures. A release
+# sets STRICT_TEXTURES=1, so an APK without the pack is never published by mistake.
+TEXTURE_DIR="${TEXTURE_DIR:-$ROOT/release/data/textures}"
+if [ ! -f "$TEXTURE_DIR/textures.ini" ] && [ ! -f "$TEXTURE_DIR/ULES01505/textures.ini" ]; then
+  if [ -n "${STRICT_TEXTURES:-}" ]; then echo "ERROR: no texture pack at $TEXTURE_DIR (textures.ini is missing)"; exit 1; fi
+  echo "WARNING: no texture pack at $TEXTURE_DIR: this APK has none (set TEXTURE_DIR, or STRICT_TEXTURES=1 to refuse)"
+  TEXTURE_DIR=""
+fi
+
 echo "== 6/6 the APK =="
 APK="$REL/d012_native-android.apk"
 rm -f "$APK"
-APP_ID="$APP_ID" GAME_RES="$ROOT/packaging/android/res" GAME_REPO="$ROOT" FONT_DIR="$FONT_CACHE" \
+APP_ID="$APP_ID" GAME_RES="$ROOT/packaging/android/res" GAME_REPO="$ROOT" FONT_DIR="$FONT_CACHE" TEXTURE_DIR="$TEXTURE_DIR" \
 \
   bash "$PK/packaging/android/build_apk.sh" "$BUILD" "$SDL_SRC" "$SDL_LIB" "$APK"
 [ -f "$APK" ] || { echo "The APK was not made"; exit 1; }

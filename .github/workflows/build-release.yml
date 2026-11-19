@@ -174,6 +174,17 @@ jobs:
           else
             echo "No signing secrets: throwaway key (testing only)."
           fi
+      - name: HD texture pack (goes inside the APK, so nobody has to import it)
+        run: |
+          curl -fL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/data.zip" "https://github.com/$GITHUB_REPOSITORY/releases/download/data-pack/data.zip"
+          mkdir -p "$RUNNER_TEMP/pack"
+          # unzip exits 1 for a mere warning; anything above is a real failure
+          unzip -q -o "$RUNNER_TEMP/data.zip" "textures/*" -d "$RUNNER_TEMP/pack" || [ $? -eq 1 ]
+          rm -f "$RUNNER_TEMP/data.zip"
+          test -f "$RUNNER_TEMP/pack/textures/textures.ini" || test -f "$RUNNER_TEMP/pack/textures/ULES01505/textures.ini"
+          echo "TEXTURE_DIR=$RUNNER_TEMP/pack/textures" >> "$GITHUB_ENV"
+          echo "STRICT_TEXTURES=1" >> "$GITHUB_ENV"
+          du -sh "$RUNNER_TEMP/pack/textures"
       - name: Build and package
         run: bash scripts/build_android.sh
       - uses: actions/upload-artifact@v4

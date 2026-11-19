@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Thu, 19 Nov 2026 00:00:00 +0100
+Subject: [PATCH] The Android APK can carry a texture pack in its assets
+
+build_apk.sh takes TEXTURE_DIR (optional): the folder goes into the APK assets under textures/, with textures/manifest.txt listing every file and its size, since an app cannot list its assets. Nothing changes without it.
+---
+
+diff --git a/packaging/android/build_apk.sh b/packaging/android/build_apk.sh
+index 5d1e625..484144d 100755
+--- a/packaging/android/build_apk.sh
++++ b/packaging/android/build_apk.sh
+@@ -21,6 +21,8 @@
+ # assets, and the app unpacks the font on its first start. Without it the
+ # game's text is blank unless the device has a font stb_truetype reads.
+ #
++# TEXTURE_DIR (optional): see below; it makes the APK as large as the pack.
++#
+ # ANDROID_HOME must name the SDK (build-tools and a platform are needed).
+ # DEBUGGABLE=1 marks the app debuggable, so `adb shell run-as` reaches its
+ # files (its log, its data) on a test device; leave it out for players.
+@@ -83,6 +85,16 @@ if [[ -n "${FONT_DIR:-}" ]]; then
+     cp "$FONT_DIR/NotoSansCJKjp-Regular.otf" "$work/assets/fonts/"
+     cp "$FONT_DIR/NotoSansCJK-LICENSE.txt" "$work/assets/licenses/NotoSansCJK-OFL.txt"
+ fi
++# TEXTURE_DIR may name the textures folder of a game (the one that holds a folder per disc id, each with textures.ini): it goes into the
++# APK's assets under textures/, with textures/manifest.txt listing every file and its size (an app cannot list its assets), and the app
++# unpacks it on its first start, so the HD pack is there without the player importing anything.
++if [[ -n "${TEXTURE_DIR:-}" ]]; then
++    mkdir -p "$work/assets/textures"
++    cp -r "$TEXTURE_DIR"/. "$work/assets/textures/"
++    (cd "$work/assets/textures" && find . -type f ! -name manifest.txt | sed 's|^\./||' | sort | while IFS= read -r f; do
++        printf '%s\t%s\n' "$f" "$(wc -c < "$f" | tr -d ' ')"
++    done > manifest.txt)
++fi
+ assets=(-A "$work/assets")
+ "$build_tools/aapt2" compile --dir "$here/res" -o "$work/res.zip"
+ "$build_tools/aapt2" compile --dir "$game_res" -o "$work/game-res.zip"
+-- 
+2.43.0
+
