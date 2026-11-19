@@ -49,6 +49,7 @@ jobs:
             echo "KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "KEYSTORE_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
             echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "Signing with the release key."
           else
             echo "No signing secrets: throwaway key (testing only)."
           fi
