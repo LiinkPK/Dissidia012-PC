@@ -150,6 +150,8 @@ std::uint32_t g_d012_grid_cols = 17u;
 std::uint32_t g_d012_grid_rows = 2u;
 std::uint32_t g_d012_grid_party = 0u;
 std::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared
+// The mod's new character is on the Quick Battle player and CPU selects and the Party roster only; every other select screen (Arcade, Original Quest...) is the stock game's.
+static inline bool d012_new_character_screen() { return g_d012_select_mode == 0u || g_d012_select_mode == 1u || g_d012_select_mode == 5u; }
 
 static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std::uint32_t mode) {
     // The Party roster is laid out like the CPU roster now (2 rows, the last cell "Remove from Party" after Random).
@@ -184,7 +186,9 @@ static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std:
     }
     std::fprintf(stderr, "[roster-mod] table 0x%08X ids:", kTable);
     for (int r = 0; r < 34; ++r) std::fprintf(stderr, " %02X", static_cast<unsigned>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + 8)) & 0xFFFFu));
-    std::fprintf(stderr, " (screen %08X mode %u)\n", screen, mode);
+    std::fprintf(stderr, " (screen %08X mode %u; words:", screen, mode);
+    for (std::uint32_t w = 0; w < 24u; ++w) std::fprintf(stderr, " %X", m.aot_load32(screen + w * 4u));
+    std::fprintf(stderr, ")\n");
 }
 void ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(CorpusRuntime &rt, AllegrexContext &ctx, std::uint16_t direct_entry_id, AotFastView &aot_mem) {
     std::uint32_t jump_target = 0u;
@@ -18906,7 +18910,7 @@ L_08A85080:
     ctx.gpr[5] = (ctx.gpr[5] + static_cast<std::uint32_t>(2));
     goto L_08A85084;
 L_08A85084:
-    if (!g_d012_grid_party && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21
+    if (!g_d012_grid_party && d012_new_character_screen() && ctx.gpr[18] > 0u && ctx.gpr[18] < 40u) {  // the mod's new character, id 0x21
         const std::uint32_t list = aot_mem.aot_load32(ctx.gpr[19] + 32u);
         if (list != 0u && aot_mem.aot_load32(list + (ctx.gpr[18] - 1u) * 8u) != 0x21u) {
             aot_mem.aot_store32(list + ctx.gpr[18] * 8u, 0x21u);
@@ -18924,7 +18928,7 @@ L_08A8508C:
     goto L_08A85090;
 L_08A85090:
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));
-    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game
+    if (!g_d012_grid_party && ((ctx.gpr[30] == 2u && ctx.gpr[4] == 0x17u) || (ctx.gpr[4] == 0x21u && !d012_new_character_screen()))) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos; only the Quick Battle player and CPU selects and the Party roster have the new character, every other select is the stock game's
     goto L_08A85094;
 L_08A85094:
     ctx.gpr[17] = (0u | 0u);
