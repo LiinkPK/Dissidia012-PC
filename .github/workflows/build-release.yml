@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v1.0.5 (it must be the same as kReleaseVersion in the code)"
+        description: "Release tag (must be the same as kReleaseVersion)"
         required: true
       skip_macos:
-        description: "Leave macOS out of this run (when GitHub has no macOS runner); build it later and attach it"
+        description: "Skip macOS in this run"
         type: boolean
         default: false
 
