@@ -18982,6 +18982,7 @@ L_08A850C8:
     ctx.gpr[4] = (ctx.gpr[19] | 0u);
     goto L_08A850CC;
 L_08A850CC:
+    { static int avail_lines = 0; if (avail_lines < 400) { ++avail_lines; std::fprintf(stderr, "[roster-avail] screen %08X id %d available %u\n", ctx.gpr[19], static_cast<int>(aot_mem.aot_load32(ctx.gpr[29] + 0u)), ctx.gpr[2]); } }
     { const bool branch_taken = ctx.gpr[2] != 0u;
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(4), ctx.gpr[2]);
       if (branch_taken) {
