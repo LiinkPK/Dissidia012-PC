@@ -4,6 +4,27 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+static inline bool d012_hook_ok(std::uint32_t a) {
+    // D012_NO_HOOKS=1 turns every Emendatus hook off; D012_HOOK_RANGE=lo-hi (hex) keeps only the hooks whose site is in that range.
+    static bool init = false, off = false;
+    static std::uint32_t lo = 0u, hi = 0xFFFFFFFFu;
+    if (!init) {
+        init = true;
+        off = std::getenv("D012_NO_HOOKS") != nullptr;
+        if (const char *r = std::getenv("D012_HOOK_RANGE")) {
+            unsigned long l = 0, h = 0;
+            if (std::sscanf(r, "%lx-%lx", &l, &h) == 2) { lo = static_cast<std::uint32_t>(l); hi = static_cast<std::uint32_t>(h); }
+        }
+    }
+    return !off && a >= lo && a <= hi;
+}
+static inline void d012_hook_trace(std::uint32_t a, std::uint32_t r4, std::uint32_t r5, std::uint32_t r6) {
+    static int total = 0;
+    static const bool on = std::getenv("D012_HOOK_TRACE") != nullptr;
+    if (on && total < 100000) { ++total; { static std::FILE *tf = std::fopen("d012_trace.log", "a"); if (tf) { std::fprintf(tf, "[hook] %08X a0=%08X a1=%08X a2=%08X\n", a, r4, r5, r6); std::fflush(tf); } } }
+}
 #include <limits>
 
 namespace psprecomp {
@@ -16115,6 +16136,7 @@ L_088CB170:
 L_088CB174:
     ctx.gpr[31] = (0x088CB17Cu);
     ctx.gpr[4] = (ctx.gpr[5] | 0u);
+    if (d012_hook_ok(0x088CB174u) && aot_mem.aot_load32(0x088CB174u) == 0x0EFFA850u && (d012_hook_trace(0x088CB174u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) { ctx.pc = 0x0BFEA140u; if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x088CB17Cu) goto L_088CB17C; return; }
     goto L_088CB3B4;
 L_088CB178:
     ctx.gpr[4] = (ctx.gpr[5] | 0u);
@@ -16219,6 +16241,7 @@ L_088CB1E0:
     ctx.gpr[31] = (aot_mem.aot_load32(ctx.gpr[29] + static_cast<std::uint32_t>(4)));
     goto L_088CB1E4;
 L_088CB1E4:
+    if (d012_hook_ok(0x088CB1E4u) && aot_mem.aot_load32(0x088CB1E4u) == 0x0AFFA818u && (d012_hook_trace(0x088CB1E4u, ctx.gpr[4], ctx.gpr[5], ctx.gpr[6]), true)) { ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(16)); ctx.pc = 0x0BFEA060u; (void)rt.invoke_chained_call(ctx, &aot_mem); return; }
     jump_target = ctx.gpr[31];
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(16));
     local_pc = jump_target;

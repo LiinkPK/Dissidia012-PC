@@ -1,6 +1,7 @@
 #include "psprecomp/corpus_abi.hpp"
 #include "ovl089DD4C0_menu_56F41D05F1B93EE9_units.hpp"
 #include <atomic>
+#include <cstdio>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -14818,6 +14819,7 @@ L_08AA4598:
     ctx.gpr[5] = (ctx.gpr[6] + ctx.gpr[5]);
     goto L_08AA459C;
 L_08AA459C:
+    { static int n = 0; if (n < 60) { ++n; std::fprintf(stderr, "[menu-lookup] screen(a4)=%08X id=%u table=%08X entry_addr=%08X entry=%08X\n", ctx.gpr[4], aot_mem.aot_load16(ctx.gpr[4] + 8u), aot_mem.aot_load32(ctx.gpr[4] + 12u), ctx.gpr[5], aot_mem.aot_load32(ctx.gpr[5])); } }
     ctx.gpr[6] = (aot_mem.aot_load16(ctx.gpr[4] + static_cast<std::uint32_t>(1410)));
     goto L_08AA45A0;
 L_08AA45A0:

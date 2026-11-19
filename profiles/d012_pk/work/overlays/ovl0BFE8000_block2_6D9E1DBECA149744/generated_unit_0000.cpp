@@ -1,6 +1,7 @@
 #include "psprecomp/corpus_abi.hpp"
 #include "ovl0BFE8000_block2_6D9E1DBECA149744_units.hpp"
 #include <atomic>
+#include <cstdio>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -4252,6 +4253,7 @@ LOCAL_DISPATCH:
     }
     }
 L_0BFE8000:
+    { static int n = 0; if (n < 8) { ++n; std::fprintf(stderr, "[block2] entry: a0=%08X a1=%08X ra=%08X\n", ctx.gpr[4], ctx.gpr[5], ctx.gpr[31]); } }
     ctx.gpr[29] = (ctx.gpr[29] + static_cast<std::uint32_t>(-32));
     goto L_0BFE8004;
 L_0BFE8004:
@@ -8639,6 +8641,7 @@ L_0BFE91FC:
     ctx.gpr[12] = (ctx.gpr[11] & 65535u);
     goto L_0BFE9200;
 L_0BFE9200:
+    { static int n = 0; if (n < 8) { ++n; std::fprintf(stderr, "[block2] applier_start: s0=%08X a1=%08X a2=%08X\n", ctx.gpr[16], ctx.gpr[5], ctx.gpr[6]); } }
     { const bool branch_taken = ctx.gpr[12] != ctx.gpr[5];
     ctx.gpr[11] = (ctx.gpr[11] >> 16u);
       if (branch_taken) {
@@ -8706,6 +8709,7 @@ L_0BFE9234:
     ctx.gpr[8] = (ctx.gpr[8] + static_cast<std::uint32_t>(12));
     goto L_0BFE9238;
 L_0BFE9238:
+    { static int n = 0; if (n < 8) { ++n; std::fprintf(stderr, "[block2] applier_1238: s0=%08X a0=%08X a1=%08X\n", ctx.gpr[16], ctx.gpr[4], ctx.gpr[5]); } }
     { const bool branch_taken = 0u == 0u;
     ctx.gpr[9] = (ctx.gpr[9] + static_cast<std::uint32_t>(-1));
       if (branch_taken) {
@@ -9143,6 +9147,7 @@ L_0BFE93FC:
     ctx.gpr[13] = (aot_mem.aot_load32(ctx.gpr[8] + static_cast<std::uint32_t>(4)));
     goto L_0BFE9400;
 L_0BFE9400:
+    { static int n = 0; if (n < 300) { ++n; std::fprintf(stderr, "[block2] applier_store: addr=%08X value=%08X\n", ctx.gpr[10] + 4u, ctx.gpr[13]); } }
     aot_mem.aot_store32(ctx.gpr[10] + static_cast<std::uint32_t>(4), ctx.gpr[13]);
     goto L_0BFE9404;
 L_0BFE9404:
@@ -15243,6 +15248,7 @@ L_0BFEAEAC:
     // nop
     goto L_0BFEAEB0;
 L_0BFEAEB0:
+    { static int n = 0; if (n < 40) { ++n; std::fprintf(stderr, "[block2] hook_2EB0: id(s3)=%u a0=%08X a1=%08X ra=%08X\n", ctx.gpr[19], ctx.gpr[4], ctx.gpr[5], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[19]);
     goto L_0BFEAEB4;
 L_0BFEAEB4:
@@ -15290,6 +15296,7 @@ L_0BFEAED8:
     // nop
     goto L_0BFEAEDC;
 L_0BFEAEDC:
+    { static int n = 0; if (n < 40) { ++n; std::fprintf(stderr, "[block2] hook_2EDC: id(s3)=%u a0=%08X a1=%08X ra=%08X\n", ctx.gpr[19], ctx.gpr[4], ctx.gpr[5], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[19]);
     goto L_0BFEAEE0;
 L_0BFEAEE0:
@@ -15337,6 +15344,7 @@ L_0BFEAF04:
     // nop
     goto L_0BFEAF08;
 L_0BFEAF08:
+    { static int n = 0; if (n < 40) { ++n; std::fprintf(stderr, "[block2] hook_2F08: id(s3)=%u a0=%08X a1=%08X ra=%08X\n", ctx.gpr[19], ctx.gpr[4], ctx.gpr[5], ctx.gpr[31]); } }
     ctx.gpr[4] = (ctx.gpr[5] + ctx.gpr[16]);
     goto L_0BFEAF0C;
 L_0BFEAF0C:
