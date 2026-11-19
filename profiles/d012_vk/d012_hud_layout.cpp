@@ -92,6 +92,12 @@ constexpr HudPiece kPieces[] = {
     {29, 0x722A, true, "Party roster right panel, slot rows: 85% about the middle of the right edge", false, 0x19},
     {29, 0x7218, true, "Party roster portrait strips (x 354..480, y 67..226 in a capture): same panel scale", false, 0x19},
     {29, 0x722E, true, "Party roster right panel, frame: same", false, 0x19},
+    // Data Config > Party > Party Settings (kind 25): the same panel, found by what each layout is made of in a trace of both screens
+    // (D012_TRACE_ROSTER): 0x622E has the frame's two sprites, (0,0) and (373,245); 0x622C the slot rows' ten, from (480,191); 0x620C
+    // is five single-sprite layouts from (354,67), the strips' x and y.
+    {25, 0x622E, true, "Party Settings right panel, frame: the Quick Battle panel's scale", false, 0x19},
+    {25, 0x622C, true, "Party Settings right panel, slot rows: same", false, 0x19},
+    {25, 0x620C, true, "Party Settings right panel, portrait strips (x 354, y 67 in the trace): same", false, 0x19},
     {30, 0x163E, true, "Story Mode party panel frame (low 13 bits of the id): same panel scale", false, 0x19},
     {30, 0x163C, true, "Story Mode party panel slot rows: same", false, 0x19},
     {30, 0x161E, true, "Story Mode party panel portrait strips: same", false, 0x19},
@@ -196,7 +202,7 @@ int roster_role(std::uint8_t kind, std::uint16_t id) {
     // Data Config > Party > Party Settings: the same 34-cell grid as the Quick Battle party screen (rows of 6, 10, 10, 8 at
     // y = 113, 152, 191, 230), whose cursor moves over two rows of 16 and 18 while the game draws four. Read off a trace
     // (D012_TRACE_ROSTER): cells 0x6218; the frame 0x6228, whose sprite 1 follows the cursor; the hand 0x6224, whose sprite 7
-    // does. Both of those layouts have a second instance in a side panel: roster_role_of leaves it out.
+    // does. Each also has a second instance in the right panel (the slot cursor): they are marked like the grid's, as in Quick Battle.
     if (kind == 25u) return id == 0x6218u ? 1 : id == 0x6228u ? 2 : id == 0x6224u ? 3 : 0;
     return 0;
 }
@@ -354,19 +360,6 @@ unsigned active_sprites(Guest *g, std::uint32_t layout) {
     return count;
 }
 
-// The role of one layout. The Party Settings screen (kind 25) has a second frame and a second hand layout in a side panel: they are
-// told apart by the first sprite, which never moves (the frame's is at (92, 113), the hand's at (3, 119)).
-int roster_role_of(Guest *g, std::uint32_t layout, std::uint8_t kind, std::uint16_t id) {
-    const int role = roster_role(kind, id);
-    if (kind != 25u || (role != 2 && role != 3)) return role;
-    const std::uint32_t sprite = g_ld32(g, layout);
-    if (sprite == 0u || !in_guest(g, sprite, 0x40u)) return 0;
-    const float x = load_float(g, sprite + 0x10u), y = load_float(g, sprite + 0x14u);
-    const bool frame = x == 92.0f && y == 113.0f;
-    const bool hand = x == 3.0f && y == 119.0f;
-    return (role == 2 && frame) || (role == 3 && hand) ? role : 0;
-}
-
 // A call of the layout draw functions for `layout`: the first one for a layout ends the last one's span and,
 // for a scaled layout, begins its own.
 void mark_layout(Guest *g, std::uint32_t layout) {
@@ -382,7 +375,7 @@ void mark_layout(Guest *g, std::uint32_t layout) {
         std::uint8_t kind;
         std::uint16_t id;
         layout_name(g, layout, kind, id);
-        const int role = roster_role_of(g, layout, kind, id);
+        const int role = roster_role(kind, id);
         if (role != 0) {
             left = false;
             mode_final = 0;
@@ -401,7 +394,7 @@ void mark_layout(Guest *g, std::uint32_t layout) {
     std::uint8_t role_kind;
     std::uint16_t role_id;
     layout_name(g, layout, role_kind, role_id);
-    const bool is_roster_layout = roster_role_of(g, layout, role_kind, role_id) != 0;
+    const bool is_roster_layout = roster_role(role_kind, role_id) != 0;
     // Layout kind 0 id 0xFFFF draws the status icons over the HP bars (also animated ones, with many quads) and, while an EX
     // Finisher input is up, that finisher's gauge or command input (every character's own). During a finisher it is left as the
     // game draws it; the rest of the time it scales.
@@ -476,10 +469,13 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
             all += item;
             // The frame and hand candidates of the Party Settings screen (kind 25): every sprite of the chain, since the one that
             // follows the cursor may not be the first.
-            if (kind == 25u && (id == 0x6228u || id == 0x6224u || id == 0x6226u)) {
+            // Also every other kind 25 layout and the Quick Battle party panel's three (to compare the two screens' panels), with
+            // each sprite's scale.
+            if (kind == 25u || (kind == 29u && (id == 0x722Au || id == 0x7218u || id == 0x722Eu))) {
                 unsigned n = 0;
                 for (std::uint32_t s = first; s != 0u && n < 16u && in_guest(g, s, 0x40u); s = g_ld32(g, s + 0x3Cu), ++n) {
-                    std::snprintf(item, sizeof item, " [%u:(%g,%g)]", n, load_float(g, s + 0x10u), load_float(g, s + 0x14u));
+                    std::snprintf(item, sizeof item, " [%u:(%g,%g) x%g,%g]", n, load_float(g, s + 0x10u), load_float(g, s + 0x14u),
+                                  load_float(g, s + 0x18u), load_float(g, s + 0x1Cu));
                     all += item;
                 }
             }
@@ -494,7 +490,7 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         std::uint8_t kind;
         std::uint16_t id;
         layout_name(g, layout, kind, id);
-        const int role = roster_role_of(g, layout, kind, id);
+        const int role = roster_role(kind, id);
         if (role == 0) continue;
         // Every cell layout counts, drawn or not: the Party roster hides the cells that scroll out of its window, and
         // counting only the drawn ones switched the handling off after the first frame. The party icons screen is

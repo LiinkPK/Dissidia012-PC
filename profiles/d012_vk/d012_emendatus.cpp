@@ -28,6 +28,7 @@
 #endif
 #if defined(PORTABLEKIT_HAS_RENDERER)
 #include "ui/ui.hpp"
+#include "ui/file_browser.hpp"
 #include "ui/updater.hpp"
 #include "ui/widgets.hpp"
 #include <imgui.h>
@@ -762,6 +763,24 @@ std::vector<Choice> choices() {
     return found;
 }
 
+// The files of the mod that the download writes: the only names it ever creates, replaces or deletes in mods/.
+static const char *const kModFiles[] = {"emendatus_assets.bin", "p_sev120.objx", "D_SEV120.gmo", "D_SEV120.objx", "P_SEV120_1P.gmo", "P_SEV120_2P.gmo", "P_SEV120_3P.gmo"};
+
+// Whether two files hold the same bytes.
+bool same_content(const std::filesystem::path &a, const std::filesystem::path &b) {
+    std::error_code ec;
+    if (std::filesystem::file_size(a, ec) != std::filesystem::file_size(b, ec) || ec) return false;
+    std::ifstream first(a, std::ios::binary), second(b, std::ios::binary);
+    if (!first || !second) return false;
+    char x[64 * 1024], y[64 * 1024];
+    while (first.read(x, sizeof(x)) || first.gcount() > 0) {
+        const std::streamsize count = first.gcount();
+        second.read(y, count);
+        if (second.gcount() != count || std::memcmp(x, y, static_cast<std::size_t>(count)) != 0) return false;
+    }
+    return true;
+}
+
 void download_into(std::string folder) {
     set_phase(Phase::Finding);
     g_done = 0;
@@ -769,14 +788,17 @@ void download_into(std::string folder) {
     std::string error;
     // The whole mods/ folder of the data pack: the big data file and the new character's files. The small files are fetched again every
     // time (a few MB, so a changed one is always replaced); the big one only when its size is not the expected one.
-    static const char *const kModFiles[] = {"emendatus_assets.bin", "p_sev120.objx", "D_SEV120.gmo", "D_SEV120.objx",
-                                            "P_SEV120_1P.gmo",      "P_SEV120_2P.gmo", "P_SEV120_3P.gmo"};
     for (const char *file : kModFiles) {
         const std::string name = file;
         const bool big = name == "emendatus_assets.bin";
         const std::filesystem::path target = portablekit::install::path_from_utf8(folder) / "mods" / name;
         std::error_code ec;
         if (big && std::filesystem::file_size(target, ec) == kEmTailSize && !ec) continue;
+        // Only these seven names are ever written, so a file of the player's own in mods/ is never touched. A small file that is already
+        // there is fetched beside it and replaces it only when the release's differs: one that is the same is left as it is.
+        const bool replacing = !big && std::filesystem::exists(target, ec);
+        std::filesystem::path fetched = target;
+        if (replacing) fetched += ".new";
         set_phase(Phase::Finding);
         const std::string url = portablekit::ui::updater::latest_asset_url(name, error);
         if (url.empty()) {
@@ -787,10 +809,10 @@ void download_into(std::string folder) {
         g_done = 0;
         g_total = big ? kEmTailSize : 0;
 #if defined(PORTABLEKIT_ANDROID_APP)
-        const bool ok = portablekit::android::download_to(url, portablekit::install::path_to_utf8(target), big ? kEmTailSize : 0u, error);
+        const bool ok = portablekit::android::download_to(url, portablekit::install::path_to_utf8(fetched), big ? kEmTailSize : 0u, error);
 #else
         const bool ok = portablekit::ui::updater::download_file(
-            url, target, big ? kEmTailSize : 0u,
+            url, fetched, big ? kEmTailSize : 0u,
             [](std::uint64_t done, std::uint64_t total) {
                 g_done = done;
                 g_total = total;
@@ -798,8 +820,20 @@ void download_into(std::string folder) {
             error);
 #endif
         if (!ok) {
+            std::filesystem::remove(fetched, ec);
             set_phase(Phase::Failed, error);
             return;
+        }
+        if (replacing) {
+            if (same_content(fetched, target)) std::filesystem::remove(fetched, ec);
+            else {
+                std::filesystem::rename(fetched, target, ec);
+                if (ec) {
+                    std::filesystem::remove(fetched, ec);
+                    set_phase(Phase::Failed, "the new " + name + " could not replace the old one");
+                    return;
+                }
+            }
         }
     }
     try {
@@ -812,6 +846,110 @@ void download_into(std::string folder) {
         return;
     }
     set_phase(Phase::Done);
+}
+
+// Whether the player's choice of folder is saved.
+bool location_saved() {
+    try {
+        const auto entries = portablekit::install::read_settings_file(portablekit::install::user_data_directory());
+        const auto found = entries.find(kDataDirKey);
+        return found != entries.end() && !found->second.empty();
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
+// Forgets the saved folder, so the mod's files are looked for again in the usual places and, when they are not found, the player
+// chooses where to download them. Nothing is deleted: files already in a folder are kept, and a download into that folder skips the big
+// file when it is whole.
+void reset_location() {
+    try {
+        const std::filesystem::path dir = portablekit::install::user_data_directory();
+        portablekit::install::SettingsEntries entries = portablekit::install::read_settings_file(dir);
+        entries.erase(kDataDirKey);
+        portablekit::install::write_settings_file(dir, entries);
+    } catch (const std::exception &) {
+    }
+    set_phase(Phase::Idle);
+}
+
+// The mods/ folder an earlier version could put the files in: the app's private storage (/data/...), which no file manager can open.
+// Empty when the saved folder is anywhere else, or none is saved.
+std::filesystem::path private_mods_folder() {
+    try {
+        const auto entries = portablekit::install::read_settings_file(portablekit::install::user_data_directory());
+        const auto found = entries.find(kDataDirKey);
+        if (found != entries.end() && found->second.compare(0, 6u, "/data/") == 0)
+            return portablekit::install::path_from_utf8(found->second) / "mods";
+    } catch (const std::exception &) {
+    }
+    return {};
+}
+
+// Deletes the mod's files from that private folder (only the names in kModFiles, and any half-made copy of them), then the folder
+// itself if nothing else is in it, and forgets the saved folder. The player cannot do this with a file manager.
+void delete_private_files() {
+    const std::filesystem::path folder = private_mods_folder();
+    if (folder.empty()) return;
+    std::error_code ec;
+    for (const char *file : kModFiles) {
+        const std::filesystem::path path = folder / file;
+        std::filesystem::remove(path, ec);
+        std::filesystem::remove(std::filesystem::path(path.string() + ".part"), ec);
+        std::filesystem::remove(std::filesystem::path(path.string() + ".new"), ec);
+    }
+    std::filesystem::remove(folder, ec);  // fails, and keeps it, when anything else is in it
+    reset_location();
+}
+
+// A folder of the player's own choice (with all files access, any folder is a plain path), as the DLC screen does. The files go into its mods/.
+std::unique_ptr<portablekit::ui::FileBrowser> g_browser;
+std::string g_last_folder;
+
+void open_browser() {
+    namespace ui = portablekit::ui;
+    ui::FileBrowser::Options options;
+    options.extensions = {};
+    options.filter_name = "folders";
+    options.listed_name = "folders";
+    options.empty_note = "No folders here.";
+    options.choose_folder = "Download the Emendatus files into this folder";
+    std::filesystem::path start = portablekit::install::path_from_utf8(g_last_folder);
+    std::error_code ec;
+    if (start.empty() || !std::filesystem::is_directory(start, ec)) start = ui::FileBrowser::home();
+    g_browser = std::make_unique<ui::FileBrowser>(start, std::move(options));
+}
+
+// The folder chooser, in a window of its own over the page. Called every frame of the Mods page.
+void browser_window() {
+    namespace ui = portablekit::ui;
+    if (!g_browser) return;
+    if (!ImGui::IsPopupOpen("##em_browser")) ImGui::OpenPopup("##em_browser");
+    const ImGuiIO &io = ImGui::GetIO();
+    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({io.DisplaySize.x * 0.9f, io.DisplaySize.y * 0.85f}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("##em_browser", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) return;
+    ui::heading("Choose where the Emendatus files go");
+    ui::paragraph("Open the folder to put them in. They are saved in a folder called mods inside it, and the game finds them there.",
+                  ui::colors::kTextDim);
+    const float button_room = ImGui::GetTextLineHeightWithSpacing() * 3.2f + ImGui::GetStyle().ItemSpacing.y;
+    ImGui::BeginChild("##em_browser_body", {0.0f, ImGui::GetContentRegionAvail().y - button_room}, ImGuiChildFlags_NavFlattened);
+    const ui::FileBrowser::Result result = g_browser->frame(false);
+    ImGui::EndChild();
+    bool close = result != ui::FileBrowser::Result::Browsing;
+    if (result == ui::FileBrowser::Result::Chosen) {
+        const std::string chosen = portablekit::install::path_to_utf8(g_browser->chosen());
+        g_last_folder = chosen;
+        std::thread(download_into, chosen).detach();
+    } else if (result == ui::FileBrowser::Result::Cancelled) {
+        g_last_folder = portablekit::install::path_to_utf8(g_browser->folder());
+    }
+    if (!close && ui::big_button("Cancel", ImGui::GetContentRegionAvail().x)) close = true;
+    if (close) {
+        g_browser.reset();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void rows() {
@@ -868,6 +1006,9 @@ void rows() {
             break;
         }
     }
+    ui::RowOptions other;
+    other.description = "Choose any folder on the phone or the SD card. The Emendatus files are saved in a folder called mods inside it.";
+    if (ui::button_row("Download to another folder…###emother", other)) open_browser();
 }
 } // namespace data_download
 
@@ -880,7 +1021,24 @@ void mod_rows() {
     static bool target = false;           // what the open question would set
     static bool asking = false;
     const bool have_assets = assets_present();
+#if defined(PORTABLEKIT_ANDROID_APP)
+    data_download::rows();  // on Android also when the files are there: "Update the Emendatus files" compares and replaces what differs
+#else
     if (!have_assets) data_download::rows();  // the data is not in this build: offer to download it, whatever the platform
+#endif
+    data_download::browser_window();
+    if (data_download::location_saved()) {
+        ui::RowOptions reset;
+        reset.description = "Forgets the folder chosen for the mod's files and looks for them again. If they are not found you choose where to "
+                            "download them; files already in a folder are kept, and downloading into it skips what is whole.";
+        if (ui::button_row("Reset the mods folder location###emreset", reset)) data_download::reset_location();
+    }
+    if (!data_download::private_mods_folder().empty()) {
+        ui::RowOptions old;
+        old.description = "The mod's files were put in the app's private storage, which no file manager can open. This deletes them from there "
+                          "(only the Emendatus files, nothing else) and forgets that folder. Then download them again into the shared area.";
+        if (ui::button_row("Delete the old mod files###emdelold", old)) data_download::delete_private_files();
+    }
     if (!have_assets && !read_setting()) return;  // the mod's data is not here: no row
     if (const char *text = std::getenv("D012_EMENDATUS"); text != nullptr && *text != 0) {
         options.disabled = true;
@@ -997,3 +1155,19 @@ void redirect_game_files(std::filesystem::path &executable, std::filesystem::pat
 } // namespace d012_emendatus
 
 bool d012_emendatus_on() { return g_on; }
+
+// Where the mod's files are, for the Mods page's "Open the mods folder" button: the folder that holds emendatus_assets.bin, or, when
+// that file is not there yet, mods/ of the folder the player chose for the download (kept in the settings file). Empty when neither
+// is known: the button then opens the data folder's mods.
+std::string d012_mods_folder() {
+    std::error_code ec;
+    const std::filesystem::path file = mod_file("emendatus_assets.bin");
+    if (std::filesystem::exists(file, ec)) return portablekit::install::path_to_utf8(file.parent_path());
+    try {
+        const auto entries = portablekit::install::read_settings_file(portablekit::install::user_data_directory());
+        if (const auto found = entries.find(kDataDirKey); found != entries.end() && !found->second.empty())
+            return portablekit::install::path_to_utf8(portablekit::install::path_from_utf8(found->second) / "mods");
+    } catch (const std::exception &) {
+    }
+    return {};
+}
