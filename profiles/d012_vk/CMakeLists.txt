@@ -43,7 +43,6 @@ portablekit_add_game(d012_native
             "${D012_PORT_DIR}/host/d012_decomp_harness.cpp"
             "${D012_PORT_DIR}/host/d012_decomp_pad.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_no_bloom.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/d012_braviest_turning.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_emendatus.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_expansion.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_dlc_folder.cpp"

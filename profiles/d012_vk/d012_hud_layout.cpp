@@ -445,6 +445,7 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
     std::vector<std::uint32_t> frame_sprites, hand_sprites;
     unsigned cell_layouts = 0;
     unsigned layouts = 0;
+    std::uint8_t grid_kind = 0;  // the kind of the cell layouts: 25 is Data Config > Party Settings
     if (!in_guest(g, manager, 0x28u)) return;
     // D012_TRACE_ROSTER=1 (trace only, changes nothing): every layout the manager holds, whatever its kind: kind/id, the flags
     // byte and the position of its first sprite, printed when the list changes. It shows screens roster_role does not know
@@ -495,7 +496,10 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         // Every cell layout counts, drawn or not: the Party roster hides the cells that scroll out of its window, and
         // counting only the drawn ones switched the handling off after the first frame. The party icons screen is
         // told apart by the renderer, from the number of cells it really draws.
-        if (role == 1) ++cell_layouts;
+        if (role == 1) {
+            ++cell_layouts;
+            grid_kind = kind;
+        }
         const std::uint32_t sprite = g_ld32(g, layout);
         if (sprite == 0u || !in_guest(g, sprite, 0x40u)) continue;
         if (role == 1) cells.emplace_back(load_float(g, sprite + 0x10u), load_float(g, sprite + 0x14u));
@@ -633,6 +637,8 @@ void place_roster(Guest *g, std::uint32_t manager, std::vector<RosterSaved> &sav
         // Party roster (the Quick Battle player order, 34 real cells): the fighters, her, Random and "Remove from Party"; she is the third from the end.
         else if (mod && !cpu_order && visible == 34u) g_d012_roster_extra_rank = 31;
         else if (mod && (visible == 33u || visible == 34u)) g_d012_roster_extra_rank = static_cast<int>(visible) - 2;
+        // Party Settings (kind 25) has no cell for the new character, as in the stock game: nothing goes to the 17th place there.
+        if (grid_kind == 25u) g_d012_roster_extra_rank = -1;
         (void)cpu_select;  // Chaos's place after Feral Chaos is in the grid code's order table now (the cursor follows it)
     }
     (void)saved;

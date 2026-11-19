@@ -1,4 +1,4 @@
-// The Emendatus mod (by the Emendatus community), built in as a switch like Braviest Turning.
+// The Emendatus mod (by the Emendatus community), built in as a switch.
 //
 // The mod changes the disc's executable (small MIPS patches and a code cave), DATA/PACKAGE_INFO.BIN (three size fields),
 // the code of OVL_BATTLE_APP.ELF and OVL_MENU_APP.ELF (the menu overlay also grows), DATA/PACKAGE.BIN (about 325 KB of edits
@@ -12,6 +12,7 @@
 // The switch is read once at start-up, so it takes effect at the next start: settings.ini's game.emendatus (the menu's Mods
 // page writes it), or D012_EMENDATUS=0/1 for a run.
 #include "../../third_party/dissidia012-pc/port/host/d012_decomp_harness.hpp"
+#include "../../third_party/dissidia012-pc/port/host/d012_hle.hpp"
 
 #include "app_paths.hpp"
 #include "hle/hle_common.hpp"
@@ -59,8 +60,10 @@
 namespace d012_expansion {
 bool redirect(std::filesystem::path &executable);  // d012_expansion.cpp
 }
-namespace d012_braviest_turning {
-void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_braviest_turning.cpp
+// The recompiled code was generated with a switch for a mod that is no longer in the port (`if (g_d012_mod_bt) { the mod } else { the game }`).
+// The switch stays, always false, so that code links and runs the game's own.
+namespace psprecomp {
+bool g_d012_mod_bt = false;  // declared in the generated recomp_units.hpp
 }
 
 namespace {
@@ -1098,9 +1101,9 @@ namespace {
 bool g_redirected = false;  // this run is the mod's executable (redirect_game_files)
 }
 
-// The profile's patch_loaded_image: Braviest Turning's (and the port's), then this mod's switch and file provider.
+// The profile's patch_loaded_image: the port's, then this mod's switch and file provider.
 void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf) {
-    d012_braviest_turning::patch_loaded_image(runtime, elf);
+    d012::patch_loaded_image(runtime, elf);
     static bool installed = false;
     if (installed) return;
     installed = true;

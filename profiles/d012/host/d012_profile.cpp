@@ -24,11 +24,8 @@
 bool d012_emendatus_on();  // d012_vk/d012_emendatus.cpp: the Emendatus Mod is running
 std::string d012_mods_folder();  // d012_vk/d012_emendatus.cpp: where the mod's files are
 
-namespace d012_braviest_turning {
-void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_vk/d012_braviest_turning.cpp
-}
 namespace d012_emendatus {
-void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_vk/d012_emendatus.cpp (runs Braviest Turning's first)
+void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf);  // d012_vk/d012_emendatus.cpp
 void redirect_game_files(std::filesystem::path &executable, std::filesystem::path &disc_image);  // d012_vk/d012_emendatus.cpp
 }
 
@@ -141,6 +138,7 @@ GameProfile build(const Release &r) {
         .adhoc_edition_mark = 'E',
         .adhoc_edition_active = &::d012_emendatus_on,
         .mods_folder = &::d012_mods_folder,
+        .android_shared_data_folder = "Dissidia012HD",
         .adhoc_relay_server = "ws://relay.linkgarcia.com",
 
         // The buttons a PSP lacks, which the battle shortcuts use (L3 EX, L2 dodge, R2 dash, R3 recentres the camera;
