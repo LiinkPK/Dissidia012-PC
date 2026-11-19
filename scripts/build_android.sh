@@ -109,6 +109,14 @@ if [ ! -f "$TEXTURE_DIR/textures.ini" ] && [ ! -f "$TEXTURE_DIR/ULES01505/textur
   if [ -n "${STRICT_TEXTURES:-}" ]; then echo "ERROR: no texture pack at $TEXTURE_DIR (textures.ini is missing)"; exit 1; fi
   echo "WARNING: no texture pack at $TEXTURE_DIR: this APK has none (set TEXTURE_DIR, or STRICT_TEXTURES=1 to refuse)"
   TEXTURE_DIR=""
+elif [ ! -f "$TEXTURE_DIR/textures.ini" ]; then
+  # The pack has a folder per disc id (textures/ULES01505/textures.ini). The APK must carry it flat, assets/textures/textures.ini, which is
+  # what the app reads: stage a copy with that folder's contents moved up one level.
+  STAGE="$BUILD/texture-stage"
+  rm -rf "$STAGE"; mkdir -p "$STAGE"
+  cp -r "$TEXTURE_DIR/ULES01505"/. "$STAGE/"
+  TEXTURE_DIR="$STAGE"
+  echo "texture pack flattened: textures.ini at the top of $TEXTURE_DIR"
 fi
 
 echo "== 6/6 the APK =="
