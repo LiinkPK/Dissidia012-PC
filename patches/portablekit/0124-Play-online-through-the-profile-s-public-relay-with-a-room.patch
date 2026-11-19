@@ -5,7 +5,6 @@ Subject: [PATCH] Play online through the profile's public relay, with a room
 
 A profile can name a public ad hoc server (adhoc_relay_server). The Network page gets a Room and a Play online button: the room is folded into the product code the game logs in with, so players in different rooms never meet on the relay and the server and login format are unchanged. When the relay cannot be reached in 12 s, the game hosts directly with an opened router port and shows the address to share.
 ---
-
 diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
 index 4124933..ac509c6 100644
 --- a/host/adhoc/host.cpp
@@ -148,18 +147,10 @@ index 1e265ee..5b834ea 100644
      // --- Controls ----------------------------------------------------------
      // What the triggers may press instead of L and R, for the way this game is
 diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
-index ad54f67..d9e903b 100644
+index 35aca96..d9e903b 100644
 --- a/host/settings/settings.cpp
 +++ b/host/settings/settings.cpp
-@@ -259,6 +259,7 @@ const std::vector<Field> &fields() {
-          [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 100u, s.volume); },
-          [](const Settings &s) { return std::to_string(s.volume); }, nullptr},
-         BOOL_FIELD("audio.mute", mute),
-+        BOOL_FIELD("input.swap_shoulders", swap_shoulders),
-         {"input.confirm", "PAD_FACE",
-          [](Settings &s, const std::string &t) {
-              if (t == "south") s.confirm_south = true;
-@@ -395,6 +396,12 @@ const std::vector<Field> &fields() {
+@@ -396,6 +396,12 @@ const std::vector<Field> &fields() {
               return true;
           },
           [](const Settings &s) { return s.adhoc_server; }, [](Settings &s, const char *t) { s.adhoc_server = t; }},
@@ -173,19 +164,10 @@ index ad54f67..d9e903b 100644
           [](Settings &s, const std::string &t) {
               s.adhoc_nickname = t;
 diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
-index 23f3292..c5a7571 100644
+index 5c8c9e0..c5a7571 100644
 --- a/host/settings/settings.hpp
 +++ b/host/settings/settings.hpp
-@@ -81,6 +81,8 @@ struct Settings {
-     // east one. The default follows the console the profile describes: south
-     // where cross confirms, east where circle does.
-     bool confirm_south{};
-+    // The bumpers (L1, R1) and the triggers (L2, R2) trade places, for a hand that finds the triggers easier (Steam Deck).
-+    bool swap_shoulders{};
-     float dead_zone{0.15f};
-     // The left stick's circle stretched to the PSP nub's square range, so a
-     // full diagonal reaches the corner (input/stick.hpp). Off passes the
-@@ -136,6 +138,7 @@ struct Settings {
+@@ -138,6 +138,7 @@ struct Settings {
      bool adhoc{};                      // wireless switch on: the game may go on line
      std::string adhoc_server;          // host or host:port of the server; empty: none
      std::string adhoc_nickname;        // shown to other players; empty: the player name
@@ -194,7 +176,7 @@ index 23f3292..c5a7571 100644
      std::vector<std::string> adhoc_recent;  // sessions joined lately, the latest first
      std::uint32_t adhoc_host_port{27312};   // the built-in server's adhocctl port; the relay is on the next
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index b5fc938..759f233 100644
+index 98ee49c..759f233 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -930,6 +930,11 @@ bool address_character(char32_t c) {
@@ -209,28 +191,7 @@ index b5fc938..759f233 100644
  // Only for a game that tilts (GameProfile::tilt).
  void Menu::tilt_controls() {
      const TiltControls *tilt = portablekit::game().tilt;
-@@ -1066,6 +1071,12 @@ void Menu::controls() {
-         s.confirm_south = !s.confirm_south;
-         settings::save();
-     }
-+    if (toggle_row("Trigger buttons swap", s.swap_shoulders,
-+                   options_for("input.swap_shoulders",
-+                               "Swaps the bumper buttons (LB, RB) with the trigger buttons (LT, RT)."))) {
-+        s.swap_shoulders = !s.swap_shoulders;
-+        settings::save();
-+    }
-     int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
-     if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
-                    options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
-@@ -1300,6 +1311,7 @@ void Menu::controls() {
-             if (settings::overridden_by(key).empty()) value = fallback;
-         };
-         restore("input.confirm", s.confirm_south, d.confirm_south);
-+        restore("input.swap_shoulders", s.swap_shoulders, d.swap_shoulders);
-         restore("input.dead_zone", s.dead_zone, d.dead_zone);
-         restore("input.stick_square", s.stick_square, d.stick_square);
-         restore("input.trigger", s.trigger, d.trigger);
-@@ -1472,6 +1484,54 @@ void play_together() {
+@@ -1479,6 +1484,54 @@ void play_together() {
      static std::string copied;
      static std::string typed_address;
      section("Play together");
@@ -285,7 +246,7 @@ index b5fc938..759f233 100644
      if (adhoc_hosting()) {
          const adhoc::ServerStatus status = adhoc_host_status();
          const std::string suffix =
-@@ -1697,6 +1757,7 @@ void Menu::network() {
+@@ -1704,6 +1757,7 @@ void Menu::network() {
          };
          restore("network.adhoc", s.adhoc, defaults.adhoc);
          restore("network.server", s.adhoc_server, defaults.adhoc_server);
@@ -293,3 +254,6 @@ index b5fc938..759f233 100644
          restore("network.nickname", s.adhoc_nickname, defaults.adhoc_nickname);
          settings::save();
          adhoc_apply_settings();
+-- 
+2.43.0
+
