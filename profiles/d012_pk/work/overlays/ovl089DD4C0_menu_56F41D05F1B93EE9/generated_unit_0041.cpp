@@ -18829,6 +18829,8 @@ L_08A85020:
     ctx.gpr[7] = (0u | 0u);
     goto L_08A85024;
 L_08A85024:
+    { static int flag_lines = 0; if (flag_lines < 100) { ++flag_lines; std::fprintf(stderr, "[roster-flag] screen %08X global@089D8140 %08X flag(no Random) %u mode(fp) %u\n", ctx.gpr[19], aot_mem.aot_load32(0x089D8140u), ctx.gpr[2], ctx.gpr[30]); } }
+    if (ctx.gpr[30] == 0u && !(aot_mem.aot_load32(ctx.gpr[19] + 8u) == 0x22u && aot_mem.aot_load32(ctx.gpr[19] + 20u) == 0x20u)) ctx.gpr[2] = 0u;  // Quick Battle player select always has Random: the flag comes from the current stage's record, which the Arcade selects leave set
     aot_mem.aot_store8(ctx.gpr[29] + static_cast<std::uint32_t>(16), static_cast<std::uint8_t>(ctx.gpr[2]));
     goto L_08A85028;
 L_08A85028:

@@ -107,5 +107,14 @@ def apply(corpus):
         "        std::fprintf(stderr, \" (W %08X)\\n\", w);\n"
         "    }\n"
         "    if (!g_d012_grid_party) {\n        if (ctx.gpr[22] >= 17u) {", "builder trace")
+    # Quick Battle player select (mode 0, not an Arcade screen: their words at +8 and +20 are 0x22 and 0x20) always has the Random cell.
+    # The builder's "no Random" flag is read from the current stage's record, which Time Attack and Labyrinth leave set, so after them
+    # the Quick Battle select came up without Random.
+    text = replace_once(
+        text, "L_08A85024:" + NL + "    aot_mem.aot_store8(ctx.gpr[29] + static_cast<std::uint32_t>(16), static_cast<std::uint8_t>(ctx.gpr[2]));",
+        "L_08A85024:" + NL +
+        "    if (ctx.gpr[30] == 0u && !(aot_mem.aot_load32(ctx.gpr[19] + 8u) == 0x22u && aot_mem.aot_load32(ctx.gpr[19] + 20u) == 0x20u)) ctx.gpr[2] = 0u;  // Quick Battle player select always has Random: the flag comes from the current stage's record, which the Arcade selects leave set" + NL +
+        "    aot_mem.aot_store8(ctx.gpr[29] + static_cast<std::uint32_t>(16), static_cast<std::uint8_t>(ctx.gpr[2]));",
+        "Quick Battle Random flag")
     unit41.write_text(with_cstdio(text), encoding="utf-8", newline="\n")
     print("patch_roster: the mod's roster row is placed in", corpus.name)
