@@ -139,7 +139,7 @@ GameProfile build(const Release &r) {
         // memory expansion, which changes no gameplay) only plays the stock game: the product code carries the mark.
         .adhoc_edition_mark = 'E',
         .adhoc_edition_active = &::d012_emendatus_on,
-        .adhoc_relay_server = "ws://d012-relay.linkgarcia93.workers.dev",
+        .adhoc_relay_server = "ws://relay.linkgarcia93.com",
 
         // The buttons a PSP lacks, which the battle shortcuts use (L3 EX, L2 dodge, R2 dash, R3 recentres the camera;
         // d012_camera.cpp).
