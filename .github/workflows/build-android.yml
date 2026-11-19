@@ -25,7 +25,7 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: android
-      - name: Newer Vulkan headers (the renderer uses extensions that older headers lack)
+      - name: Newer Vulkan headers
         run: |
           git clone --depth 1 --branch v1.4.363 https://github.com/KhronosGroup/Vulkan-Headers.git "$RUNNER_TEMP/vulkan-headers"
           echo "C_INCLUDE_PATH=$RUNNER_TEMP/vulkan-headers/include" >> "$GITHUB_ENV"
@@ -38,7 +38,6 @@ jobs:
         run: |
           echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK=${ANDROID_NDK_LATEST_HOME:-$(ls -d /usr/local/lib/android/sdk/ndk/* | sort -V | tail -1)}" >> "$GITHUB_ENV"
-          ls "${ANDROID_NDK_LATEST_HOME:-/usr/local/lib/android/sdk/ndk}" | head -5
       - name: Signing key (optional)
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -50,15 +49,14 @@ jobs:
             echo "KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
             echo "KEYSTORE_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
             echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
-            echo "Signing with the release key."
           else
-            echo "No signing secrets: the APK gets a throwaway key (testing only)."
+            echo "No signing secrets: throwaway key (testing only)."
           fi
       - name: Build and package
         run: bash scripts/build_android.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: android-apk
+          name: android
           path: dist/d012_native-android.apk
           if-no-files-found: error
           compression-level: 0
