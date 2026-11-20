@@ -12,6 +12,57 @@ menu text uses three periods: the CJK fallback font draws the ellipsis character
 mid-line on Android. On Android the player is asked at start to move the game's data to the shared
 folder (all files access, once) when it is in private storage, so every folder button can open it.
 ---
+diff --git a/host/adhoc/client.cpp b/host/adhoc/client.cpp
+index 5723df7..f77b218 100644
+--- a/host/adhoc/client.cpp
++++ b/host/adhoc/client.cpp
+@@ -708,6 +708,9 @@ struct Client::Impl {
+         for (auto it = datagrams.begin(); it != datagrams.end();) {
+             DatagramSocket &socket = it->second;
+             if (socket.closing) {
++                // The game sends its last datagram and closes the socket at once (the matching handshake's final answer, then a stop):
++                // what is still queued goes out first, or the other side never gets it and waits for ever.
++                socket.link.flush();
+                 socket.link.close();
+                 it = datagrams.erase(it);
+                 continue;
+diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
+index ac509c6..a951010 100644
+--- a/host/adhoc/host.cpp
++++ b/host/adhoc/host.cpp
+@@ -145,6 +145,17 @@ bool adhoc_join_relay() {
+     return true;
+ }
+ 
++void adhoc_leave_relay() {
++    settings::Settings &s = settings::current();
++    if (settings::overridden_by("network.adhoc").empty()) s.adhoc = false;
++    if (settings::overridden_by("network.server").empty()) s.adhoc_server.clear();
++    settings::save();
++    adhoc::Client::log("[adhoc] leaving the relay, as asked", true);
++    adhoc_apply_settings(true);
++}
++
++bool adhoc_online_mode() { return adhoc_session_active() || adhoc_relay_selected(); }
++
+ void adhoc_join(const std::string &address) {
+     if (address.empty()) return;
+     if (adhoc_hosting()) {
+diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
+index 6ed886f..2038972 100644
+--- a/host/adhoc/session.hpp
++++ b/host/adhoc/session.hpp
+@@ -34,6 +34,10 @@ void adhoc_apply_settings(bool switch_now = false);
+ // Goes on line through the public relay in the Room setting (a new room is made when it is empty): turns ad hoc play on and uses
+ // it at once. Stops hosting first. False when the profile has no relay.
+ bool adhoc_join_relay();
++// Leaves the relay: ad hoc play off and no server, so the client stops connecting and the game sees a normal disconnect.
++void adhoc_leave_relay();
++// True while cheats must stay off: hosting, in a group or joining one, or set to play through the relay ("Playing online").
++[[nodiscard]] bool adhoc_online_mode();
+ // True when a host's or player's product code is of the edition this instance runs.
+ [[nodiscard]] bool adhoc_same_edition(const std::string &product);
+ 
 diff --git a/host/gpu/texture_pack_import.cpp b/host/gpu/texture_pack_import.cpp
 index 7b0ddd6..9d79d0f 100644
 --- a/host/gpu/texture_pack_import.cpp
@@ -102,7 +153,7 @@ index 4835429..574f779 100644
      }
      if (picked) {
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index ba82017..305e8fe 100644
+index ba82017..2a6634a 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -392,6 +392,30 @@ void run_cheat(psprecomp::GuestMemory &m, const std::vector<CheatLine> &lines) {
@@ -215,7 +266,22 @@ index ba82017..305e8fe 100644
      return "None";
  }
  
-@@ -1651,7 +1706,7 @@ void play_together() {
+@@ -1535,6 +1590,14 @@ void play_together() {
+                 relay_timing = false;
+                 adhoc_join_relay();
+             }
++            if (adhoc_relay_selected() &&
++                button_row("Disconnect###relaydisconnect",
++                           {false, {}, "Leaves the relay and stops connecting to it. Press Play online to go on line again."},
++                           colors::kDanger)) {
++                relay_fell_back = false;
++                relay_timing = false;
++                adhoc_leave_relay();
++            }
+             if (adhoc_relay_selected()) {
+                 const adhoc::Diagnostics rd = adhoc::Client::get().diagnostics();
+                 if (rd.state == adhoc::ServerState::Online) {
+@@ -1651,7 +1714,7 @@ void play_together() {
                                                    "other; then enter the same lobby."}))
              adhoc_join(address);
      }
@@ -224,7 +290,25 @@ index ba82017..305e8fe 100644
      if (other_edition != 0u)
          info_row("Not listed", std::to_string(other_edition) + (other_edition == 1u ? " session" : " sessions") +
                                     " of the other edition: the Emendatus Mod and the stock game never play each other");
-@@ -1911,7 +1966,7 @@ void Menu::system() {
+@@ -1801,7 +1864,7 @@ void Menu::cheats() {
+     load_cheats();
+     CheatFile &f = cheat_file();
+     section("Cheats");
+-    const bool online = adhoc_session_active();
++    const bool online = adhoc_online_mode();
+     if (online) info_row("Online", "Cheats are off while you play online. They come back when the session ends.");
+     if (button_row("Open the cheats file",
+                    {false, {}, std::string("Edit ") + portablekit::game().disc_id + ".ini in PSP/CHEATS, in PPSSPP's format."})) {
+@@ -1826,7 +1889,7 @@ void Menu::cheats() {
+         title.erase(0, title.find_first_not_of(" \t"));
+         if (title.empty()) title = "Cheat " + std::to_string(i + 1);
+         ImGui::PushID(static_cast<int>(i));
+-        if (toggle_row(title.c_str(), line[2] == '1')) {
++        if (toggle_row(title.c_str(), line[2] == '1', {online, {}, online ? "Off while you play online." : ""})) {
+             line[2] = line[2] == '1' ? '0' : '1';
+             save_cheats();
+         }
+@@ -1911,7 +1974,7 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -233,7 +317,7 @@ index ba82017..305e8fe 100644
                                                  "the logs folder) to a folder you pick, to send with a problem report."})) {
          std::fflush(stdout);
          std::fflush(stderr);
-@@ -1986,15 +2041,15 @@ void Menu::system() {
+@@ -1986,15 +2049,15 @@ void Menu::system() {
          open_folder(install::path_from_utf8(data_dir));
      }
  #endif
@@ -252,7 +336,7 @@ index ba82017..305e8fe 100644
                             : u.state == updater::State::UpToDate  ? "Up to date"
                             : u.state == updater::State::Failed && u.latest.empty() ? "Could not check: " + u.error
                                                                                      : "";
-@@ -2042,6 +2097,69 @@ bool Menu::confirm_dialog() {
+@@ -2042,6 +2105,69 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -322,7 +406,7 @@ index ba82017..305e8fe 100644
          if (confirm_ == Confirm::OldTextures) {
              // The pack is the textures folder itself now; an older install keeps a copy in a folder named for a disc. 0: asking, 1: removing, 2: done
              static std::atomic<int> removing{0};
-@@ -2052,7 +2170,7 @@ bool Menu::confirm_dialog() {
+@@ -2052,7 +2178,7 @@ bool Menu::confirm_dialog() {
                  Layer::get().renderer().reload_texture_pack();
                  confirm_ = Confirm::None;
              } else if (removing.load() == 1) {
@@ -331,7 +415,27 @@ index ba82017..305e8fe 100644
              } else {
                  paragraph("The HD texture pack now lives in the textures folder itself, and updates will go there. The older copy in " +
                                install::path_to_utf8(old_folder) + " is no longer needed. Removing it frees the space.",
-@@ -2166,7 +2284,7 @@ bool Menu::update_dialog() {
+@@ -2089,8 +2215,17 @@ bool Menu::confirm_dialog() {
+                   colors::kTextDim);
+         ImGui::Dummy({0.0f, font * 0.6f});
+         const float gap = font * 0.6f;
+-        const float width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
+-        if (big_button(quit ? "Quit" : "Close and set up", width, true)) {
++        const float width = (ImGui::GetContentRegionAvail().x - gap * (quit ? 2.0f : 1.0f)) / (quit ? 3.0f : 2.0f);
++        if (quit) {
++            // Restart closes the game and starts it again.
++            if (big_button("Restart", width, true)) {
++                install::request_restart_on_exit();
++                quit_ = true;
++                keep_open = false;
++            }
++            ImGui::SameLine(0.0f, gap);
++        }
++        if (big_button(quit ? "Quit" : "Close and set up", width, !quit, false, quit)) {
+             if (!quit) install::request_setup_on_exit();
+             quit_ = true;
+             keep_open = false;
+@@ -2166,7 +2301,7 @@ bool Menu::update_dialog() {
  #endif
              settings::Settings &s = settings::current();
              if (toggle_row("Don't show this when the game starts", !s.update_notice,
@@ -340,7 +444,16 @@ index ba82017..305e8fe 100644
                  s.update_notice = !s.update_notice;
                  settings::save();
              }
-@@ -2344,6 +2462,15 @@ bool &show_old_textures_on_open() {
+@@ -2304,7 +2439,7 @@ void add_menu_rows(void (*rows)()) {
+ void apply_cheats(psprecomp::Runtime &runtime) {
+     // Cheats are off while the game is in an online session (hosting, joining or in a group), and come back when it ends. Nothing in
+     // the cheats file changes: they are only not applied. The other players' games cannot be told, so this only keeps this one honest.
+-    if (adhoc_session_active()) return;
++    if (adhoc_online_mode()) return;
+     const std::lock_guard<std::mutex> lock(cheat_mutex());
+     load_cheats();
+     const CheatFile &f = cheat_file();
+@@ -2344,6 +2479,15 @@ bool &show_old_textures_on_open() {
      static bool value = false;
      return value;
  }
@@ -356,7 +469,7 @@ index ba82017..305e8fe 100644
  
  // The update question is waiting to be shown: menu_requested() reports it as a menu request, and the menu that opens
  // for it starts on the question (show_update_on_open).
-@@ -2394,6 +2521,16 @@ void draw_over_game() {
+@@ -2394,6 +2538,16 @@ void draw_over_game() {
          const std::filesystem::path old_folder = gpu::old_texture_folder(gpu::VulkanRenderer::textures_root());
          if (!old_folder.empty() && old_texture_asked() != install::path_to_utf8(old_folder)) old_textures_pending() = true;
      }
@@ -373,7 +486,7 @@ index ba82017..305e8fe 100644
      static bool update_offered = false;
      // The question opens a second after the release is found, so the game is already running and pauses itself when the
      // menu opens over it (straight away, it opened before the game had a frame to pause on).
-@@ -2455,6 +2592,7 @@ void open_menu_over_game() {
+@@ -2455,6 +2609,7 @@ void open_menu_over_game() {
      menu.emplace(false);
      if (std::exchange(show_update_on_open(), false)) menu->show_update();
      if (std::exchange(show_old_textures_on_open(), false)) menu->ask_old_textures();
@@ -381,7 +494,7 @@ index ba82017..305e8fe 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -2477,6 +2615,11 @@ bool menu_requested() {
+@@ -2477,6 +2632,11 @@ bool menu_requested() {
          show_old_textures_on_open() = true;
          return true;
      }
@@ -393,7 +506,7 @@ index ba82017..305e8fe 100644
      return asked;
  }
  
-@@ -2488,6 +2631,7 @@ bool run_menu() {
+@@ -2488,6 +2648,7 @@ bool run_menu() {
      Menu menu(true);
      if (std::exchange(show_update_on_open(), false)) menu.show_update();
      if (std::exchange(show_old_textures_on_open(), false)) menu.ask_old_textures();
@@ -585,6 +698,43 @@ index 509d4f9..b5534c1 100644
  [[nodiscard]] std::string latest_asset_url(const std::string &name, std::string &error);
  // Downloads `url` into `target` (through target.part, renamed when it is whole), telling `progress` how much is in. When `expected_size`
  // is above 0 the file must be exactly that long. False with the reason in `error`. Windows, Linux and macOS; the Android app downloads
+diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
+index 41bb1e9..56b1ce4 100644
+--- a/host/ui/widgets.cpp
++++ b/host/ui/widgets.cpp
+@@ -575,7 +575,7 @@ void section(const char *title) {
+     ImGui::Dummy({0.0f, px(2.0f)});
+ }
+ 
+-bool big_button(const char *label, float width, bool primary, bool disabled) {
++bool big_button(const char *label, float width, bool primary, bool disabled, bool danger) {
+     const float height = std::round(font() * 2.2f);
+     const ImVec2 min = ImGui::GetCursorScreenPos();
+     const ImVec2 max{min.x + width, min.y + height};
+@@ -589,6 +589,9 @@ bool big_button(const char *label, float width, bool primary, bool disabled) {
+     if (disabled) {
+         draw->AddRect(min, max, colors::kTextDisabled, rounding, 0, px(1.5f));
+         text = colors::kTextDisabled;
++    } else if (danger) {
++        draw->AddRectFilled(min, max, focused || hovered ? IM_COL32(236, 128, 102, 255) : colors::kDanger, rounding);
++        text = colors::kPanel;
+     } else if (primary) {
+         draw->AddRectFilled(min, max, focused || hovered ? colors::kAccentBright : colors::kAccent, rounding);
+         text = colors::kPanel;
+diff --git a/host/ui/widgets.hpp b/host/ui/widgets.hpp
+index 7986937..8e16a27 100644
+--- a/host/ui/widgets.hpp
++++ b/host/ui/widgets.hpp
+@@ -100,7 +100,8 @@ void section(const char *title);
+ void focus_next_row();
+ 
+ // A wide button for the setup screens. Returns true when activated.
+-bool big_button(const char *label, float width, bool primary = false, bool disabled = false);
++// `danger` fills the button red (a choice that ends something, such as Quit).
++bool big_button(const char *label, float width, bool primary = false, bool disabled = false, bool danger = false);
+ void progress_bar(float fraction, const std::string &overlay);
+ 
+ // Text wrapped to the available width.
 diff --git a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 index 860658e..f227fef 100644
 --- a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
