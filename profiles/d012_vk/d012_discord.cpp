@@ -302,8 +302,11 @@ private:
         activity += ",\"timestamps\":{\"start\":" + std::to_string(start_) + "}";
         // The button under the presence. Discord shows it to other people, not to the player.
         activity += std::string(",\"buttons\":[{\"label\":\"Download\",\"url\":\"") + kDownloadUrl + "\"}]";
-        activity += ",\"assets\":{\"large_image\":\"" + json_escape(s.image) + "\",\"large_text\":\"" + json_escape(s.image_text) +
-                    "\",\"small_image\":\"" + kLargeImage + "\",\"small_text\":\"Dissidia 012 Final Fantasy HD Remastered\"}}";
+        // In the menus the icon is the large image; in a battle the stage is, and the icon becomes the bubble at its bottom right.
+        activity += ",\"assets\":{\"large_image\":\"" + json_escape(s.image) + "\",\"large_text\":\"" + json_escape(s.image_text) + "\"";
+        if (s.image != kLargeImage)
+            activity += std::string(",\"small_image\":\"") + kLargeImage + "\",\"small_text\":\"Dissidia 012 Final Fantasy HD Remastered\"";
+        activity += "}}";
         const std::string message = "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":" + std::to_string(pid()) +
                                     ",\"activity\":" + activity + "},\"nonce\":\"" + std::to_string(++nonce_) + "\"}";
         return pipe_.send(1, message);
