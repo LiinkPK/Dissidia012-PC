@@ -27,7 +27,7 @@ index 5723df7..f77b218 100644
                  it = datagrams.erase(it);
                  continue;
 diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
-index ac509c6..449a060 100644
+index ac509c6..c34b5c0 100644
 --- a/host/adhoc/host.cpp
 +++ b/host/adhoc/host.cpp
 @@ -145,6 +145,29 @@ bool adhoc_join_relay() {
@@ -52,7 +52,7 @@ index ac509c6..449a060 100644
 +    if (adhoc_room_code(s.adhoc_room).empty() && settings::overridden_by("network.room").empty()) s.adhoc_room = adhoc_new_room();
 +    s.adhoc = true;
 +    s.adhoc_server = relay;
-+    adhoc::Client::log("[adhoc] the game started its network: going on line through the relay", true);
++    adhoc::Client::log("[adhoc] the game joined a group: going on line through the relay", true);
 +}
 +
 +bool adhoc_online_mode() { return adhoc_session_active() || adhoc_relay_selected(); }
@@ -75,17 +75,18 @@ index 19cfb53..14987c3 100644
          }
      }
 diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
-index 6ed886f..6aa17c4 100644
+index 6ed886f..b075a0e 100644
 --- a/host/adhoc/session.hpp
 +++ b/host/adhoc/session.hpp
-@@ -34,6 +34,13 @@ void adhoc_apply_settings(bool switch_now = false);
+@@ -34,6 +34,14 @@ void adhoc_apply_settings(bool switch_now = false);
  // Goes on line through the public relay in the Room setting (a new room is made when it is empty): turns ad hoc play on and uses
  // it at once. Stops hosting first. False when the profile has no relay.
  bool adhoc_join_relay();
 +// Leaves the relay: ad hoc play off and no server, so the client stops connecting and the game sees a normal disconnect.
 +void adhoc_leave_relay();
-+// Called when the game starts its network (sceNetAdhocctlInit: Online Lobby, Group Battle, Communications): when nothing is chosen, goes on
-+// line through the relay, in the Room setting. Nothing is saved, and the game starts off line again.
++// Called when the game joins a group (sceNetAdhocctlConnect or Create: the Online Lobby, a Group Battle): when nothing is chosen, goes on
++// line through the relay, in the Room setting. Nothing is saved, and the game starts off line again. Friend Cards and Artifacts start the
++// network but join no group, so they never connect.
 +void adhoc_auto_relay();
 +// True while cheats must stay off: hosting, in a group or joining one, or set to play through the relay ("Playing online").
 +[[nodiscard]] bool adhoc_online_mode();
@@ -106,18 +107,10 @@ index 7b0ddd6..9d79d0f 100644
          }
      } else if (lower(folder_name) != lower(game_id) && looks_like_game_id(folder_name)) {
 diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
-index 8cc6a17..eb2945b 100644
+index 8cc6a17..dd70bb8 100644
 --- a/host/hle/hle_adhoc.cpp
 +++ b/host/hle/hle_adhoc.cpp
-@@ -353,6 +353,7 @@ void register_adhocctl(HleRegistrar &hle) {
-         }
-         s.ctl_initialized = true;
-         ensure_hooked();
-+        adhoc_auto_relay();  // entering an online mode connects to the relay by itself
-         start_client();
-         done(ctx, "sceNetAdhocctlInit", 3, 0u, "product " + s.product);
-     });
-@@ -361,6 +362,8 @@ void register_adhocctl(HleRegistrar &hle) {
+@@ -361,6 +361,8 @@ void register_adhocctl(HleRegistrar &hle) {
          if (s.ctl_initialized) Client::get().stop();
          s.ctl_initialized = false;
          s.handlers.clear();
@@ -126,6 +119,16 @@ index 8cc6a17..eb2945b 100644
          done(ctx, "sceNetAdhocctlTerm", 0, 0u);
      });
      hle.add("sceNetAdhocctl", "sceNetAdhocctlAddHandler", [](Runtime &, AllegrexContext &ctx) {
+@@ -425,6 +427,9 @@ void register_adhocctl(HleRegistrar &hle) {
+             State &s = state();
+             if (!s.ctl_initialized) return done(ctx, name, 1, err::kCtlNotInitialized);
+             log_once(std::string("adhocctl-") + name, std::string("[adhoc] ") + name + " (UNVERIFIED: no game traced yet)");
++            // Joining the lobby or a battle group is what goes on line: Friend Cards and Artifacts start the network but never join a group,
++            // so they never touch the relay.
++            adhoc_auto_relay();
+             if (!settings::current().adhoc || adhoc_server_address().empty()) {
+                 Client::log("[adhoc] no server is set up (menu: Network); joining fails", true);
+                 notify_handlers(kEventError, err::kCtlTimeout);
 diff --git a/host/platform/android_jni.cpp b/host/platform/android_jni.cpp
 index 2f28d30..0d8acf6 100644
 --- a/host/platform/android_jni.cpp
