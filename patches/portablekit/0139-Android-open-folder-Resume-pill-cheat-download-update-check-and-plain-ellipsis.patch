@@ -13,7 +13,7 @@ mid-line on Android. On Android the player is asked at start to move the game's 
 folder (all files access, once) when it is in private storage, so every folder button can open it.
 ---
 diff --git a/host/adhoc/client.cpp b/host/adhoc/client.cpp
-index 5723df7..d1fbeeb 100644
+index 5723df7..43d4ede 100644
 --- a/host/adhoc/client.cpp
 +++ b/host/adhoc/client.cpp
 @@ -708,6 +708,9 @@ struct Client::Impl {
@@ -36,6 +36,16 @@ index 5723df7..d1fbeeb 100644
                  socket.link.close();
                  it = streams.erase(it);
                  continue;
+@@ -1555,7 +1561,8 @@ std::size_t Client::ptp_send(int handle, const void *data, std::size_t size) {
+     StreamSocket &socket = found->second;
+     if (socket.state != StreamState::Established || !socket.link.active()) return 0u;
+     const std::size_t queued = socket.link.output.size();
+-    const std::size_t room = queued >= socket.capacity ? 0u : socket.capacity - queued;
++    const std::size_t limit = std::max<std::size_t>(socket.capacity, kMaxQueuedOutput);  // the game's buffer size is its receive window (see try_stream_send)
++    const std::size_t room = queued >= limit ? 0u : limit - queued;
+     const std::size_t count = std::min(size, room);
+     const char *bytes = static_cast<const char *>(data);
+     for (std::size_t done = 0; done < count;) {
 diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
 index ac509c6..c34b5c0 100644
 --- a/host/adhoc/host.cpp
@@ -117,7 +127,7 @@ index 7b0ddd6..9d79d0f 100644
          }
      } else if (lower(folder_name) != lower(game_id) && looks_like_game_id(folder_name)) {
 diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
-index 8cc6a17..ee6bf31 100644
+index 8cc6a17..d15a2ed 100644
 --- a/host/hle/hle_adhoc.cpp
 +++ b/host/hle/hle_adhoc.cpp
 @@ -361,6 +361,8 @@ void register_adhocctl(HleRegistrar &hle) {
@@ -139,7 +149,21 @@ index 8cc6a17..ee6bf31 100644
              if (!settings::current().adhoc || adhoc_server_address().empty()) {
                  Client::log("[adhoc] no server is set up (menu: Network); joining fails", true);
                  notify_handlers(kEventError, err::kCtlTimeout);
-@@ -723,7 +728,20 @@ void register_ptp(HleRegistrar &hle) {
+@@ -675,7 +680,12 @@ std::optional<std::uint32_t> try_stream_send(psprecomp::GuestMemory &memory, int
+     if (info.state != adhoc::StreamState::Established) return stream_error(info);
+     const std::uint32_t length = memory.load32(length_address);
+     if (length == 0u) return 0u;
+-    const std::size_t room = info.unsent >= info.capacity ? 0u : info.capacity - info.unsent;
++    // The buffer size the game gave PtpOpen is its receive window, not a limit on what may wait to be sent: a PSP (and PPSSPP) takes a second
++    // message right behind the first. The game here sends 1024 bytes and then the next 1024 at once on a socket opened with a 1024-byte buffer;
++    // a refusal for lack of room was never retried, the message was lost and the other player waited for it on the white screen.
++    constexpr std::size_t kSendQueue = 512u * 1024u;
++    const std::size_t limit = std::max<std::size_t>(info.capacity, kSendQueue);
++    const std::size_t room = info.unsent >= limit ? 0u : limit - info.unsent;
+     if (room == 0u) return std::nullopt;
+     std::string bytes(std::min<std::size_t>(room, length), '\0');
+     for (std::size_t i = 0; i < bytes.size(); ++i)
+@@ -723,7 +733,20 @@ void register_ptp(HleRegistrar &hle) {
              return std::nullopt;
          };
          if (const auto result = check(false)) return done(ctx, name, 3, *result);
