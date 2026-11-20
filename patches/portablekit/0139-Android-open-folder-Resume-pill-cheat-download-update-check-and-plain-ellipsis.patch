@@ -13,7 +13,7 @@ mid-line on Android. On Android the player is asked at start to move the game's 
 folder (all files access, once) when it is in private storage, so every folder button can open it.
 ---
 diff --git a/host/adhoc/client.cpp b/host/adhoc/client.cpp
-index 5723df7..f77b218 100644
+index 5723df7..d1fbeeb 100644
 --- a/host/adhoc/client.cpp
 +++ b/host/adhoc/client.cpp
 @@ -708,6 +708,9 @@ struct Client::Impl {
@@ -25,6 +25,16 @@ index 5723df7..f77b218 100644
 +                socket.link.flush();
                  socket.link.close();
                  it = datagrams.erase(it);
+                 continue;
+@@ -779,6 +782,9 @@ struct Client::Impl {
+             const int handle = it->first;
+             StreamSocket &socket = it->second;
+             if (socket.closing) {
++                // What the game sent just before closing goes out first (as for datagrams): a message and a close in the same frame must not
++                // lose the message.
++                socket.link.flush();
+                 socket.link.close();
+                 it = streams.erase(it);
                  continue;
 diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
 index ac509c6..c34b5c0 100644
