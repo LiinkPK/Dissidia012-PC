@@ -25,7 +25,7 @@ $bin = Split-Path $src -Parent
 $overlaySrc = Join-Path $bin "overlays\Release"
 $name = $Name
 $stage = Join-Path $root "$Out\$name"
-$playerFolders = "data\mods", "data\ms0\PSP\GAME", "data\ms0\PSP\SAVEDATA", "game"
+$playerFolders = "data\ms0\PSP\GAME", "data\ms0\PSP\SAVEDATA", "game"
 # Made on this machine while testing: the game writes them again on the player's first run.
 $localFiles = "data\settings.ini", "data\pipeline_cache.bin", "data\pipeline_keys.bin"
 # The logs and the screenshots are the player's own (running the game from the build folder makes data\logs, F9 makes
