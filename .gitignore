@@ -88,3 +88,6 @@ crash_report.txt
 /third_party/dissidia012-pc/port/examples/
 /third_party/dissidia012-pc/port/tests/
 /third_party/dissidia012-pc/port/tools/
+
+# The server setup for the online relay: stays local
+/scripts/setup_relay_server.sh

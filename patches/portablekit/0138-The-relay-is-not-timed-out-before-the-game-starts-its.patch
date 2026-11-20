@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Fri, 20 Nov 2026 10:00:00 +0000
+Subject: [PATCH] The relay is not timed out before the game starts its network
+
+The client only connects once the game calls sceNetAdhocctlInit, so Play
+online from the menu waited 12 s on a connection nobody had started and
+then fell back to hosting. The wait starts when the network is on.
+---
+diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
+index d7188a3..6ed886f 100644
+--- a/host/adhoc/session.hpp
++++ b/host/adhoc/session.hpp
+@@ -17,6 +17,8 @@ void adhoc_apply_settings(bool switch_now = false);
+ // True while the game is in an ad hoc group or joining one, or hosting:
+ // pausing it then would stop it answering the other players.
+ [[nodiscard]] bool adhoc_session_active();
++// True once the game has started its network (hle_adhoc.cpp); the client does not connect before.
++[[nodiscard]] bool adhoc_networking_on();
+ 
+ // The product code a player logs in with: the game's, with the profile's edition mark (see GameProfile::adhoc_edition_mark) when
+ // the running edition has one. Players of different editions are different products to a server, so they never meet.
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 44bb6ef..ba82017 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -1540,6 +1540,11 @@ void play_together() {
+                 if (rd.state == adhoc::ServerState::Online) {
+                     relay_timing = false;
+                     info_row("Relay", "Connected. Room " + s.adhoc_room + ": share it with the others.");
++                } else if (!adhoc_networking_on()) {
++                    // The client only connects once the game starts its network (Communications Mode), so there is
++                    // nothing to wait for yet: timing it here would give up on a relay that was never tried.
++                    relay_timing = false;
++                    info_row("Relay", "Ready. Enter Communications Mode and the game connects to room " + s.adhoc_room + ".");
+                 } else {
+                     if (!relay_timing) {
+                         relay_timing = true;
+-- 
+2.45.0
+
