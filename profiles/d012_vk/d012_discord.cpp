@@ -34,6 +34,7 @@ using psprecomp::Runtime;
 // The application's id (public) and the art asset keys uploaded in the Discord developer portal.
 constexpr const char *kApplicationId = "1573126343367983215";
 constexpr const char *kLargeImage = "d012_icon";
+constexpr const char *kDownloadUrl = "https://github.com/LiinkPK/Dissidia012-PC";
 
 constexpr std::uint32_t kBattleManager = 0x089D6A10u;  // *(u32*) is the battle object, 0 outside a battle
 constexpr std::uint32_t kBattleStage = 0x08B98854u;    // the stage's number in the select list during a battle, else 0xFFFFFFFF
@@ -299,6 +300,8 @@ private:
         std::string activity = "{\"details\":\"" + json_escape(s.details) + "\"";
         if (!s.state.empty()) activity += ",\"state\":\"" + json_escape(s.state) + "\"";
         activity += ",\"timestamps\":{\"start\":" + std::to_string(start_) + "}";
+        // The button under the presence. Discord shows it to other people, not to the player.
+        activity += std::string(",\"buttons\":[{\"label\":\"Download\",\"url\":\"") + kDownloadUrl + "\"}]";
         activity += ",\"assets\":{\"large_image\":\"" + json_escape(s.image) + "\",\"large_text\":\"" + json_escape(s.image_text) +
                     "\",\"small_image\":\"" + kLargeImage + "\",\"small_text\":\"Dissidia 012 Final Fantasy HD Remastered\"}}";
         const std::string message = "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":" + std::to_string(pid()) +
