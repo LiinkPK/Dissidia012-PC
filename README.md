@@ -93,15 +93,15 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 
 ## HD texture pack: terms of use
 
-The HD texture pack is the result of about three years of manual work by its author, LiinkPK. It began as a texture pack for PPSSPP, free for everyone to use on their own copy of the game, and it stays that way. It is **not** under this repository's MIT licence. These terms apply to it:
+The HD texture pack is the result of about three years of manual work. It began as a [texture pack for PPSSPP](https://github.com/LiinkPK/Dissidia012HDTextures), free for everyone to use on their own copy of the game, and it stays that way. It is **not** under this repository's MIT licence. These terms apply to it:
 
 - **Allowed:** using it for yourself, in PPSSPP or in this port, and changing it for your own use.
-- **Not allowed without written permission from the author:** redistributing the pack or any part of it, bundling it in another project (a port, recompilation, emulator build or mod pack), or using it in anything that takes donations, sponsorship or other income.
-- **Credit:** if the author gives permission, the pack must be credited to LiinkPK.
+- **Not allowed without my written permission:** redistributing the pack or any part of it, bundling it in another project (a port, recompilation, emulator build or mod pack), or using it in anything that takes donations, sponsorship or other income.
+- **Credit:** if I give permission, the pack must be credited to LiinkPK.
 
-The pack contains artwork derived from Square Enix's game. The author claims no rights over Square Enix's material, only over their own work in the upscaling and editing. This is a fan project, not affiliated with or endorsed by Square Enix.
+The pack contains artwork derived from Square Enix's game. I claim no rights over Square Enix's material, only over their own work in the upscaling and editing. This is a fan project, not affiliated with or endorsed by Square Enix.
 
-To ask for permission, contact the author through this repository's Discord or GitHub.
+To ask for permission, contact me through this repository's Discord or GitHub.
 
 ## Status
 
@@ -143,3 +143,9 @@ The PSPRecomp framework is MIT licensed. See [`LICENSE`](LICENSE).
 [![discord](https://www.readmecodegen.com/api/social-icon?name=discord&size=80&animation=pulse&animationDuration=5&reverseBackground=true&link=https%3A%2F%2Fdiscord.gg%2FW9rcyMJ7br)](https://discord.gg/W9rcyMJ7br)
 
 [![Members](https://live-members-count.rohansrma.me/api/discord-members?guildId=1297810668975689778&color=5865F2&label=Members&scale=1.2)](https://discord.gg/W9rcyMJ7br)
+
+## Third-party software
+
+This release bundles FFmpeg (LGPL; `FFmpeg-LICENSE.txt` and `FFmpeg-SOURCE.txt` are included), SDL3, Dear ImGui, stb, xxHash and other libraries through PortableKit. Each keeps its own licence. This project is not affiliated with Square Enix or Sony; *Dissidia* and *Final Fantasy* are trademarks of their owners.
+
+Source and development log: https://github.com/LiinkPK/Dissidia012-PC
