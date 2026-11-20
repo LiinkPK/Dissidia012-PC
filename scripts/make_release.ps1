@@ -34,9 +34,12 @@ $localFolders = "data\logs", "data\screenshots", "logs"
 # Test leftovers and old copies that must not ship.
 $junk = "*.stale*", "*.old", "*.old-*", "*.old.*","*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak",
     # what the test switches write beside the exe: traces, crash dumps and trigger files
-    "roster_*.txt", "roster_trigger", "text_trace.txt", "text_trigger", "live.txt", "crash_report.txt", "*.dmp"
+    "roster_*.txt", "roster_trigger", "text_trace.txt", "text_trigger", "live.txt", "crash_report.txt", "*.dmp",
+    "discord_log.txt", "perf_log.txt", "run_host.bat", "run_join.bat", "*.part", "emendatus_release.txt",
+    # The game's own prepared executables (the player's game data, made on the first run): never shipped.
+    "*.ELF", "*.elf"
 # Linux and macOS files never go in the Windows zip: the shell scripts, the Linux binary and libraries, the .dylib files, and the Carlito font
-# (the Linux package takes release\linux\ and scriptsuild_linux.sh; this script only ever copies release\*.* files).
+# (the Linux package takes release\linux\ and scripts\build_linux.sh; this script only ever copies release\*.* files).
 $linuxOnly = "*.sh", "*.so", "*.so.*", "*.dylib", "d012_native", "Carlito*", "linux_deps*", "run.sh"
 
 if (-not (Test-Path (Join-Path $src "d012_native.exe"))) { throw "Build the project first: $src\d012_native.exe not found" }
@@ -98,8 +101,10 @@ if ($WithEmendatus -and (Test-Path $modsSrc)) {
 if (-not $WithEmendatus) { Remove-Item -Recurse -Force (Join-Path $stage "corpora") -ErrorAction SilentlyContinue }
 # data\logs and data\screenshots are never packed, whichever way they got in.
 foreach ($folder in $localFolders) { Remove-Item -Recurse -Force (Join-Path $stage $folder) -ErrorAction SilentlyContinue }
-# Sweep: whatever Linux file got in by another way is removed before zipping.
+# Sweep: whatever Linux file got in by another way is removed before zipping, and so is anything of the game's own (prepared executables) or
+# of the testing here that came in with the repo's folders (release\mods, release\data).
 Get-ChildItem $stage -Recurse -File -Include $linuxOnly | Remove-Item -Force
+Get-ChildItem $stage -Recurse -File -Include "*.ELF", "*.elf", "emendatus_release.txt", "*.part", "*.log", "*.old*" | Remove-Item -Force
 Write-Host "Done!"
 
 Write-Host "[4/6] Creating the empty player folders... " -NoNewline
