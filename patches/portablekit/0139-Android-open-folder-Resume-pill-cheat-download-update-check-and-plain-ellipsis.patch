@@ -185,6 +185,39 @@ index 8cc6a17..d15a2ed 100644
          block(ctx, name, 3, arg(ctx, 1), check);
      });
      // (srcmac*, srcport, buffer, retry interval, retry count, backlog, unused)
+diff --git a/host/platform/android_app.cpp b/host/platform/android_app.cpp
+index c62872b..461c4ce 100644
+--- a/host/platform/android_app.cpp
++++ b/host/platform/android_app.cpp
+@@ -36,6 +36,11 @@ struct Launch {
+ void *run_game(void *argument) {
+     auto *launch = static_cast<Launch *>(argument);
+     launch->result = portablekit_main(launch->argc, launch->argv);
++    // A normal exit leaves a marker: the next start then knows the run did not crash or get killed (see redirect_output).
++    if (launch->result == 0) {
++        if (const char *storage = SDL_GetAndroidInternalStoragePath()) std::ofstream(std::string(storage) + "/clean_exit") << "ok
++";
++    }
+     return nullptr;
+ }
+ 
+@@ -46,6 +51,16 @@ void redirect_output() {
+     const char *storage = SDL_GetAndroidInternalStoragePath();
+     if (storage == nullptr) return;
+     const std::string log = std::string(storage) + "/" + portablekit::game().app_name + ".log";
++    // A run that did not end normally (a crash, or Android killing the app) keeps its log as <app_name>-crash.log, until another one does.
++    // The restarts that follow a crash (Android may start the app again by itself) must not push that log out.
++    {
++        std::error_code ec;
++        const std::string marker = std::string(storage) + "/clean_exit";
++        if (std::filesystem::exists(log, ec) && !std::filesystem::exists(marker, ec) && std::filesystem::file_size(log, ec) > 0u)
++            std::filesystem::copy_file(log, std::string(storage) + "/" + portablekit::game().app_name + "-crash.log",
++                                       std::filesystem::copy_options::overwrite_existing, ec);
++        std::filesystem::remove(marker, ec);
++    }
+     // The previous run's log survives one start, for reporting a crash.
+     std::rename(log.c_str(),
+                 (std::string(storage) + "/" + portablekit::game().app_name + "-previous.log").c_str());
 diff --git a/host/platform/android_jni.cpp b/host/platform/android_jni.cpp
 index 2f28d30..0d8acf6 100644
 --- a/host/platform/android_jni.cpp
@@ -295,7 +328,7 @@ index 4835429..574f779 100644
      }
      if (picked) {
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index ba82017..2756bf6 100644
+index ba82017..73b884e 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -392,6 +392,30 @@ void run_cheat(psprecomp::GuestMemory &m, const std::vector<CheatLine> &lines) {
@@ -471,7 +504,17 @@ index ba82017..2756bf6 100644
                                                  "the logs folder) to a folder you pick, to send with a problem report."})) {
          std::fflush(stdout);
          std::fflush(stderr);
-@@ -1986,15 +2061,15 @@ void Menu::system() {
+@@ -1923,6 +1998,9 @@ void Menu::system() {
+         std::filesystem::create_directories(local, ec);
+         std::filesystem::copy_file(storage / log_name, local / log_name, ec);
+         std::filesystem::copy_file(storage / previous_log_name, local / previous_log_name, ec);
++        // The log of the last run that did not end normally (a crash, or Android closing the app), kept apart from the restarts after it.
++        std::filesystem::copy_file(storage / (std::string(portablekit::game().app_name) + "-crash.log"),
++                                   local / (std::string(portablekit::game().app_name) + "-crash.log"), ec);
+         if (std::filesystem::is_directory(storage / "logs", ec))
+             std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
+         const auto copied = android::pick_folder_and_copy(local);
+@@ -1986,15 +2064,15 @@ void Menu::system() {
          open_folder(install::path_from_utf8(data_dir));
      }
  #endif
@@ -490,7 +533,7 @@ index ba82017..2756bf6 100644
                             : u.state == updater::State::UpToDate  ? "Up to date"
                             : u.state == updater::State::Failed && u.latest.empty() ? "Could not check: " + u.error
                                                                                      : "";
-@@ -2042,6 +2117,69 @@ bool Menu::confirm_dialog() {
+@@ -2042,6 +2120,69 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -560,7 +603,7 @@ index ba82017..2756bf6 100644
          if (confirm_ == Confirm::OldTextures) {
              // The pack is the textures folder itself now; an older install keeps a copy in a folder named for a disc. 0: asking, 1: removing, 2: done
              static std::atomic<int> removing{0};
-@@ -2052,7 +2190,7 @@ bool Menu::confirm_dialog() {
+@@ -2052,7 +2193,7 @@ bool Menu::confirm_dialog() {
                  Layer::get().renderer().reload_texture_pack();
                  confirm_ = Confirm::None;
              } else if (removing.load() == 1) {
@@ -569,7 +612,7 @@ index ba82017..2756bf6 100644
              } else {
                  paragraph("The HD texture pack now lives in the textures folder itself, and updates will go there. The older copy in " +
                                install::path_to_utf8(old_folder) + " is no longer needed. Removing it frees the space.",
-@@ -2089,8 +2227,17 @@ bool Menu::confirm_dialog() {
+@@ -2089,8 +2230,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -589,7 +632,7 @@ index ba82017..2756bf6 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -2166,7 +2313,7 @@ bool Menu::update_dialog() {
+@@ -2166,7 +2316,7 @@ bool Menu::update_dialog() {
  #endif
              settings::Settings &s = settings::current();
              if (toggle_row("Don't show this when the game starts", !s.update_notice,
@@ -598,7 +641,7 @@ index ba82017..2756bf6 100644
                  s.update_notice = !s.update_notice;
                  settings::save();
              }
-@@ -2304,7 +2451,7 @@ void add_menu_rows(void (*rows)()) {
+@@ -2304,7 +2454,7 @@ void add_menu_rows(void (*rows)()) {
  void apply_cheats(psprecomp::Runtime &runtime) {
      // Cheats are off while the game is in an online session (hosting, joining or in a group), and come back when it ends. Nothing in
      // the cheats file changes: they are only not applied. The other players' games cannot be told, so this only keeps this one honest.
@@ -607,7 +650,7 @@ index ba82017..2756bf6 100644
      const std::lock_guard<std::mutex> lock(cheat_mutex());
      load_cheats();
      const CheatFile &f = cheat_file();
-@@ -2344,6 +2491,15 @@ bool &show_old_textures_on_open() {
+@@ -2344,6 +2494,15 @@ bool &show_old_textures_on_open() {
      static bool value = false;
      return value;
  }
@@ -623,7 +666,7 @@ index ba82017..2756bf6 100644
  
  // The update question is waiting to be shown: menu_requested() reports it as a menu request, and the menu that opens
  // for it starts on the question (show_update_on_open).
-@@ -2394,6 +2550,16 @@ void draw_over_game() {
+@@ -2394,6 +2553,16 @@ void draw_over_game() {
          const std::filesystem::path old_folder = gpu::old_texture_folder(gpu::VulkanRenderer::textures_root());
          if (!old_folder.empty() && old_texture_asked() != install::path_to_utf8(old_folder)) old_textures_pending() = true;
      }
@@ -640,7 +683,7 @@ index ba82017..2756bf6 100644
      static bool update_offered = false;
      // The question opens a second after the release is found, so the game is already running and pauses itself when the
      // menu opens over it (straight away, it opened before the game had a frame to pause on).
-@@ -2455,6 +2621,7 @@ void open_menu_over_game() {
+@@ -2455,6 +2624,7 @@ void open_menu_over_game() {
      menu.emplace(false);
      if (std::exchange(show_update_on_open(), false)) menu->show_update();
      if (std::exchange(show_old_textures_on_open(), false)) menu->ask_old_textures();
@@ -648,7 +691,7 @@ index ba82017..2756bf6 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -2477,6 +2644,11 @@ bool menu_requested() {
+@@ -2477,6 +2647,11 @@ bool menu_requested() {
          show_old_textures_on_open() = true;
          return true;
      }
@@ -660,7 +703,7 @@ index ba82017..2756bf6 100644
      return asked;
  }
  
-@@ -2488,6 +2660,7 @@ bool run_menu() {
+@@ -2488,6 +2663,7 @@ bool run_menu() {
      Menu menu(true);
      if (std::exchange(show_update_on_open(), false)) menu.show_update();
      if (std::exchange(show_old_textures_on_open(), false)) menu.ask_old_textures();
