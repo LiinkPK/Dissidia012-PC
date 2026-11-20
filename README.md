@@ -22,7 +22,7 @@ A fork of the PSPRecomp static recompilation framework, used to port **Dissidia 
 
 - Windows 10 or 11, 64-bit
 - macOS `(both Apple Silicon and Intel chips)`
-- Linux distros `(tested on Ubuntu, Mint, Kali and SteamOS)`
+- Linux distros `(SteamDeck also supported)`
 - Android
 >**Android known issue:** if the app is installed through Quiver or Recompa, the status bar blocks part of the picture. Installing the APK through [Obtainium](https://github.com/ImranR98/Obtainium) solves it.
 >
@@ -85,11 +85,10 @@ The executable is recompiled **unmodified**: the code in `profiles/d012_pk/work/
 
 ## Texture replacement
 
-The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNGs, `hash = quick`) found in `data/textures/ULES01505` next to the executable. The replacement image keeps its own resolution, so HD art works without touching the game's data.
+The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNGs, `hash = quick`) found in `data/textures` next to the executable. The replacement image keeps its own resolution, so HD art works without touching the game's data.
 
 > [!NOTE]
-> Even if you're running the US version, there is no need to change the texture folder's name from `ULES01505` to `ULUS10566`.
-> Simply find the folder in the **Menu** -> **Import texture pack...** -> And then confirm changes/replacement.
+> They are multi-region and require no name change. They sit under `/textures/` next to `textures.ini`.
 
 ## HD texture pack: terms of use
 
