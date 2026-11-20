@@ -16,6 +16,7 @@
 
 #include "d012_hle.hpp"
 #include "d012_icon.hpp"
+#include "../../d012_vk/d012_discord.hpp"
 
 #include <filesystem>
 #include <span>
@@ -54,6 +55,12 @@ struct Release {
     const char *name;
     std::span<const SaveFolder> saves;
 };
+
+// The port's extra HLE, then the Discord Rich Presence (d012_vk/d012_discord.cpp).
+void register_hle(HleRegistrar &hle) {
+    d012::register_extra_hle(hle);
+    d012_discord::install(hle);
+}
 
 // One overlay window. The game loads OVL_MENU_APP.ELF, OVL_BATTLE_APP.ELF or OVL_EXTRA_APP.ELF there; each is
 // one PT_LOAD segment at 0x089DD4C0. The end is the end of the largest (battle) rounded up to the next section
@@ -145,7 +152,7 @@ GameProfile build(const Release &r) {
         // d012_camera.cpp).
         .extra_buttons = input::kExtraL2 | input::kExtraR2 | input::kExtraL3 | input::kExtraR3,
 
-        .register_extra_hle = &d012::register_extra_hle,
+        .register_extra_hle = &register_hle,
         .patch_loaded_image = &::d012_emendatus::patch_loaded_image,
 
         .skip_message_dialog = skip_autosave_notice,
