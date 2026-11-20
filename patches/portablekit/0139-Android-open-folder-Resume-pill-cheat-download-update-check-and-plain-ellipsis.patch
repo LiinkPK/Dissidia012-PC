@@ -186,22 +186,21 @@ index 8cc6a17..d15a2ed 100644
      });
      // (srcmac*, srcport, buffer, retry interval, retry count, backlog, unused)
 diff --git a/host/platform/android_app.cpp b/host/platform/android_app.cpp
-index c62872b..461c4ce 100644
+index c62872b..bad2125 100644
 --- a/host/platform/android_app.cpp
 +++ b/host/platform/android_app.cpp
-@@ -36,6 +36,11 @@ struct Launch {
+@@ -36,6 +36,10 @@ struct Launch {
  void *run_game(void *argument) {
      auto *launch = static_cast<Launch *>(argument);
      launch->result = portablekit_main(launch->argc, launch->argv);
 +    // A normal exit leaves a marker: the next start then knows the run did not crash or get killed (see redirect_output).
 +    if (launch->result == 0) {
-+        if (const char *storage = SDL_GetAndroidInternalStoragePath()) std::ofstream(std::string(storage) + "/clean_exit") << "ok
-+";
++        if (const char *storage = SDL_GetAndroidInternalStoragePath()) std::ofstream(std::string(storage) + "/clean_exit") << "ok\n";
 +    }
      return nullptr;
  }
  
-@@ -46,6 +51,16 @@ void redirect_output() {
+@@ -46,6 +50,16 @@ void redirect_output() {
      const char *storage = SDL_GetAndroidInternalStoragePath();
      if (storage == nullptr) return;
      const std::string log = std::string(storage) + "/" + portablekit::game().app_name + ".log";
