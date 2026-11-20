@@ -9,7 +9,8 @@ menu gets a Resume pill beside Paused, for touch. An Android app with no cheat f
 fetches the profile's (cheats_download_base). latest_asset() also reports a file's
 size and update stamp, so a check can tell a current file without downloading. The
 menu text uses three periods: the CJK fallback font draws the ellipsis character
-mid-line on Android.
+mid-line on Android. On Android the player is asked at start to move the game's data to the shared
+folder (all files access, once) when it is in private storage, so every folder button can open it.
 ---
 diff --git a/host/gpu/texture_pack_import.cpp b/host/gpu/texture_pack_import.cpp
 index 7b0ddd6..9d79d0f 100644
@@ -101,7 +102,7 @@ index 4835429..574f779 100644
      }
      if (picked) {
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index ba82017..9054ad7 100644
+index ba82017..305e8fe 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -392,6 +392,30 @@ void run_cheat(psprecomp::GuestMemory &m, const std::vector<CheatLine> &lines) {
@@ -150,7 +151,23 @@ index ba82017..9054ad7 100644
      f.stamp = stamp;
      std::ifstream in(path, std::ios::binary);
      std::string line;
-@@ -511,6 +542,29 @@ bool Menu::frame() {
+@@ -452,13 +483,14 @@ public:
+     [[nodiscard]] bool quit() const noexcept { return quit_; }
+     // Opens on the System page with the update question up.
+     void ask_old_textures() { confirm_ = Confirm::OldTextures; }
++    void ask_shared_data() { confirm_ = Confirm::SharedData; }
+     void show_update() {
+         tab_ = 6;
+         update_open_ = true;
+     }
+ 
+ private:
+-    enum class Confirm { None, Quit, Setup, OldTextures };
++    enum class Confirm { None, Quit, Setup, OldTextures, SharedData };
+ 
+     void video();
+     void audio();
+@@ -511,6 +543,29 @@ bool Menu::frame() {
      back_ = back || pad_back;
  
      begin_panel("##menu", portablekit::game().project_name, paused_ ? "Paused" : "Running", true);
@@ -159,10 +176,10 @@ index ba82017..9054ad7 100644
 +        const ImGuiStyle &style = ImGui::GetStyle();
 +        const char *state_text = paused_ ? "Paused" : "Running";
 +        const float unit = Layer::get().font_size();
-+        const float height = unit * 1.7f, width = unit * 5.6f;
++        const float height = unit * 1.4f, width = unit * 5.2f;
 +        const ImVec2 window = ImGui::GetWindowPos(), extent = ImGui::GetWindowSize();
 +        const ImVec2 at{window.x + extent.x - style.WindowPadding.x - ImGui::CalcTextSize(state_text).x - unit * 0.9f - width,
-+                        window.y + style.WindowPadding.y};
++                        window.y + style.WindowPadding.y + style.FontSizeBase * 1.45f - unit * 0.65f - height * 0.5f};
 +        const ImVec2 saved = ImGui::GetCursorScreenPos();
 +        ImGui::SetCursorScreenPos(at);
 +        ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // the pad and keys keep their rows: this is for touch and mouse
@@ -180,7 +197,7 @@ index ba82017..9054ad7 100644
      static const char *const kTabs[] = {"Video", "Audio", "Controls", "Network", "Cheats", "Mods", "System"};
      const bool switched = tab_bar(kTabs, 7, tab_) || first_frame_;
      first_frame_ = false;
-@@ -1447,7 +1501,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+@@ -1447,7 +1502,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -189,7 +206,7 @@ index ba82017..9054ad7 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1468,7 +1522,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1468,7 +1523,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -198,7 +215,7 @@ index ba82017..9054ad7 100644
      return "None";
  }
  
-@@ -1651,7 +1705,7 @@ void play_together() {
+@@ -1651,7 +1706,7 @@ void play_together() {
                                                    "other; then enter the same lobby."}))
              adhoc_join(address);
      }
@@ -207,7 +224,7 @@ index ba82017..9054ad7 100644
      if (other_edition != 0u)
          info_row("Not listed", std::to_string(other_edition) + (other_edition == 1u ? " session" : " sessions") +
                                     " of the other edition: the Emendatus Mod and the stock game never play each other");
-@@ -1911,7 +1965,7 @@ void Menu::system() {
+@@ -1911,7 +1966,7 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -216,7 +233,7 @@ index ba82017..9054ad7 100644
                                                  "the logs folder) to a folder you pick, to send with a problem report."})) {
          std::fflush(stdout);
          std::fflush(stderr);
-@@ -1986,15 +2040,15 @@ void Menu::system() {
+@@ -1986,15 +2041,15 @@ void Menu::system() {
          open_folder(install::path_from_utf8(data_dir));
      }
  #endif
@@ -235,7 +252,77 @@ index ba82017..9054ad7 100644
                             : u.state == updater::State::UpToDate  ? "Up to date"
                             : u.state == updater::State::Failed && u.latest.empty() ? "Could not check: " + u.error
                                                                                      : "";
-@@ -2052,7 +2106,7 @@ bool Menu::confirm_dialog() {
+@@ -2042,6 +2097,69 @@ bool Menu::confirm_dialog() {
+             return true;
+         }
+         confirm_opened_ = true;
++        if (confirm_ == Confirm::SharedData) {
++#if defined(PORTABLEKIT_ANDROID_APP)
++            // 0: asking, 1: waiting for "access to all files", 2: moving the data
++            static std::atomic<int> phase{0};
++            static std::mutex error_lock;
++            static std::string error;
++            const std::filesystem::path shared = install::shared_data_directory();
++            heading("Put the game's data where you can open it?");
++            if (phase.load() == 1 && android::all_files_access()) {
++                phase = 2;
++                std::thread([shared] {
++                    std::string failure;
++                    if (install::move_data_to_shared(install::private_data_directory(), shared, failure)) {
++                        android::relaunch();
++                    } else {
++                        const std::lock_guard<std::mutex> guard(error_lock);
++                        error = failure;
++                    }
++                    phase = 0;
++                }).detach();
++            }
++            if (phase.load() == 2) {
++                paragraph("Moving the game's data. Keep the app open: it restarts by itself when it is done.", colors::kTextDim);
++            } else {
++                std::string text = "The mods, cheats, textures, DLC and saves are in the app's private storage, which no file manager can open. "
++                                   "Moving them to " + install::path_to_utf8(shared) + " puts them in a folder every file manager shows. "
++                                   "Android asks once for access to all files.";
++                if (phase.load() == 1) text = "Allow access to all files in the page that opened, then come back here: the move starts by itself.";
++                paragraph(text, colors::kTextDim);
++                {
++                    const std::lock_guard<std::mutex> guard(error_lock);
++                    if (!error.empty()) paragraph(error, colors::kDanger);
++                }
++                ImGui::Dummy({0.0f, font * 0.6f});
++                const float gap = font * 0.6f;
++                const float width = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
++                if (big_button(phase.load() == 1 ? "Open that page again" : "Move them", width, true)) {
++                    {
++                        const std::lock_guard<std::mutex> guard(error_lock);
++                        error.clear();
++                    }
++                    if (android::all_files_access()) {
++                        phase = 1;  // the check at the top of the next frame starts the move
++                    } else {
++                        phase = 1;
++                        android::request_all_files_access();
++                    }
++                }
++                ImGui::SameLine(0.0f, gap);
++                if (big_button("Not now", width)) {
++                    phase = 0;
++                    confirm_ = Confirm::None;
++                }
++                ImGui::SetItemDefaultFocus();
++            }
++#else
++            confirm_ = Confirm::None;
++#endif
++            ImGui::Dummy({0.0f, font * 0.2f});
++            if (confirm_ == Confirm::None) ImGui::CloseCurrentPopup();
++            ImGui::EndPopup();
++            return true;
++        }
+         if (confirm_ == Confirm::OldTextures) {
+             // The pack is the textures folder itself now; an older install keeps a copy in a folder named for a disc. 0: asking, 1: removing, 2: done
+             static std::atomic<int> removing{0};
+@@ -2052,7 +2170,7 @@ bool Menu::confirm_dialog() {
                  Layer::get().renderer().reload_texture_pack();
                  confirm_ = Confirm::None;
              } else if (removing.load() == 1) {
@@ -244,7 +331,7 @@ index ba82017..9054ad7 100644
              } else {
                  paragraph("The HD texture pack now lives in the textures folder itself, and updates will go there. The older copy in " +
                                install::path_to_utf8(old_folder) + " is no longer needed. Removing it frees the space.",
-@@ -2166,7 +2220,7 @@ bool Menu::update_dialog() {
+@@ -2166,7 +2284,7 @@ bool Menu::update_dialog() {
  #endif
              settings::Settings &s = settings::current();
              if (toggle_row("Don't show this when the game starts", !s.update_notice,
@@ -253,6 +340,67 @@ index ba82017..9054ad7 100644
                  s.update_notice = !s.update_notice;
                  settings::save();
              }
+@@ -2344,6 +2462,15 @@ bool &show_old_textures_on_open() {
+     static bool value = false;
+     return value;
+ }
++// Android: the game's data is in the app's private storage, which no file manager shows; the player is asked to move it to the shared folder.
++bool &shared_data_pending() {
++    static bool value = false;
++    return value;
++}
++bool &show_shared_data_on_open() {
++    static bool value = false;
++    return value;
++}
+ 
+ // The update question is waiting to be shown: menu_requested() reports it as a menu request, and the menu that opens
+ // for it starts on the question (show_update_on_open).
+@@ -2394,6 +2521,16 @@ void draw_over_game() {
+         const std::filesystem::path old_folder = gpu::old_texture_folder(gpu::VulkanRenderer::textures_root());
+         if (!old_folder.empty() && old_texture_asked() != install::path_to_utf8(old_folder)) old_textures_pending() = true;
+     }
++#if defined(PORTABLEKIT_ANDROID_APP)
++    // The game's data must be somewhere the player can open (mods, cheats, textures, DLC, saves). When it is in the app's private storage
++    // the player is asked, a few seconds in, to move it to the shared folder; asked again at the next start until it is there.
++    static bool shared_checked = false;
++    if (!menu && !shared_checked && std::chrono::steady_clock::now() - first_frame >= std::chrono::seconds(6)) {
++        shared_checked = true;
++        const std::filesystem::path shared = install::shared_data_directory();
++        if (!shared.empty() && install::user_data_directory() != shared) shared_data_pending() = true;
++    }
++#endif
+     static bool update_offered = false;
+     // The question opens a second after the release is found, so the game is already running and pauses itself when the
+     // menu opens over it (straight away, it opened before the game had a frame to pause on).
+@@ -2455,6 +2592,7 @@ void open_menu_over_game() {
+     menu.emplace(false);
+     if (std::exchange(show_update_on_open(), false)) menu->show_update();
+     if (std::exchange(show_old_textures_on_open(), false)) menu->ask_old_textures();
++    if (std::exchange(show_shared_data_on_open(), false)) menu->ask_shared_data();
+ }
+ 
+ bool menu_over_game() { return menu_over_game_state().has_value(); }
+@@ -2477,6 +2615,11 @@ bool menu_requested() {
+         show_old_textures_on_open() = true;
+         return true;
+     }
++    if (shared_data_pending()) {
++        shared_data_pending() = false;
++        show_shared_data_on_open() = true;
++        return true;
++    }
+     return asked;
+ }
+ 
+@@ -2488,6 +2631,7 @@ bool run_menu() {
+     Menu menu(true);
+     if (std::exchange(show_update_on_open(), false)) menu.show_update();
+     if (std::exchange(show_old_textures_on_open(), false)) menu.ask_old_textures();
++    if (std::exchange(show_shared_data_on_open(), false)) menu.ask_shared_data();
+     const bool window_open = layer.run([&] { return menu.frame(); }, true);
+     layer.set_interactive(false);
+     layer.renderer().set_game_input(true);
 diff --git a/host/ui/save_screen.cpp b/host/ui/save_screen.cpp
 index 7baf4a0..40f2643 100644
 --- a/host/ui/save_screen.cpp
@@ -438,7 +586,7 @@ index 509d4f9..b5534c1 100644
  // Downloads `url` into `target` (through target.part, renamed when it is whole), telling `progress` how much is in. When `expected_size`
  // is above 0 the file must be exactly that long. False with the reason in `error`. Windows, Linux and macOS; the Android app downloads
 diff --git a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
-index 860658e..7b087fe 100644
+index 860658e..f227fef 100644
 --- a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 +++ b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 @@ -173,6 +173,40 @@ public class GameActivity extends SDLActivity {
@@ -472,7 +620,7 @@ index 860658e..7b087fe 100644
 +        }
 +        activity.runOnUiThread(new Runnable() {
 +            @Override public void run() {
-+                android.widget.Toast.makeText(activity, "The file manager cannot show this folder. It is: " + path,
++                android.widget.Toast.makeText(activity, (path.startsWith("/data/") ? "The game's data is in the app's private storage, which no file manager can open. In System, use Move the game's data to a folder you can open. " : "The file manager cannot show this folder. ") + "It is: " + path,
 +                    android.widget.Toast.LENGTH_LONG).show();
 +            }
 +        });

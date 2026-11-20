@@ -79,13 +79,9 @@ Copy-Item $calibri (Join-Path $calibriDst "calibri.ttf") -Force
 # requirements.bat and README.txt: the repo's copies win over the ones in the build folder.
 $releaseDir = Join-Path $root "release"
 if (Test-Path $releaseDir) { Get-ChildItem $releaseDir -File -Exclude $linuxOnly | Copy-Item -Destination $stage -Force }
-# The cheats files (ULES and ULUS) kept in the repo go in too, whether or not the build folder has them.
-$cheatsSrc = Join-Path $root "release\data\ms0\PSP\CHEATS"
-if (Test-Path $cheatsSrc) {
-    $cheatsDst = Join-Path $stage "data\ms0\PSP\CHEATS"
-    New-Item -ItemType Directory -Force $cheatsDst | Out-Null
-    Copy-Item (Join-Path $cheatsSrc "*") $cheatsDst -Recurse -Force
-}
+# The cheats files (ULES and ULUS) are the build folder's own (data\ms0\PSP\CHEATS, copied with the rest of data\ above): the ones the game
+# was tested with. They are not taken from anywhere else.
+if (-not (Test-Path (Join-Path $stage "data\ms0\PSP\CHEATS\*.ini"))) { throw "No cheat files in $src\data\ms0\PSP\CHEATS" }
 # The Emendatus mod's new data (338 MB, made by tools/mods/emendatus/make_mod_data.py --tail-out) goes in mods\ next to the
 # exe: the updater unpacks everything outside data\ and game\, so it travels with every release.
 $modsSrc = Join-Path $root "release\mods"
