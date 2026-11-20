@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#130e0b</color>
+    <!-- Transparent: the emblem in the foreground layer is already a rounded square, and a solid colour behind it filled the launcher's mask
+         to its edges, which made the icon look like a plain square. -->
+    <color name="ic_launcher_background">#00000000</color>
 </resources>

@@ -107,7 +107,7 @@ index 7b0ddd6..9d79d0f 100644
          }
      } else if (lower(folder_name) != lower(game_id) && looks_like_game_id(folder_name)) {
 diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
-index 8cc6a17..dd70bb8 100644
+index 8cc6a17..ee6bf31 100644
 --- a/host/hle/hle_adhoc.cpp
 +++ b/host/hle/hle_adhoc.cpp
 @@ -361,6 +361,8 @@ void register_adhocctl(HleRegistrar &hle) {
@@ -129,6 +129,28 @@ index 8cc6a17..dd70bb8 100644
              if (!settings::current().adhoc || adhoc_server_address().empty()) {
                  Client::log("[adhoc] no server is set up (menu: Network); joining fails", true);
                  notify_handlers(kEventError, err::kCtlTimeout);
+@@ -723,7 +728,20 @@ void register_ptp(HleRegistrar &hle) {
+             return std::nullopt;
+         };
+         if (const auto result = check(false)) return done(ctx, name, 3, *result);
+-        if (arg(ctx, 2) != 0u) return done(ctx, name, 3, err::kWouldBlock);
++        if (arg(ctx, 2) != 0u) {
++            // Non-blocking: this game calls PtpConnect once per socket and never asks again (the trace shows a new socket opened every frame,
++            // none polled), so an answer of "would block" is taken as a failure and the connection is never used, while the other player
++            // waits for it for ever. On a LAN the connection is made by the time the call returns; over the relay it takes a round trip, so
++            // the call waits for it, a little at most, and says "would block" only when the wait ends.
++            constexpr std::uint32_t kConnectWaitUs = 1500000u;
++            const std::uint32_t limit = arg(ctx, 1) != 0u ? std::min(arg(ctx, 1), kConnectWaitUs) : kConnectWaitUs;
++            block(ctx, name, 3, limit, [check](bool timed_out) -> std::optional<std::uint32_t> {
++                const auto result = check(timed_out);
++                if (result && *result == err::kTimeout) return err::kWouldBlock;
++                return result;
++            });
++            return;
++        }
+         block(ctx, name, 3, arg(ctx, 1), check);
+     });
+     // (srcmac*, srcport, buffer, retry interval, retry count, backlog, unused)
 diff --git a/host/platform/android_jni.cpp b/host/platform/android_jni.cpp
 index 2f28d30..0d8acf6 100644
 --- a/host/platform/android_jni.cpp
@@ -239,7 +261,7 @@ index 4835429..574f779 100644
      }
      if (picked) {
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index ba82017..65af549 100644
+index ba82017..2756bf6 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -392,6 +392,30 @@ void run_cheat(psprecomp::GuestMemory &m, const std::vector<CheatLine> &lines) {
@@ -304,7 +326,7 @@ index ba82017..65af549 100644
  
      void video();
      void audio();
-@@ -511,6 +543,31 @@ bool Menu::frame() {
+@@ -511,6 +543,41 @@ bool Menu::frame() {
      back_ = back || pad_back;
  
      begin_panel("##menu", portablekit::game().project_name, paused_ ? "Paused" : "Running", true);
@@ -325,10 +347,20 @@ index ba82017..65af549 100644
 +        ImDrawList *pill = ImGui::GetWindowDrawList();
 +        pill->AddRectFilled(at, {at.x + width, at.y + height}, held ? colors::kAccent : hovered ? colors::kRowHover : colors::kRowFocus,
 +                            height * 0.5f);
-+        // The font's line box has more room under the letters than over them, so the text is lifted a little to look centred in the pill.
++        // Centred by the letters themselves, not by the font's line box (which has different room above and below in every font): the
++        // glyphs' own top and bottom, read from the font, are centred in the pill.
 +        const ImVec2 label = ImGui::CalcTextSize("Resume");
-+        pill->AddText({at.x + (width - label.x) * 0.5f, at.y + (height - label.y) * 0.5f - unit * 0.17f},
-+                      held ? colors::kPanel : colors::kAccentBright, "Resume");
++        float ink_top = 1.0e9f, ink_bottom = -1.0e9f;
++        if (ImFontBaked *baked = ImGui::GetFontBaked()) {
++            for (const char *c = "Resume"; *c != 0; ++c) {
++                if (const ImFontGlyph *glyph = baked->FindGlyph(static_cast<ImWchar>(*c))) {
++                    ink_top = std::min(ink_top, glyph->Y0);
++                    ink_bottom = std::max(ink_bottom, glyph->Y1);
++                }
++            }
++        }
++        const float text_y = ink_bottom > ink_top ? at.y + (height - (ink_bottom - ink_top)) * 0.5f - ink_top : at.y + (height - label.y) * 0.5f;
++        pill->AddText({at.x + (width - label.x) * 0.5f, text_y}, held ? colors::kPanel : colors::kAccentBright, "Resume");
 +        ImGui::PopItemFlag();
 +        if (pressed) close_ = true;
 +        ImGui::SetCursorScreenPos(saved);
@@ -336,7 +368,7 @@ index ba82017..65af549 100644
      static const char *const kTabs[] = {"Video", "Audio", "Controls", "Network", "Cheats", "Mods", "System"};
      const bool switched = tab_bar(kTabs, 7, tab_) || first_frame_;
      first_frame_ = false;
-@@ -1447,7 +1504,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+@@ -1447,7 +1514,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -345,7 +377,7 @@ index ba82017..65af549 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1468,7 +1525,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1468,7 +1535,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -354,7 +386,7 @@ index ba82017..65af549 100644
      return "None";
  }
  
-@@ -1535,6 +1592,14 @@ void play_together() {
+@@ -1535,6 +1602,14 @@ void play_together() {
                  relay_timing = false;
                  adhoc_join_relay();
              }
@@ -369,7 +401,7 @@ index ba82017..65af549 100644
              if (adhoc_relay_selected()) {
                  const adhoc::Diagnostics rd = adhoc::Client::get().diagnostics();
                  if (rd.state == adhoc::ServerState::Online) {
-@@ -1651,7 +1716,7 @@ void play_together() {
+@@ -1651,7 +1726,7 @@ void play_together() {
                                                    "other; then enter the same lobby."}))
              adhoc_join(address);
      }
@@ -378,7 +410,7 @@ index ba82017..65af549 100644
      if (other_edition != 0u)
          info_row("Not listed", std::to_string(other_edition) + (other_edition == 1u ? " session" : " sessions") +
                                     " of the other edition: the Emendatus Mod and the stock game never play each other");
-@@ -1801,7 +1866,7 @@ void Menu::cheats() {
+@@ -1801,7 +1876,7 @@ void Menu::cheats() {
      load_cheats();
      CheatFile &f = cheat_file();
      section("Cheats");
@@ -387,7 +419,7 @@ index ba82017..65af549 100644
      if (online) info_row("Online", "Cheats are off while you play online. They come back when the session ends.");
      if (button_row("Open the cheats file",
                     {false, {}, std::string("Edit ") + portablekit::game().disc_id + ".ini in PSP/CHEATS, in PPSSPP's format."})) {
-@@ -1826,7 +1891,7 @@ void Menu::cheats() {
+@@ -1826,7 +1901,7 @@ void Menu::cheats() {
          title.erase(0, title.find_first_not_of(" \t"));
          if (title.empty()) title = "Cheat " + std::to_string(i + 1);
          ImGui::PushID(static_cast<int>(i));
@@ -396,7 +428,7 @@ index ba82017..65af549 100644
              line[2] = line[2] == '1' ? '0' : '1';
              save_cheats();
          }
-@@ -1911,7 +1976,7 @@ void Menu::system() {
+@@ -1911,7 +1986,7 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -405,7 +437,7 @@ index ba82017..65af549 100644
                                                  "the logs folder) to a folder you pick, to send with a problem report."})) {
          std::fflush(stdout);
          std::fflush(stderr);
-@@ -1986,15 +2051,15 @@ void Menu::system() {
+@@ -1986,15 +2061,15 @@ void Menu::system() {
          open_folder(install::path_from_utf8(data_dir));
      }
  #endif
@@ -424,7 +456,7 @@ index ba82017..65af549 100644
                             : u.state == updater::State::UpToDate  ? "Up to date"
                             : u.state == updater::State::Failed && u.latest.empty() ? "Could not check: " + u.error
                                                                                      : "";
-@@ -2042,6 +2107,69 @@ bool Menu::confirm_dialog() {
+@@ -2042,6 +2117,69 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -494,7 +526,7 @@ index ba82017..65af549 100644
          if (confirm_ == Confirm::OldTextures) {
              // The pack is the textures folder itself now; an older install keeps a copy in a folder named for a disc. 0: asking, 1: removing, 2: done
              static std::atomic<int> removing{0};
-@@ -2052,7 +2180,7 @@ bool Menu::confirm_dialog() {
+@@ -2052,7 +2190,7 @@ bool Menu::confirm_dialog() {
                  Layer::get().renderer().reload_texture_pack();
                  confirm_ = Confirm::None;
              } else if (removing.load() == 1) {
@@ -503,7 +535,7 @@ index ba82017..65af549 100644
              } else {
                  paragraph("The HD texture pack now lives in the textures folder itself, and updates will go there. The older copy in " +
                                install::path_to_utf8(old_folder) + " is no longer needed. Removing it frees the space.",
-@@ -2089,8 +2217,17 @@ bool Menu::confirm_dialog() {
+@@ -2089,8 +2227,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -523,7 +555,7 @@ index ba82017..65af549 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -2166,7 +2303,7 @@ bool Menu::update_dialog() {
+@@ -2166,7 +2313,7 @@ bool Menu::update_dialog() {
  #endif
              settings::Settings &s = settings::current();
              if (toggle_row("Don't show this when the game starts", !s.update_notice,
@@ -532,7 +564,7 @@ index ba82017..65af549 100644
                  s.update_notice = !s.update_notice;
                  settings::save();
              }
-@@ -2304,7 +2441,7 @@ void add_menu_rows(void (*rows)()) {
+@@ -2304,7 +2451,7 @@ void add_menu_rows(void (*rows)()) {
  void apply_cheats(psprecomp::Runtime &runtime) {
      // Cheats are off while the game is in an online session (hosting, joining or in a group), and come back when it ends. Nothing in
      // the cheats file changes: they are only not applied. The other players' games cannot be told, so this only keeps this one honest.
@@ -541,7 +573,7 @@ index ba82017..65af549 100644
      const std::lock_guard<std::mutex> lock(cheat_mutex());
      load_cheats();
      const CheatFile &f = cheat_file();
-@@ -2344,6 +2481,15 @@ bool &show_old_textures_on_open() {
+@@ -2344,6 +2491,15 @@ bool &show_old_textures_on_open() {
      static bool value = false;
      return value;
  }
@@ -557,7 +589,7 @@ index ba82017..65af549 100644
  
  // The update question is waiting to be shown: menu_requested() reports it as a menu request, and the menu that opens
  // for it starts on the question (show_update_on_open).
-@@ -2394,6 +2540,16 @@ void draw_over_game() {
+@@ -2394,6 +2550,16 @@ void draw_over_game() {
          const std::filesystem::path old_folder = gpu::old_texture_folder(gpu::VulkanRenderer::textures_root());
          if (!old_folder.empty() && old_texture_asked() != install::path_to_utf8(old_folder)) old_textures_pending() = true;
      }
@@ -574,7 +606,7 @@ index ba82017..65af549 100644
      static bool update_offered = false;
      // The question opens a second after the release is found, so the game is already running and pauses itself when the
      // menu opens over it (straight away, it opened before the game had a frame to pause on).
-@@ -2455,6 +2611,7 @@ void open_menu_over_game() {
+@@ -2455,6 +2621,7 @@ void open_menu_over_game() {
      menu.emplace(false);
      if (std::exchange(show_update_on_open(), false)) menu->show_update();
      if (std::exchange(show_old_textures_on_open(), false)) menu->ask_old_textures();
@@ -582,7 +614,7 @@ index ba82017..65af549 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -2477,6 +2634,11 @@ bool menu_requested() {
+@@ -2477,6 +2644,11 @@ bool menu_requested() {
          show_old_textures_on_open() = true;
          return true;
      }
@@ -594,7 +626,7 @@ index ba82017..65af549 100644
      return asked;
  }
  
-@@ -2488,6 +2650,7 @@ bool run_menu() {
+@@ -2488,6 +2660,7 @@ bool run_menu() {
      Menu menu(true);
      if (std::exchange(show_update_on_open(), false)) menu.show_update();
      if (std::exchange(show_old_textures_on_open(), false)) menu.ask_old_textures();
