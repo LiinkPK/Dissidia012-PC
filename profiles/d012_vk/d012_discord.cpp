@@ -263,14 +263,23 @@ public:
         const State state = read_state(rt);
         if (sent_once_ && state == sent_ && pipe_.connected()) return;
         if (now < next_send_) return;
-        if (!pipe_.connected() && !connect()) {
-            next_send_ = now + std::chrono::seconds(30);  // Discord is not running: look again later
+        if (!pipe_.connected()) {
+            if (!connect()) {
+                next_send_ = now + std::chrono::seconds(30);  // Discord is not running: look again later
+                return;
+            }
+            // Discord answers the handshake with READY; a command sent before it is dropped. Wait, then send.
+            next_send_ = now + std::chrono::seconds(2);
             return;
         }
         if (send_activity(state)) {
             sent_ = state;
             sent_once_ = true;
             next_send_ = now + std::chrono::seconds(15);
+            std::fprintf(stderr, "[discord] presence sent: %s | %s | %s\n", state.details.c_str(), state.state.c_str(),
+                         state.image.c_str());
+        } else {
+            std::fprintf(stderr, "[discord] sending the presence failed; the pipe is closed, reconnecting\n");
         }
     }
 
@@ -281,6 +290,7 @@ private:
         if (!pipe_.connect()) return false;
         if (!pipe_.send(0, std::string("{\"v\":1,\"client_id\":\"") + kApplicationId + "\"}")) return false;
         sent_once_ = false;
+        std::fprintf(stderr, "[discord] connected to the Discord app\n");
         return true;
     }
 
