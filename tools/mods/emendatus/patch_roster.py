@@ -54,8 +54,8 @@ def apply(corpus):
 
     text = unit41.read_text(encoding="utf-8")
     text = replace_once(text, "constexpr std::uint32_t kTable = 0x08A864D0u;", "constexpr std::uint32_t kTable = 0x0BFEB200u;  // the mod's table (stock 0x08A864D0)", "table address")
-    text = replace_once(text, "std::uint32_t g_d012_grid_party = 0u;\n", "std::uint32_t g_d012_grid_party = 0u;\nstd::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared\n", "select mode global")
-    text = replace_once(text, "    g_d012_grid_party = 0u;\n", "    g_d012_grid_party = 0u;\n    g_d012_select_mode = mode;\n", "select mode set")
+    text = replace_once(text, "std::uint32_t g_d012_grid_party = 0u;\n", "std::uint32_t g_d012_grid_party = 0u;\nstd::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared\nstd::uint32_t g_d012_select_word = 0u;  // the select screen's word at +4 (0x0B: the Quick Battle party roster), same time\n", "select mode global")
+    text = replace_once(text, "    g_d012_grid_party = 0u;\n", "    g_d012_grid_party = 0u;\n    g_d012_select_mode = mode;\n    g_d012_select_word = m.aot_load32(screen + 4u);\n", "select mode set")
     text = replace_once(text, "static std::int16_t original[33][6];", "static std::int16_t original[34][6];", "original copy size")
     text = replace_once(text, "for (int r = 0; r < 33; ++r)\n            for (int c = 0; c < 6; ++c)\n                original[r][c]",
                         "for (int r = 0; r < 34; ++r)\n            for (int c = 0; c < 6; ++c)\n                original[r][c]", "copy loop")
@@ -65,7 +65,7 @@ def apply(corpus):
         "            break;\n        }\n    }\n"
         "    std::fprintf(stderr, \"[roster-mod] table 0x%08X ids:\", kTable);\n"
         "    for (int r = 0; r < 34; ++r) std::fprintf(stderr, \" %02X\", static_cast<unsigned>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + 8)) & 0xFFFFu));\n"
-        "    std::fprintf(stderr, \" (screen %08X mode %u)\\n\", screen, mode);\n"
+        "    std::fprintf(stderr, \" (screen %08X mode %u word %X)\\n\", screen, mode, g_d012_select_word);\n"
         "}\n"
         "void ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(", "roster trace")
     # the port's character description on hover reads the table by slot: the mod's table, 34 rows, ids up to 0x21
@@ -94,7 +94,7 @@ def apply(corpus):
         text, "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));",
         "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));" + NL +
         "    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game" + NL +
-        "    if (ctx.gpr[30] == 5u && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game",
+        "    if (ctx.gpr[30] == 5u && g_d012_select_word != 0x0Bu && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game (the Quick Battle party roster, screen word 0x0B, keeps her)",
         "Original Quest rows")
     # trace: how many cells the builder counted, and the list of characters it picked them from
     text = replace_once(

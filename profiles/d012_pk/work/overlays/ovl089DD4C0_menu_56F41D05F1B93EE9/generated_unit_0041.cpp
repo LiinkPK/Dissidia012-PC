@@ -150,11 +150,13 @@ std::uint32_t g_d012_grid_cols = 17u;
 std::uint32_t g_d012_grid_rows = 2u;
 std::uint32_t g_d012_grid_party = 0u;
 std::uint32_t g_d012_select_mode = 0u;  // the select screen's mode (0 Quick Battle player, 1 CPU, 2 Original Quest, 5 Party), set when its table is prepared
+std::uint32_t g_d012_select_word = 0u;  // the select screen's word at +4 (0x0B: the Quick Battle party roster), same time
 
 static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std::uint32_t mode) {
     // The Party roster is laid out like the CPU roster now (2 rows, the last cell "Remove from Party" after Random).
     g_d012_grid_party = 0u;
     g_d012_select_mode = mode;
+    g_d012_select_word = m.aot_load32(screen + 4u);
     g_d012_grid_cols = g_d012_grid_party ? 10u : 17u;
     g_d012_grid_rows = g_d012_grid_party ? 4u : 2u;
     constexpr std::uint32_t kTable = 0x0BFEB200u;  // the mod's table (stock 0x08A864D0)
@@ -184,7 +186,7 @@ static void d012_roster_prepare_table(AotFastView &m, std::uint32_t screen, std:
     }
     std::fprintf(stderr, "[roster-mod] table 0x%08X ids:", kTable);
     for (int r = 0; r < 34; ++r) std::fprintf(stderr, " %02X", static_cast<unsigned>(m.aot_load16(kTable + static_cast<std::uint32_t>(r * 12 + 8)) & 0xFFFFu));
-    std::fprintf(stderr, " (screen %08X mode %u)\n", screen, mode);
+    std::fprintf(stderr, " (screen %08X mode %u word %X)\n", screen, mode, g_d012_select_word);
 }
 void ovl089DD4C0_menu_56F41D05F1B93EE9_unit_0041_entry(CorpusRuntime &rt, AllegrexContext &ctx, std::uint16_t direct_entry_id, AotFastView &aot_mem) {
     std::uint32_t jump_target = 0u;
@@ -18927,7 +18929,7 @@ L_08A8508C:
 L_08A85090:
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));
     if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game
-    if (ctx.gpr[30] == 5u && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game
+    if (ctx.gpr[30] == 5u && g_d012_select_word != 0x0Bu && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game
     goto L_08A85094;
 L_08A85094:
     ctx.gpr[17] = (0u | 0u);

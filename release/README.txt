@@ -79,6 +79,16 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 > Even if you're running the US version, there is no need to change the texture folder's name from `ULES01505` to `ULUS10566`.
 > Simply find the folder in the **Menu** -> **Import texture pack...** -> And then confirm changes/replacement.
 
+## HD texture pack: terms of use
+
+The HD texture pack is the result of about three years of manual work by its author, LiinkPK. It began as a texture pack for PPSSPP, free for everyone to use on their own copy of the game, and it stays that way. These terms apply to it:
+
+- **Allowed:** using it for yourself, in PPSSPP or in this port, and changing it for your own use.
+- **Not allowed without written permission from the author:** redistributing the pack or any part of it, bundling it in another project (a port, recompilation, emulator build or mod pack), or using it in anything that takes donations, sponsorship or other income.
+- **Credit:** if the author gives permission, the pack must be credited to LiinkPK.
+
+The pack contains artwork derived from Square Enix's game. The author claims no rights over Square Enix's material, only over their own work in the upscaling and editing. This is a fan project, not affiliated with or endorsed by Square Enix.
+
 ---
 
 ## Status
