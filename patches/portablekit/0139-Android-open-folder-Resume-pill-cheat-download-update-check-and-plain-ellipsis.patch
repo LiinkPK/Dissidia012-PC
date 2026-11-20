@@ -27,10 +27,10 @@ index 5723df7..f77b218 100644
                  it = datagrams.erase(it);
                  continue;
 diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
-index ac509c6..a951010 100644
+index ac509c6..449a060 100644
 --- a/host/adhoc/host.cpp
 +++ b/host/adhoc/host.cpp
-@@ -145,6 +145,17 @@ bool adhoc_join_relay() {
+@@ -145,6 +145,29 @@ bool adhoc_join_relay() {
      return true;
  }
  
@@ -43,21 +43,50 @@ index ac509c6..a951010 100644
 +    adhoc_apply_settings(true);
 +}
 +
++void adhoc_auto_relay() {
++    const std::string relay = adhoc_relay_address();
++    if (relay.empty() || adhoc_hosting()) return;
++    settings::Settings &s = settings::current();
++    if (s.adhoc) return;  // already on line: the relay, a server the player typed, or a session they host
++    if (!settings::overridden_by("network.adhoc").empty() || !settings::overridden_by("network.server").empty()) return;
++    if (adhoc_room_code(s.adhoc_room).empty() && settings::overridden_by("network.room").empty()) s.adhoc_room = adhoc_new_room();
++    s.adhoc = true;
++    s.adhoc_server = relay;
++    adhoc::Client::log("[adhoc] the game started its network: going on line through the relay", true);
++}
++
 +bool adhoc_online_mode() { return adhoc_session_active() || adhoc_relay_selected(); }
 +
  void adhoc_join(const std::string &address) {
      if (address.empty()) return;
      if (adhoc_hosting()) {
+diff --git a/host/adhoc/matching.cpp b/host/adhoc/matching.cpp
+index 19cfb53..14987c3 100644
+--- a/host/adhoc/matching.cpp
++++ b/host/adhoc/matching.cpp
+@@ -183,6 +183,9 @@ std::uint32_t Context::select_target(const Mac &target, const std::string &opt)
+         if (peer->state == PeerState::IncomingRequest) {
+             peer->state = PeerState::P2P;
+             send_accept(peer->mac, opt);
++            // The player who accepts is established at once, as the one who asked is when the accept arrives (on_accept): the game waits for
++            // this event before it leaves the lobby group, and without it the accepting side stays on "Preparing for online battle".
++            io_.post(kEventEstablished, peer->mac, {});
+             return 0u;
+         }
+     }
 diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
-index 6ed886f..2038972 100644
+index 6ed886f..6aa17c4 100644
 --- a/host/adhoc/session.hpp
 +++ b/host/adhoc/session.hpp
-@@ -34,6 +34,10 @@ void adhoc_apply_settings(bool switch_now = false);
+@@ -34,6 +34,13 @@ void adhoc_apply_settings(bool switch_now = false);
  // Goes on line through the public relay in the Room setting (a new room is made when it is empty): turns ad hoc play on and uses
  // it at once. Stops hosting first. False when the profile has no relay.
  bool adhoc_join_relay();
 +// Leaves the relay: ad hoc play off and no server, so the client stops connecting and the game sees a normal disconnect.
 +void adhoc_leave_relay();
++// Called when the game starts its network (sceNetAdhocctlInit: Online Lobby, Group Battle, Communications): when nothing is chosen, goes on
++// line through the relay, in the Room setting. Nothing is saved, and the game starts off line again.
++void adhoc_auto_relay();
 +// True while cheats must stay off: hosting, in a group or joining one, or set to play through the relay ("Playing online").
 +[[nodiscard]] bool adhoc_online_mode();
  // True when a host's or player's product code is of the edition this instance runs.
@@ -76,6 +105,27 @@ index 7b0ddd6..9d79d0f 100644
              return check;
          }
      } else if (lower(folder_name) != lower(game_id) && looks_like_game_id(folder_name)) {
+diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
+index 8cc6a17..eb2945b 100644
+--- a/host/hle/hle_adhoc.cpp
++++ b/host/hle/hle_adhoc.cpp
+@@ -353,6 +353,7 @@ void register_adhocctl(HleRegistrar &hle) {
+         }
+         s.ctl_initialized = true;
+         ensure_hooked();
++        adhoc_auto_relay();  // entering an online mode connects to the relay by itself
+         start_client();
+         done(ctx, "sceNetAdhocctlInit", 3, 0u, "product " + s.product);
+     });
+@@ -361,6 +362,8 @@ void register_adhocctl(HleRegistrar &hle) {
+         if (s.ctl_initialized) Client::get().stop();
+         s.ctl_initialized = false;
+         s.handlers.clear();
++        // Leaving the online modes leaves the relay too, however the player went on line.
++        if (adhoc_relay_selected()) adhoc_leave_relay();
+         done(ctx, "sceNetAdhocctlTerm", 0, 0u);
+     });
+     hle.add("sceNetAdhocctl", "sceNetAdhocctlAddHandler", [](Runtime &, AllegrexContext &ctx) {
 diff --git a/host/platform/android_jni.cpp b/host/platform/android_jni.cpp
 index 2f28d30..0d8acf6 100644
 --- a/host/platform/android_jni.cpp
@@ -126,6 +176,39 @@ index d1a118c..5e3a6d4 100644
  
      // --- Controls ----------------------------------------------------------
      // What the triggers may press instead of L and R, for the way this game is
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index d9e903b..cfc930a 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -4,6 +4,7 @@
+ #include "install/user_data.hpp"
+ 
+ #include <algorithm>
++#include <cctype>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -515,6 +516,20 @@ void load(State &s) {
+         field.parse_variable(s.values, text);
+         s.overrides[field.key] = env_name(field.variable);
+     }
++    // The game always starts off line: a relay chosen last time is not kept. It is joined again when the player enters an online mode
++    // (adhoc_auto_relay) or presses Play online.
++    if (const char *relay = portablekit::game().adhoc_relay_server;
++        relay != nullptr && *relay != '\0' && s.values.adhoc && s.overrides.count("network.adhoc") == 0u &&
++        s.overrides.count("network.server") == 0u) {
++        const auto lower = [](std::string text) {
++            for (char &c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++            return text;
++        };
++        if (lower(s.values.adhoc_server) == lower(relay)) {
++            s.values.adhoc = false;
++            s.values.adhoc_server.clear();
++        }
++    }
+     // Bindings settings.ini did not hold are defaults, which must not take a
+     // key it gave another control.
+     std::array<bool, input::kActions> saved{};
 diff --git a/host/ui/file_browser.cpp b/host/ui/file_browser.cpp
 index caa9e2a..6c3a3f8 100644
 --- a/host/ui/file_browser.cpp
