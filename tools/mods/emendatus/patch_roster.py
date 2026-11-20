@@ -94,7 +94,7 @@ def apply(corpus):
         text, "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));",
         "L_08A85090:" + NL + "    ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));" + NL +
         "    if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game" + NL +
-        "    if (ctx.gpr[30] == 5u && g_d012_select_word != 0x0Bu && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game (the Quick Battle party roster, screen word 0x0B, keeps her)",
+        "    if (ctx.gpr[30] == 5u && g_d012_select_word != 0x0Au && g_d012_select_word != 0x0Bu && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game (the Quick Battle party roster keeps her: its Player Select is screen word 0x0A, its CPU Select 0x0B)",
         "Original Quest rows")
     # trace: how many cells the builder counted, and the list of characters it picked them from
     text = replace_once(

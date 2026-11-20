@@ -1,4 +1,4 @@
-# Builds the Android APK (arm64-v8a, Android 10 and up) on GitHub's Linux machines with scripts/build_android.sh.
+# Builds the Android APK (arm64-v8a, Android 8 and up) on GitHub's Linux machines with scripts/build_android.sh.
 # Run it from the Actions tab: "Build Android" -> "Run workflow". It is separate from "Build release" on purpose, so a
 # problem with Android never stops a Linux, macOS or Windows release. The APK is an artifact of the run (Artifacts, at the
 # bottom of the run's page); attach it to a release by hand once it works on a phone.

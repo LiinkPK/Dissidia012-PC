@@ -177,19 +177,21 @@ struct Stage {
     const char *key;
 };
 const Stage *stage_of(std::uint32_t number) {
+    // The internal ids, 0 based. Read off the game here: 4, 5, 7, 9, 12, 19. The rest (0, 1, 3, 6, 8, 10, 11, 15-18, 20, 21) come
+    // from another port's table of the same word, which agrees with every id checked here; 2, 13 and 14 are not known.
     static const Stage stages[] = {
-        {nullptr, nullptr},
-        {"Old Chaos Shrine", "stageoldshrine"}, {"Pandaemonium", "stagepandaemonium"}, {"World of Darkness", "stagewod"},
-        {"Lunar Subterrane", "stagelunar"}, {"The Rift", "stagetherift"}, {"Kefka's Tower", "stagekefkastower"},
-        {"Planet's Core", "stageplanetscore"}, {"Ultimecia's Castle", "stageultimecia"}, {"Crystal World", "stagecrystalworld"},
-        // 11 and 12: Order's Sanctuary read 12 in a battle (verified); Edge of Madness as 11 is a guess, to check
-        {"Dream's End", "stagedreamsend"}, {"Edge of Madness", "stagemadness"}, {"Order's Sanctuary", "stagesanctuary"},
+        {"Old Chaos Shrine", "stageoldshrine"}, {"Pandaemonium", "stagepandaemonium"}, {nullptr, nullptr},
+        {"World of Darkness", "stagewod"}, {"Lunar Subterrane", "stagelunar"}, {"The Rift", "stagetherift"},
+        {"Kefka's Tower", "stagekefkastower"}, {"Planet's Core", "stageplanetscore"}, {"Ultimecia's Castle", "stageultimecia"},
+        {"Crystal World", "stagecrystalworld"}, {"Dream's End", "stagedreamsend"}, {"Edge of Madness", "stagemadness"},
+        {"Order's Sanctuary", "stagesanctuary"}, {nullptr, nullptr}, {nullptr, nullptr},
         {"Empyreal Paradox", "stageparadox"}, {"Sky Fortress Bahamut", "stagebahamut"}, {"Orphan's Cradle", "stagecradle"},
-        {"Pandaemonium, Top Floor", "stagepandaemoniumtop"}, {"Crystal Tower", "stagecrystaltower"},
-        {"Phantom Train", "stagephantomtrain"}, {"M.S. Prima Vista", "stageprimavista"}};
+        {"Phantom Train", "stagephantomtrain"}, {"M.S. Prima Vista", "stageprimavista"}, {"Crystal Tower", "stagecrystaltower"},
+        {"Pandaemonium, Top Floor", "stagepandaemoniumtop"}};
     // The Omega versions share their stage's number in this word (The Rift Omega read 5 in a battle, Order's Sanctuary Omega read
     // 12); where the game keeps the Omega marker is not found yet, so an Omega stage shows as the plain one.
-    return number >= 1u && number < sizeof stages / sizeof stages[0] ? &stages[number] : nullptr;
+    if (number >= sizeof stages / sizeof stages[0] || stages[number].name == nullptr) return nullptr;  // 0xFFFFFFFF outside a battle
+    return &stages[number];
 }
 
 // ---- what the game is doing ---------------------------------------------------------------------------------------------

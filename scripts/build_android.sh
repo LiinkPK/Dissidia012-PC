@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Android build (arm64-v8a, Android 10 / API 29 and up) and packaging: dist/d012_native-android.apk.
+# Android build (arm64-v8a) and packaging: dist/d012_native-android.apk. One APK for a wide range of phones: it installs from Android 8
+# (API 26, MIN_API changes that) up to the newest, and asks only for Vulkan 1.0 to install (the game itself still wants a GPU with Vulkan 1.1).
 # Run on Linux or macOS (FFmpeg's build needs sh and make):  bash scripts/build_android.sh
 #
 # Needs: the Android SDK (ANDROID_HOME: build-tools and a platform), the Android NDK (ANDROID_NDK, r27 or newer), CMake,
@@ -15,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PK="${PORTABLEKIT_ROOT:-$ROOT/third_party/PortableKit-d012}"
 OUT="${OUT_DIR:-$ROOT/out/android}"
 REL="${REL_DIR:-$ROOT/dist}"
-API=29
+API="${MIN_API:-26}"   # the oldest Android it installs on; the native code is built against this level's system libraries
 APP_ID="${APP_ID:-io.github.liinkpk.d012hd}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu)}"
 GEN_OPT="${GEN_OPT:-1}"
@@ -122,9 +123,16 @@ fi
 echo "== 6/6 the APK =="
 APK="$REL/d012_native-android.apk"
 rm -f "$APK"
+# build_apk.sh finds its files next to itself and is written for Android 10: lowered copies live beside it for this build and are removed after.
+PKA="$PK/packaging/android"
+trap 'rm -f "$PKA/build_apk_wide.sh" "$PKA/AndroidManifest_wide.xml"' EXIT
+sed -e "s/^min_sdk=29/min_sdk=$API/" -e 's#AndroidManifest.xml#AndroidManifest_wide.xml#' "$PKA/build_apk.sh" > "$PKA/build_apk_wide.sh"
+sed 's/android:version="0x401000"/android:version="0x400003"/' "$PKA/AndroidManifest.xml" > "$PKA/AndroidManifest_wide.xml"
+grep -q "^min_sdk=$API" "$PKA/build_apk_wide.sh" || { echo "could not set min_sdk"; exit 1; }
+grep -q 'AndroidManifest_wide.xml' "$PKA/build_apk_wide.sh" || { echo "could not use the lowered manifest"; exit 1; }
+grep -q '0x400003' "$PKA/AndroidManifest_wide.xml" || { echo "could not lower the Vulkan requirement"; exit 1; }
 APP_ID="$APP_ID" GAME_RES="$ROOT/packaging/android/res" GAME_REPO="$ROOT" FONT_DIR="$FONT_CACHE" TEXTURE_DIR="$TEXTURE_DIR" \
-\
-  bash "$PK/packaging/android/build_apk.sh" "$BUILD" "$SDL_SRC" "$SDL_LIB" "$APK"
+  bash "$PKA/build_apk_wide.sh" "$BUILD" "$SDL_SRC" "$SDL_LIB" "$APK"
 [ -f "$APK" ] || { echo "The APK was not made"; exit 1; }
 # The Emendatus Mod ships in every build: its code is in the APK, its 338 MB of data is downloaded in the app from the release.
 unzip -l "$APK" | grep -q "libcorpus_emendatus.so" || { echo "ERROR: the APK has no libcorpus_emendatus.so: the Emendatus Mod is missing"; exit 1; }

@@ -318,7 +318,7 @@ void browser_window() {
 
 void system_rows() {
     ui::section("DLC");
-    if (ui::button_row("Import DLC…",
+    if (ui::button_row("Import DLC...",
                        {false, {},
                         "Choose the folder that holds your DLC (the .edat files). The game reads them from there: nothing is "
                         "copied into the data folder."}))

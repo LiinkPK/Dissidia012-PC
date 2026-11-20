@@ -147,6 +147,7 @@ GameProfile build(const Release &r) {
         .mods_folder = &::d012_mods_folder,
         .android_shared_data_folder = "Dissidia012HD",
         .adhoc_relay_server = "104.238.174.65",  // plain TCP 27312/27313 (Vultr, London)
+        .cheats_download_base = "https://raw.githubusercontent.com/LiinkPK/Dissidia012-PC/main/release/data/ms0/PSP/CHEATS/",
 
         // The buttons a PSP lacks, which the battle shortcuts use (L3 EX, L2 dodge, R2 dash, R3 recentres the camera;
         // d012_camera.cpp).

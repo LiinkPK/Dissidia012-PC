@@ -32,6 +32,7 @@
 #include "ui/file_browser.hpp"
 #include "ui/updater.hpp"
 #include "ui/widgets.hpp"
+#include <map>
 #include <imgui.h>
 #if __has_include(<SDL3/SDL.h>)
 #include <SDL3/SDL.h>
@@ -720,7 +721,7 @@ void restart_game() {
 // downloaded once, from the latest release's emendatus_assets.bin, into mods/ of a folder the player picks on Android (the app's own
 // storage or an SD card) or of the game's data folder elsewhere; mod_file() finds it there.
 namespace data_download {
-enum class Phase { Idle, Finding, Downloading, Done, Failed };
+enum class Phase { Idle, Finding, Downloading, Done, UpToDate, Failed };
 std::mutex g_lock;
 Phase g_phase = Phase::Idle;
 std::string g_error;
@@ -784,6 +785,26 @@ bool same_content(const std::filesystem::path &a, const std::filesystem::path &b
     return true;
 }
 
+// mods/emendatus_release.txt: what the last download got of each file, "name size updated_at", so the next check can tell by the release's
+// own record whether anything changed, without downloading.
+std::map<std::string, std::string> read_stamps(const std::filesystem::path &mods) {
+    std::map<std::string, std::string> stamps;
+    std::ifstream in(mods / "emendatus_release.txt");
+    std::string line;
+    while (std::getline(in, line)) {
+        const std::size_t space = line.find(' ');
+        if (space != std::string::npos && space != 0u) stamps[line.substr(0, space)] = line.substr(space + 1u);
+    }
+    return stamps;
+}
+
+void write_stamps(const std::filesystem::path &mods, const std::map<std::string, std::string> &stamps) {
+    std::error_code ec;
+    std::filesystem::create_directories(mods, ec);
+    std::ofstream out(mods / "emendatus_release.txt", std::ios::trunc);
+    for (const auto &[name, mark] : stamps) out << name << ' ' << mark << '\n';
+}
+
 void download_into(std::string folder) {
     set_phase(Phase::Finding);
     g_done = 0;
@@ -791,23 +812,35 @@ void download_into(std::string folder) {
     std::string error;
     // The whole mods/ folder of the data pack: the big data file and the new character's files. The small files are fetched again every
     // time (a few MB, so a changed one is always replaced); the big one only when its size is not the expected one.
+    const std::filesystem::path mods_folder = portablekit::install::path_from_utf8(folder) / "mods";
+    std::map<std::string, std::string> stamps = read_stamps(mods_folder);
+    bool fetched_any = false;
     for (const char *file : kModFiles) {
         const std::string name = file;
         const bool big = name == "emendatus_assets.bin";
-        const std::filesystem::path target = portablekit::install::path_from_utf8(folder) / "mods" / name;
+        const std::filesystem::path target = mods_folder / name;
         std::error_code ec;
-        if (big && std::filesystem::file_size(target, ec) == kEmTailSize && !ec) continue;
+        // What the release has now: its length and its "updated_at". A file that is there with that length and the stamp the last download
+        // recorded is current, and nothing is downloaded (the big file with no record is judged by its length alone, as before).
+        set_phase(Phase::Finding);
+        const portablekit::ui::updater::AssetInfo info = portablekit::ui::updater::latest_asset(name, error);
+        if (info.url.empty()) {
+            set_phase(Phase::Failed, error);
+            return;
+        }
+        const std::string mark = std::to_string(info.size) + " " + info.stamp;
+        const auto known = stamps.find(name);
+        const std::uint64_t have = std::filesystem::exists(target, ec) ? std::filesystem::file_size(target, ec) : 0u;
+        if (!ec && have != 0u && have == info.size && ((known != stamps.end() && known->second == mark) || (big && known == stamps.end()))) {
+            if (known == stamps.end()) stamps[name] = mark;
+            continue;
+        }
         // Only these seven names are ever written, so a file of the player's own in mods/ is never touched. A small file that is already
         // there is fetched beside it and replaces it only when the release's differs: one that is the same is left as it is.
         const bool replacing = !big && std::filesystem::exists(target, ec);
         std::filesystem::path fetched = target;
         if (replacing) fetched += ".new";
-        set_phase(Phase::Finding);
-        const std::string url = portablekit::ui::updater::latest_asset_url(name, error);
-        if (url.empty()) {
-            set_phase(Phase::Failed, error);
-            return;
-        }
+        const std::string url = info.url;
         set_phase(Phase::Downloading);
         g_done = 0;
         g_total = big ? kEmTailSize : 0;
@@ -836,9 +869,15 @@ void download_into(std::string folder) {
                     set_phase(Phase::Failed, "the new " + name + " could not replace the old one");
                     return;
                 }
+                fetched_any = true;
             }
+        } else {
+            fetched_any = true;
         }
+        stamps[name] = mark;
+        write_stamps(mods_folder, stamps);
     }
+    write_stamps(mods_folder, stamps);
     try {
         const std::filesystem::path dir = portablekit::install::user_data_directory();
         portablekit::install::SettingsEntries entries = portablekit::install::read_settings_file(dir);
@@ -848,7 +887,7 @@ void download_into(std::string folder) {
         set_phase(Phase::Failed, std::string("the file is downloaded but the choice could not be saved: ") + e.what());
         return;
     }
-    set_phase(Phase::Done);
+    set_phase(fetched_any ? Phase::Done : Phase::UpToDate);
 }
 
 // Whether the player's choice of folder is saved.
@@ -971,7 +1010,7 @@ void rows() {
     const bool installed = phase == Phase::Done || assets_present();
     ui::info_row("Emendatus data", installed ? "Installed" : "Not installed (a 322 MB download, once)");
     if (phase == Phase::Finding) {
-        ui::info_row("Status", "Looking for the files in the data-pack release…");
+        ui::info_row("Status", "Looking for the files in the data-pack release...");
         return;
     }
     if (phase == Phase::Downloading) {
@@ -986,12 +1025,13 @@ void rows() {
         ui::info_row("Status", "Done. Restart the game, then turn the Emendatus Mod on here.");
         return;
     }
+    if (phase == Phase::UpToDate) ui::info_row("Status", "Up to date. Nothing was downloaded.");
     if (phase == Phase::Failed) ui::info_row("Download failed", error);
     if (installed) {
         // Already there: fetch again only what differs, into the folder it is in (the big file stays when its size is right).
         ui::RowOptions options;
-        options.description = "Downloads the mod's small files again and the big one only if it is not whole, replacing what differs.";
-        if (ui::button_row("Update the Emendatus files###emupdate", options)) {
+        options.description = "Compares the files here with the latest release on GitHub and downloads only what changed. If nothing did, it says Up to date.";
+        if (ui::button_row("Check for Emendatus updates###emupdate", options)) {
             const std::filesystem::path where = assets_path().parent_path().parent_path();
             std::thread(download_into, portablekit::install::path_to_utf8(where)).detach();
         }
@@ -1011,7 +1051,7 @@ void rows() {
     }
     ui::RowOptions other;
     other.description = "Choose any folder on the phone or the SD card. The Emendatus files are saved in a folder called mods inside it.";
-    if (ui::button_row("Download to another folder…###emother", other)) open_browser();
+    if (ui::button_row("Download to another folder...###emother", other)) open_browser();
 }
 } // namespace data_download
 
