@@ -93,10 +93,10 @@ The renderer replaces textures from a PPSSPP-style pack (`textures.ini` plus PNG
 
 ## HD texture pack: terms of use
 
-The HD texture pack is the result of about three years of manual work. It began as a texture pack for PPSSPP, free for everyone to use on their own copy of the game, and it stays that way. It is **not** under this repository's MIT licence. These terms apply to it:
+The HD texture pack is the result of about three years of manual work. It began as a [texture pack for PPSSPP](https://github.com/LiinkPK/Dissidia012HDTextures), free for everyone to use on their own copy of the game, and it stays that way. It is **not** under this repository's MIT licence. These terms apply to it:
 
 - **Allowed:** using it for yourself, in PPSSPP or in this port, and changing it for your own use.
-- **Not allowed without written permission from the author:** redistributing the pack or any part of it, bundling it in another project (a port, recompilation, emulator build or mod pack), or using it in anything that takes donations, sponsorship or other income.
+- **Not allowed without my written permission:** redistributing the pack or any part of it, bundling it in another project (a port, recompilation, emulator build or mod pack), or using it in anything that takes donations, sponsorship or other income.
 - **Credit:** if I give permission, the pack must be credited to LiinkPK.
 
 The pack contains artwork derived from Square Enix's game. I claim no rights over Square Enix's material, only over their own work in the upscaling and editing. This is a fan project, not affiliated with or endorsed by Square Enix.
