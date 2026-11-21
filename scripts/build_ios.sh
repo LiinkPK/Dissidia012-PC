@@ -4,13 +4,17 @@
 # "Build iOS" workflow. Not tested: PortableKit has no iOS target yet, so expect to fix the first failures one by one.
 #
 # Needs: Xcode, CMake, Ninja, Python 3, the LunarG Vulkan SDK for macOS (its MoltenVK.xcframework has the iOS slice) and the SDL3 source
-# (SDL_SRC). Other settings: PORTABLEKIT_ROOT, VULKAN_SDK, OUT_DIR, REL_DIR, JOBS, GEN_OPT, GEN_JOBS, IOS_DEPLOYMENT_TARGET (default 15.0).
+# (SDL_SRC). Other settings: VERSION_NAME, PORTABLEKIT_ROOT, VULKAN_SDK, OUT_DIR, REL_DIR, JOBS, GEN_OPT, GEN_JOBS, IOS_DEPLOYMENT_TARGET (default 15.0).
 set -euo pipefail
 [ "$(uname -s)" = Darwin ] || { echo "The iOS build must run on a Mac."; exit 1; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PK="${PORTABLEKIT_ROOT:-$ROOT/third_party/PortableKit-d012}"
 SDL_SRC="${SDL_SRC:-$HOME/Documents/SDL}"
 IOS_TARGET="${IOS_DEPLOYMENT_TARGET:-15.0}"
+# The game's version: kReleaseVersion in the profile (VERSION_NAME overrides it), without the leading "v" for the app's Info.plist.
+VERSION_NAME="${VERSION_NAME:-$(sed -n 's/.*kReleaseVersion = "\(.*\)".*/\1/p' "$ROOT/profiles/d012/host/d012_profile.cpp" | head -1)}"
+APP_VERSION="${VERSION_NAME#v}"
+[ -n "$APP_VERSION" ] || { echo "The game's version is not known (kReleaseVersion): set VERSION_NAME"; exit 1; }
 OUT="${OUT_DIR:-$ROOT/out/ios}"
 REL="${REL_DIR:-$ROOT/dist}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"
@@ -73,8 +77,8 @@ cat > "$APP/Info.plist" <<PLIST
 <key>CFBundleName</key><string>Dissidia 012</string>
 <key>CFBundleDisplayName</key><string>Dissidia 012</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
+<key>CFBundleVersion</key><string>$APP_VERSION</string>
 <key>MinimumOSVersion</key><string>$IOS_TARGET</string>
 <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
 <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>

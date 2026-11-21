@@ -7,10 +7,9 @@ name: Build iOS
 on:
   workflow_dispatch:
     inputs:
-      ios_version:
-        description: "Lowest iOS version the app runs on (e.g. 15.0, 16.0, 17.0, 18.0)"
+      tag:
+        description: "Game version (must be the same as kReleaseVersion), e.g. v1.1.0"
         required: true
-        default: "15.0"
         type: string
 
 permissions:
@@ -22,6 +21,13 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+      - name: The version must match the one in the code
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          code="$(sed -n 's/.*kReleaseVersion = "\(.*\)".*/\1/p' profiles/d012/host/d012_profile.cpp | head -1)"
+          echo "kReleaseVersion in the code: $code, version asked for: $TAG"
+          [ "$code" = "$TAG" ] || { echo "They differ: change kReleaseVersion (or the version) and run again."; exit 1; }
       - name: Free disk space
         run: |
           rm -rf "$HOME/Library/Android" "$HOME/.dotnet" 2>/dev/null || true
@@ -53,7 +59,7 @@ jobs:
           curl -fL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/data.zip" "https://github.com/$GITHUB_REPOSITORY/releases/download/data-pack/data.zip" || true
       - name: Build
         env:
-          IOS_DEPLOYMENT_TARGET: ${{ inputs.ios_version }}
+          VERSION_NAME: ${{ inputs.tag }}
         run: bash scripts/build_ios.sh
       - uses: actions/upload-artifact@v4
         with:
