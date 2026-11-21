@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Sat, 21 Nov 2026 15:00:00 +0000
+Subject: [PATCH] iOS: FFmpeg is cross-compiled with the iPhone SDK
+
+On iOS the bundled FFmpeg was configured for the Mac that builds it, and the link failed
+("building for iOS, but linking in dylib built for macOS"). It is now always a cross-compile
+for arm64 with the iPhone SDK and the deployment target, and the macOS version flag is left out.
+---
+ cmake/FFmpeg.cmake | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/cmake/FFmpeg.cmake b/cmake/FFmpeg.cmake
+index 9a18f3b..460f49d 100644
+--- a/cmake/FFmpeg.cmake
++++ b/cmake/FFmpeg.cmake
+@@ -224,10 +224,23 @@ else()
+     set(_portablekit_ffmpeg_flags ${PORTABLEKIT_FFMPEG_CONFIGURE_FLAGS})
+     if(APPLE)
+         list(APPEND _portablekit_ffmpeg_flags --install-name-dir=@rpath)
++        if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++            # iOS: always a cross-compile, with the iPhone SDK, for arm64.
++            execute_process(COMMAND xcrun --sdk iphoneos --show-sdk-path OUTPUT_VARIABLE _portablekit_ios_sdk
++                OUTPUT_STRIP_TRAILING_WHITESPACE)
++            set(_portablekit_ios_min "${CMAKE_OSX_DEPLOYMENT_TARGET}")
++            if(NOT _portablekit_ios_min)
++                set(_portablekit_ios_min 15.0)
++            endif()
++            list(APPEND _portablekit_ffmpeg_flags
++                --enable-cross-compile --target-os=darwin --arch=aarch64 "--cc=xcrun -sdk iphoneos clang"
++                "--extra-cflags=-arch arm64 -isysroot ${_portablekit_ios_sdk} -miphoneos-version-min=${_portablekit_ios_min}"
++                "--extra-ldflags=-arch arm64 -isysroot ${_portablekit_ios_sdk} -miphoneos-version-min=${_portablekit_ios_min}")
++        endif()
+         # One architecture asked for with CMAKE_OSX_ARCHITECTURES (the macOS universal build makes one build per
+         # architecture and joins them with lipo): FFmpeg is cross-compiled when it is not the machine's own.
+         list(LENGTH CMAKE_OSX_ARCHITECTURES _portablekit_osx_arch_count)
+-        if(_portablekit_osx_arch_count EQUAL 1)
++        if(_portablekit_osx_arch_count EQUAL 1 AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+             set(_portablekit_osx_arch "${CMAKE_OSX_ARCHITECTURES}")
+             if(_portablekit_osx_arch STREQUAL "arm64")
+                 set(_portablekit_ffmpeg_arch aarch64)
+@@ -243,7 +256,7 @@ else()
+                 list(APPEND _portablekit_ffmpeg_flags --enable-cross-compile --target-os=darwin "--cc=clang -arch ${_portablekit_osx_arch}")
+             endif()
+         endif()
+-        if(CMAKE_OSX_DEPLOYMENT_TARGET)
++        if(CMAKE_OSX_DEPLOYMENT_TARGET AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+             list(APPEND _portablekit_ffmpeg_flags
+                 "--extra-cflags=-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+                 "--extra-ldflags=-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+-- 
+2.45.0

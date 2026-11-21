@@ -65,7 +65,7 @@ cmake -S "$ROOT/profiles/d012_vk" -B "$OUT/d012_vk" -G Ninja -DCMAKE_BUILD_TYPE=
   -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=BOTH -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
   -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
   -DVulkan_INCLUDE_DIR="$VK_INC" -DVulkan_LIBRARY="$MVK_LIB" -DPORTABLEKIT_GLSLANG="$GLSLANG" -DPython3_EXECUTABLE="$PY3" \
-  -DCMAKE_EXE_LINKER_FLAGS="-framework Metal -framework QuartzCore -framework IOSurface -framework UIKit -framework Foundation -framework CoreGraphics" \
+  -DCMAKE_EXE_LINKER_FLAGS="-framework Metal -framework QuartzCore -framework IOSurface -framework UIKit -framework Foundation -framework CoreGraphics -Wl,-rpath,@executable_path/Frameworks" \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_TARGET" \
   -DPORTABLEKIT_ROOT="$PK" -DSDL3_DIR="$SDL_CMAKE" -DCMAKE_PREFIX_PATH="$IOS_MVK" \
   -DPSPRECOMP_GENERATED_OPT_LEVEL="$GEN_OPT" -DPSPRECOMP_GENERATED_JOBS="$GEN_JOBS" ${LAUNCHER[@]+"${LAUNCHER[@]}"} 2>&1 | tee "$OUT/configure.log"
@@ -77,13 +77,15 @@ grep -q "Vulkan renderer enabled" "$OUT/configure.log" || {
 }
 cmake --build "$OUT/d012_vk" -j"$JOBS" -- -k 0
 B="$OUT/d012_vk/bin"
-[ -f "$B/d012_native" ] || { echo "The build produced no d012_native"; exit 1; }
+# CMake makes an app bundle for iOS (bin/d012_native.app/d012_native); a plain executable is accepted too.
+EXE="$B/d012_native.app/d012_native"; [ -f "$EXE" ] || EXE="$B/d012_native"
+[ -f "$EXE" ] || { echo "The build produced no d012_native"; exit 1; }
 
 echo "== 4/5 app bundle =="
 APP="$OUT/Payload/Dissidia012.app"
 rm -rf "$OUT/Payload"
 mkdir -p "$APP/Frameworks" "$APP/overlays"
-cp "$B/d012_native" "$APP/d012_native"
+cp "$EXE" "$APP/d012_native"
 # The overlays are loaded with dlopen at run time: iOS allows that for signed libraries inside the app.
 for f in "$B"/overlays/*; do [ -f "$f" ] && cp "$f" "$APP/overlays/"; done
 [ -d "$B/lib" ] && for f in "$B"/lib/*.dylib; do [ -f "$f" ] && cp -L "$f" "$APP/Frameworks/"; done
