@@ -48,7 +48,9 @@ echo "== 3/5 game build (arm64, -O$GEN_OPT, $GEN_JOBS generated units at once) =
 cmake -S "$ROOT/profiles/d012_vk" -B "$OUT/d012_vk" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_TARGET" \
   -DPORTABLEKIT_ROOT="$PK" -DSDL3_DIR="$SDL_CMAKE" -DCMAKE_PREFIX_PATH="$IOS_MVK" \
-  -DPSPRECOMP_GENERATED_OPT_LEVEL="$GEN_OPT" -DPSPRECOMP_GENERATED_JOBS="$GEN_JOBS" ${LAUNCHER[@]+"${LAUNCHER[@]}"}
+  -DPSPRECOMP_GENERATED_OPT_LEVEL="$GEN_OPT" -DPSPRECOMP_GENERATED_JOBS="$GEN_JOBS" ${LAUNCHER[@]+"${LAUNCHER[@]}"} 2>&1 | tee "$OUT/configure.log"
+# Stop here, not hours later: without the renderer the app would build and then show nothing.
+grep -q "Vulkan renderer enabled" "$OUT/configure.log" || { echo "The renderer is off (SDL3, Vulkan or glslang was not found for iOS): see the lines above. Fix that first."; exit 1; }
 cmake --build "$OUT/d012_vk" -j"$JOBS" -- -k 0
 B="$OUT/d012_vk/bin"
 [ -f "$B/d012_native" ] || { echo "The build produced no d012_native"; exit 1; }
