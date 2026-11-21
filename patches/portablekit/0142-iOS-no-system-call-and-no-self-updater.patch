@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Sat, 21 Nov 2026 14:00:00 +0000
+Subject: [PATCH] iOS: no system() call and no self-updater
+
+std::system is unavailable on iOS, and an iOS app cannot start curl or replace itself, so the
+single-instance message is only written to stderr there and the updater is left out.
+---
+ host/single_instance.hpp | 7 +++++--
+ host/ui/updater.cpp      | 7 +++++--
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/host/single_instance.hpp b/host/single_instance.hpp
+index 0418abc..f77bf21 100644
+--- a/host/single_instance.hpp
++++ b/host/single_instance.hpp
+@@ -23,6 +23,9 @@
+ #include <iostream>
+ #include <string>
+ #include <system_error>
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
+ 
+ #if defined(_WIN32)
+ #ifndef NOMINMAX
+@@ -80,12 +83,12 @@ inline void report() {
+         return w;
+     };
+     MessageBoxW(nullptr, wide(text).c_str(), wide(title).c_str(), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+-#elif defined(__APPLE__)
++#elif defined(__APPLE__) && !TARGET_OS_IPHONE
+     const std::string command = "osascript -e 'display dialog \"" + shell_safe(text) +
+                                 "\" with title \"" + shell_safe(game_name()) +
+                                 "\" buttons {\"OK\"} default button \"OK\" with icon caution' >/dev/null 2>&1";
+     if (std::system(command.c_str()) != 0) { /* the message is on stderr */ }
+-#elif !defined(__ANDROID__)
++#elif !defined(__ANDROID__) && !defined(__APPLE__)
+     const std::string t = shell_safe(text), n = shell_safe(game_name());
+     const std::string command = "(zenity --warning --no-markup --title='" + n + "' --text='" + t +
+                                 "' || kdialog --title '" + n + "' --sorry '" + t + "' || xmessage -center '" + t +
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 308f3cb..5d370c2 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -21,8 +21,11 @@
+ 
+ #include "app_paths.hpp"
+ 
+-// Windows, Linux and macOS (not Android) have the updater.
+-#if defined(_WIN32) || ((defined(__linux__) || defined(__APPLE__)) && !defined(__ANDROID__))
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
++// Windows, Linux and macOS (not Android, not iOS: an app cannot start curl or replace itself there) have the updater.
++#if defined(_WIN32) || ((defined(__linux__) || (defined(__APPLE__) && !TARGET_OS_IPHONE)) && !defined(__ANDROID__))
+ #define PK_UPDATER 1
+ #endif
+ // Android has its own: the release is read and the APK downloaded in Java, then handed to Android's installer (PK_UPDATER_ANDROID).
+-- 
+2.45.0
