@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Sat, 21 Nov 2026 12:00:00 +0000
+Subject: [PATCH] The relay logs the traffic of each connection every 10 seconds
+
+For each datagram or stream connection that carried traffic, the server writes one line:
+how many packets it sent, the longest pause between two of them, how many pauses were 100 ms
+or more, how far its outgoing queue grew and how many datagrams were dropped for it. It
+shows on the server's side of the link whether packets reach a player in bursts after long
+gaps. Nothing else changes.
+---
+ host/adhoc/server.cpp | 62 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 62 insertions(+)
+
+diff --git a/host/adhoc/server.cpp b/host/adhoc/server.cpp
+index d136927..65664cb 100644
+--- a/host/adhoc/server.cpp
++++ b/host/adhoc/server.cpp
+@@ -175,6 +175,14 @@ struct RelaySession {
+     int partner{};                          // the paired stream connection, once paired
+     bool announced{};                       // a connecting stream was reported to the listener
+     Clock::time_point announced_at{};
++    // What this connection carried since the last traffic report (Impl::report_traffic).
++    std::uint64_t seen_packets{};           // datagrams or stream blocks it sent to the server
++    std::uint64_t seen_bytes{};
++    std::uint64_t late_gaps{};              // pauses of 100 ms or more between two of them
++    std::int64_t longest_gap_ms{};
++    Clock::time_point last_packet{};
++    std::size_t peak_queue{};               // the most bytes waiting to be written to it
++    std::uint64_t not_delivered{};          // datagrams for it dropped because its queue was full
+ };
+ 
+ std::string group_key(const std::string &product, const std::string &group) { return product + '\n' + group; }
+@@ -203,6 +211,7 @@ struct Server::Impl {
+     std::uint64_t relayed_bytes{};
+     std::uint64_t dropped{};
+     Clock::time_point published{};
++    Clock::time_point last_report{};
+ 
+     // adhocctl ---------------------------------------------------------------
+ 
+@@ -369,13 +378,28 @@ struct Server::Impl {
+                first->product == second->product;
+     }
+ 
++    // One datagram or stream block arrived from `session`.
++    static void note_arrival(RelaySession &session, std::size_t size) {
++        const auto now = Clock::now();
++        if (session.seen_packets != 0u) {
++            const auto gap = std::chrono::duration_cast<milliseconds>(now - session.last_packet).count();
++            if (gap > session.longest_gap_ms) session.longest_gap_ms = gap;
++            if (gap >= 100) ++session.late_gaps;
++        }
++        session.last_packet = now;
++        ++session.seen_packets;
++        session.seen_bytes += size;
++    }
++
+     void deliver_datagram(const RelaySession &from, RelaySession &to, const char *data, std::size_t size) {
+         if (to.link.out.size() > kQueueLimit) {
+             ++dropped;
++            ++to.not_delivered;
+             return;
+         }
+         to.link.out += relay::pdp_header(from.mac, from.port, static_cast<std::uint32_t>(size));
+         to.link.out.append(data, size);
++        if (to.link.out.size() > to.peak_queue) to.peak_queue = to.link.out.size();
+         ++relayed_packets;
+         relayed_bytes += size;
+     }
+@@ -396,6 +420,7 @@ struct Server::Impl {
+             if (in.size() - offset - relay::kPdpHeaderSize < size) break;
+             const char *data = in.data() + offset + relay::kPdpHeaderSize;
+             offset += relay::kPdpHeaderSize + size;
++            note_arrival(session, size);
+             if (destination == kBroadcastMac) {
+                 for (auto &[other_key, other] : sessions)
+                     if (other_key != key && !other.link.dead && other.kind == RelayKind::Datagram &&
+@@ -426,6 +451,8 @@ struct Server::Impl {
+             if (in.size() - offset - relay::kPtpHeaderSize < size) break;
+             partner.link.out.append(in, offset, relay::kPtpHeaderSize + size);
+             offset += relay::kPtpHeaderSize + size;
++            note_arrival(session, size);
++            if (partner.link.out.size() > partner.peak_queue) partner.peak_queue = partner.link.out.size();
+             ++relayed_packets;
+             relayed_bytes += size;
+         }
+@@ -614,6 +641,40 @@ struct Server::Impl {
+         }
+     }
+ 
++    // Every 10 s, one line per relay connection that carried traffic: how much it sent, the longest pause between two
++    // of its packets, how many pauses were 100 ms or more, how far its outgoing queue grew, and what was dropped for it.
++    // A connection whose packets arrive in bursts after long gaps shows it here, on the server's side of the link.
++    void report_traffic(Clock::time_point now) {
++        if (last_report == Clock::time_point{}) {
++            last_report = now;
++            return;
++        }
++        const double seconds = std::chrono::duration<double>(now - last_report).count();
++        if (seconds < 10.0) return;
++        last_report = now;
++        for (auto &[key, session] : sessions) {
++            if (session.kind != RelayKind::Datagram && session.kind != RelayKind::Connect && session.kind != RelayKind::Accept)
++                continue;
++            if (session.seen_packets != 0u || session.not_delivered != 0u) {
++                std::string who = format_mac(session.mac);
++                for (const auto &[pkey, player] : players)
++                    if (player.logged_in && player.mac == session.mac) who = player.nickname + " " + who;
++                const char *kind = session.kind == RelayKind::Datagram ? "datagrams" : "stream";
++                log_event("traffic " + std::to_string(static_cast<int>(seconds + 0.5)) + " s, " + who + " port " +
++                              std::to_string(session.port) + " " + kind + ": " + std::to_string(session.seen_packets) +
++                              " in (" + std::to_string(static_cast<int>(static_cast<double>(session.seen_packets) / seconds + 0.5)) +
++                              "/s, " + std::to_string(session.seen_bytes) + " bytes), longest gap " +
++                              std::to_string(session.longest_gap_ms) + " ms, " + std::to_string(session.late_gaps) +
++                              " gaps of 100 ms or more, queue peak " + std::to_string(session.peak_queue) + " bytes, " +
++                              std::to_string(session.not_delivered) + " dropped",
++                          config.print_events);
++            }
++            session.seen_packets = session.seen_bytes = session.late_gaps = session.not_delivered = 0u;
++            session.longest_gap_ms = 0;
++            session.peak_queue = session.link.out.size();
++        }
++    }
++
+     void publish(Clock::time_point now) {
+         ServerStatus status;
+         status.running = true;
+@@ -690,6 +751,7 @@ struct Server::Impl {
+             for (auto &[key, player] : players) player.link.write();
+             for (auto &[key, session] : sessions) session.link.write();
+             remove_closed();
++            report_traffic(now);
+             if (now - published >= milliseconds(250)) {
+                 published = now;
+                 publish(now);
+-- 
+2.45.0

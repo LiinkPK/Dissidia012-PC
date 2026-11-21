@@ -1,0 +1,54 @@
+# EXPERIMENTAL: builds an iOS .ipa (arm64) on GitHub's macOS machines with scripts/build_ios.sh, for personal testing.
+# Run it from the Actions tab: "Build iOS" -> "Run workflow". Separate from "Build release" on purpose, so a problem with iOS
+# never stops a release. The .ipa is an artifact of the run; install it with Sideloadly or AltStore (they re-sign it with your
+# Apple ID; a free ID is valid for 7 days).
+name: Build iOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          rm -rf "$HOME/Library/Android" "$HOME/.dotnet" 2>/dev/null || true
+          df -h / | tail -1
+      - name: Tools
+        run: brew install cmake ninja python ccache || true
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ios
+      - name: SDL3 source (the script reads SDL_SRC)
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/sdl3.tar.gz" https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
+          tar -xzf "$RUNNER_TEMP/sdl3.tar.gz" -C "$RUNNER_TEMP"
+          echo "SDL_SRC=$RUNNER_TEMP/SDL3-3.4.18" >> "$GITHUB_ENV"
+      - name: Vulkan SDK (its MoltenVK.xcframework has the iOS slice)
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fL --retry 3 -o vulkan-sdk.zip https://sdk.lunarg.com/sdk/download/latest/mac/vulkan-sdk.zip
+          unzip -q vulkan-sdk.zip
+          app="$(ls -d *.app | head -1)"
+          bin="$app/Contents/MacOS/$(ls "$app/Contents/MacOS" | head -1)"
+          sudo "./$bin" --root "$HOME/VulkanSDK/ci" --accept-licenses --default-answer --confirm-command install
+          xcf="$(find "$HOME/VulkanSDK/ci" -name MoltenVK.xcframework 2>/dev/null | head -1)"
+          if [ -z "$xcf" ]; then echo "MoltenVK.xcframework not found"; find "$HOME/VulkanSDK/ci" -maxdepth 3 | head -40; exit 1; fi
+          sdk="$(ls -d "$HOME"/VulkanSDK/ci/macOS 2>/dev/null | head -1)"
+          echo "VULKAN_SDK=${sdk:-$(dirname "$(dirname "$xcf")")}" >> "$GITHUB_ENV"
+      - name: HD texture pack
+        run: |
+          curl -fL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/data.zip" "https://github.com/$GITHUB_REPOSITORY/releases/download/data-pack/data.zip" || true
+      - name: Build
+        run: bash scripts/build_ios.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: d012_native-ios
+          path: dist/d012_native-ios.ipa
+          if-no-files-found: error
