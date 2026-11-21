@@ -49,12 +49,31 @@ fi
 SDL_CMAKE="$(dirname "$(find "$SDL_PREFIX" -name SDL3Config.cmake | head -1)")"
 
 echo "== 3/5 game build (arm64, -O$GEN_OPT, $GEN_JOBS generated units at once) =="
+# What the renderer needs, found here (CMake's own search stays inside the iOS SDK when it cross-compiles) and handed over
+# explicitly. A line is printed for each, so a missing one is named.
+echo "MoltenVK iOS slice: $IOS_MVK"; ls -la "$IOS_MVK" | head -20
+MVK_LIB=""
+for c in "$IOS_MVK/libMoltenVK.a" "$IOS_MVK/MoltenVK.framework/MoltenVK" "$IOS_MVK/libMoltenVK.dylib"; do [ -e "$c" ] && { MVK_LIB="$c"; break; }; done
+VK_INC="$(ls -d "$VULKAN_SDK/include" "$IOS_MVK/Headers" "$IOS_MVK/MoltenVK.framework/Headers" 2>/dev/null | head -1)"
+GLSLANG="$(command -v glslangValidator || command -v glslang || true)"
+PY3="$(command -v python3 || true)"
+echo "Vulkan library: ${MVK_LIB:-MISSING}"; echo "Vulkan headers: ${VK_INC:-MISSING}"; echo "glslang: ${GLSLANG:-MISSING}"; echo "python3: ${PY3:-MISSING}"
+echo "SDL3 config: $SDL_CMAKE"; ls "$SDL_CMAKE" | head -5
+{ [ -n "$MVK_LIB" ] && [ -n "$VK_INC" ] && [ -n "$GLSLANG" ] && [ -n "$PY3" ]; } || { echo "Something the renderer needs is missing (see above)."; exit 1; }
 cmake -S "$ROOT/profiles/d012_vk" -B "$OUT/d012_vk" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS \
+  -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=BOTH -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
+  -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+  -DVulkan_INCLUDE_DIR="$VK_INC" -DVulkan_LIBRARY="$MVK_LIB" -DPORTABLEKIT_GLSLANG="$GLSLANG" -DPython3_EXECUTABLE="$PY3" \
+  -DCMAKE_EXE_LINKER_FLAGS="-framework Metal -framework QuartzCore -framework IOSurface -framework UIKit -framework Foundation -framework CoreGraphics" \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_TARGET" \
   -DPORTABLEKIT_ROOT="$PK" -DSDL3_DIR="$SDL_CMAKE" -DCMAKE_PREFIX_PATH="$IOS_MVK" \
   -DPSPRECOMP_GENERATED_OPT_LEVEL="$GEN_OPT" -DPSPRECOMP_GENERATED_JOBS="$GEN_JOBS" ${LAUNCHER[@]+"${LAUNCHER[@]}"} 2>&1 | tee "$OUT/configure.log"
 # Stop here, not hours later: without the renderer the app would build and then show nothing.
-grep -q "Vulkan renderer enabled" "$OUT/configure.log" || { echo "The renderer is off (SDL3, Vulkan or glslang was not found for iOS): see the lines above. Fix that first."; exit 1; }
+grep -q "Vulkan renderer enabled" "$OUT/configure.log" || {
+  echo "The renderer is off. What CMake found:"
+  grep -E "^(SDL3_DIR|SDL3_FOUND|Vulkan_[A-Za-z_]*|PORTABLEKIT_GLSLANG|Python3_[A-Za-z_]*):" "$OUT/d012_vk/CMakeCache.txt" || true
+  exit 1
+}
 cmake --build "$OUT/d012_vk" -j"$JOBS" -- -k 0
 B="$OUT/d012_vk/bin"
 [ -f "$B/d012_native" ] || { echo "The build produced no d012_native"; exit 1; }
