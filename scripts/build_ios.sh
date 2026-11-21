@@ -54,7 +54,8 @@ echo "== 3/5 game build (arm64, -O$GEN_OPT, $GEN_JOBS generated units at once) =
 echo "MoltenVK iOS slice: $IOS_MVK"; ls -la "$IOS_MVK" | head -20
 MVK_LIB=""
 for c in "$IOS_MVK/libMoltenVK.a" "$IOS_MVK/MoltenVK.framework/MoltenVK" "$IOS_MVK/libMoltenVK.dylib"; do [ -e "$c" ] && { MVK_LIB="$c"; break; }; done
-VK_INC="$(ls -d "$VULKAN_SDK/include" "$IOS_MVK/Headers" "$IOS_MVK/MoltenVK.framework/Headers" 2>/dev/null | head -1)"
+VK_INC=""
+for c in "$VULKAN_SDK/include" "$IOS_MVK/Headers" "$IOS_MVK/MoltenVK.framework/Headers"; do [ -d "$c" ] && { VK_INC="$c"; break; }; done
 GLSLANG="$(command -v glslangValidator || command -v glslang || true)"
 PY3="$(command -v python3 || true)"
 echo "Vulkan library: ${MVK_LIB:-MISSING}"; echo "Vulkan headers: ${VK_INC:-MISSING}"; echo "glslang: ${GLSLANG:-MISSING}"; echo "python3: ${PY3:-MISSING}"
