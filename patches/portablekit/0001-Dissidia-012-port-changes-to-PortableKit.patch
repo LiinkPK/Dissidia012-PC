@@ -1,4 +1,4 @@
-From fd972fc09b0ee4084c66502660a369da917cbb9f Mon Sep 17 00:00:00 2001
+From 9130ce6d7a5808196293dea46256dc378f3efb21 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -47,7 +47,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/gpu/texture_pack.hpp                     |   61 +-
  host/gpu/texture_pack_import.cpp              |   61 +-
  host/gpu/texture_pack_import.hpp              |    4 +
- host/gpu/vulkan_renderer.cpp                  | 1464 +++++++++++++++-
+ host/gpu/vulkan_renderer.cpp                  | 1475 +++++++++++++++-
  host/gpu/vulkan_renderer.hpp                  |   35 +
  host/hle/hle_adhoc.cpp                        |  121 +-
  host/hle/hle_adhoc_matching.cpp               |  124 ++
@@ -59,6 +59,8 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/hle/hle_media.cpp                        |    9 +-
  host/hle/hle_system.cpp                       |    1 +
  host/hle/hle_utility.cpp                      |    4 +
+ host/input/touch_controls.cpp                 |   23 +-
+ host/input/touch_controls.hpp                 |   16 +-
  host/install/executable_preparation.cpp       |    4 +-
  host/install/installer.cpp                    |   37 +-
  host/install/installer_dialogs.cpp            |    4 +
@@ -78,7 +80,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/platform/android_jni.cpp                 |  174 ++
  host/platform/android_jni.hpp                 |   28 +
  host/profile.cpp                              |    8 +
- host/profile.hpp                              |   76 +
+ host/profile.hpp                              |   84 +
  host/save_data/savedata_store.cpp             |   26 +-
  host/settings/settings.cpp                    |  120 +-
  host/settings/settings.hpp                    |   28 +-
@@ -91,6 +93,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/ui/save_screen.cpp                       |   32 +-
  host/ui/setup_screens.cpp                     |   15 +-
  host/ui/texture_pack_screen.cpp               |   66 +-
+ host/ui/touch_overlay.cpp                     |   16 +-
  host/ui/ui.hpp                                |   17 +-
  host/ui/updater.cpp                           |  966 +++++++++++
  host/ui/updater.hpp                           |   57 +
@@ -107,7 +110,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 101 files changed, 10884 insertions(+), 354 deletions(-)
+ 104 files changed, 10950 insertions(+), 362 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -4232,7 +4235,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..f0af60c 100644
+index e4d7e11..1183c26 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -4563,7 +4566,25 @@ index e4d7e11..f0af60c 100644
      MouseMotion touch_motion{};
      struct TouchLayoutKey {
          int width{};
-@@ -1623,6 +1821,7 @@ struct VulkanRenderer::Impl {
+@@ -1254,8 +1452,15 @@ struct VulkanRenderer::Impl {
+         insets.top += margin;
+         insets.right += margin;
+         insets.bottom += margin;
+-        touch.set_layout(
+-            input::touch::make_layout(static_cast<float>(width), static_cast<float>(height), insets, size, dpad));
++        const portablekit::GameProfile &profile = portablekit::game();
++        const std::size_t combos = profile.touch_combos != nullptr ? profile.touch_combo_count : 0u;
++        input::touch::Layout layout =
++            input::touch::make_layout(static_cast<float>(width), static_cast<float>(height), insets, size, dpad, combos);
++        for (std::size_t i = 0; i < layout.combo_count; ++i) {
++            layout.combo_buttons[i] = profile.touch_combos[i].buttons;
++            layout.combo_labels[i] = profile.touch_combos[i].label;
++        }
++        touch.set_layout(layout);
+     }
+     void handle_touch(const SDL_Event &event) {
+         const bool finger = event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION ||
+@@ -1623,6 +1828,7 @@ struct VulkanRenderer::Impl {
      // the guest's vertex bytes of transformed triangle draws and the vertex
      // shader decodes and skins them.
      bool gpu_decode_available{};
@@ -4571,7 +4592,7 @@ index e4d7e11..f0af60c 100644
      bool check_gpu_decode{};  // <prefix>_CHECK_GPU_DECODE
      std::uint32_t raw_offset{};  // the raw block most recently written this frame
      RawBlock last_raw{};
-@@ -2052,6 +2251,20 @@ struct VulkanRenderer::Impl {
+@@ -2052,6 +2258,20 @@ struct VulkanRenderer::Impl {
          const std::lock_guard<std::mutex> guard(presenter->queue);
          vkDeviceWaitIdle(device);
      }
@@ -4592,7 +4613,7 @@ index e4d7e11..f0af60c 100644
      // A flip without interpolation, handed to the present thread: the newest
      // picture (take_picture) with this interface over it.
      bool plain_pending{};
-@@ -2195,6 +2408,16 @@ struct VulkanRenderer::Impl {
+@@ -2195,6 +2415,16 @@ struct VulkanRenderer::Impl {
      std::uint64_t replaced_draws{};  // this second, for <prefix>_TRACE_TEXTURE_PACK
      void apply_texture_pack();
      [[nodiscard]] VkDescriptorSet texture_descriptor(const GuestMemory &memory, const DrawCall &call);
@@ -4609,7 +4630,7 @@ index e4d7e11..f0af60c 100644
      std::uint64_t texture_clock{};
      // texture_key results for the display list being walked, by the state that
      // feeds the key; cleared by begin_display_list().
-@@ -2247,9 +2470,13 @@ struct VulkanRenderer::Impl {
+@@ -2247,9 +2477,13 @@ struct VulkanRenderer::Impl {
      bool frame_uploads_open{};
      VkDeviceSize upload_ring_used{};
      std::uint32_t frame_upload_count{};
@@ -4624,7 +4645,7 @@ index e4d7e11..f0af60c 100644
      }
      // Stages `bytes` of pixels for a copy recorded into frame_uploads; null
      // when there is no room and no memory.
-@@ -2712,6 +2939,11 @@ struct VulkanRenderer::Impl {
+@@ -2712,6 +2946,11 @@ struct VulkanRenderer::Impl {
      // Copies pixels into a texture's image: ahead of the frame's commands
      // while one is recorded, else at once (waiting for the queue).
      void upload_texture(VkImage image, std::uint32_t width, std::uint32_t height, const std::uint32_t *pixels);
@@ -4636,7 +4657,7 @@ index e4d7e11..f0af60c 100644
      void destroy_texture(Texture &texture);
  };
  
-@@ -2868,12 +3100,27 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -2868,12 +3107,27 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      // under them). The safe area keeps the picture clear of a camera cutout.
      window_flags |= SDL_WINDOW_FULLSCREEN;
  #endif
@@ -4666,7 +4687,7 @@ index e4d7e11..f0af60c 100644
  
      std::uint32_t extension_count = 0u;
      const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&extension_count);
-@@ -2976,6 +3223,13 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -2976,6 +3230,13 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      VkPhysicalDeviceFeatures supported_features{};
      vkGetPhysicalDeviceFeatures(impl.physical_device, &supported_features);
      VkPhysicalDeviceFeatures enabled_features{};
@@ -4680,7 +4701,7 @@ index e4d7e11..f0af60c 100644
      if (portablekit::env("CHECK_GPU_DECODE") != nullptr) {
          if (supported_features.vertexPipelineStoresAndAtomics == VK_TRUE) {
              enabled_features.vertexPipelineStoresAndAtomics = VK_TRUE;
-@@ -3463,6 +3717,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -3463,6 +3724,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      impl.device_name = properties.deviceName;
      impl.prewarm_pipelines();
      // What a player's log needs to tell drivers and memory apart.
@@ -4688,7 +4709,7 @@ index e4d7e11..f0af60c 100644
      {
          VkPhysicalDeviceMemoryProperties memory{};
          vkGetPhysicalDeviceMemoryProperties(impl.physical_device, &memory);
-@@ -3472,6 +3727,14 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -3472,6 +3734,14 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
              vertex_requirements.memoryTypeBits,
              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
          const VkMemoryPropertyFlags flags = memory.memoryTypes[vertex_type].propertyFlags;
@@ -4703,7 +4724,7 @@ index e4d7e11..f0af60c 100644
          std::cout << "[render] Vulkan " << VK_API_VERSION_MAJOR(properties.apiVersion) << "."
                    << VK_API_VERSION_MINOR(properties.apiVersion) << "." << VK_API_VERSION_PATCH(properties.apiVersion)
                    << ", driver 0x" << std::hex << properties.driverVersion << ", vendor 0x" << properties.vendorID
-@@ -3486,6 +3749,29 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -3486,6 +3756,29 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
                << impl.target_extent.height << "\n";
      impl.ready = true;
      impl.note_window_size();
@@ -4733,7 +4754,7 @@ index e4d7e11..f0af60c 100644
  #if !defined(__ANDROID__)
      // An exit that never stops the thread (one past the game's own, such as
      // the setup screens closing) stops it before the statics it uses go:
-@@ -4515,8 +4801,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
+@@ -4515,8 +4808,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
      void *mapped = nullptr;
      vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped);
      const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM || swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
@@ -4745,7 +4766,7 @@ index e4d7e11..f0af60c 100644
          std::cout << "[render] window " << capture_extent.width << "x" << capture_extent.height << " -> "
                    << capture_path << std::endl;
      else
-@@ -4576,8 +4863,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
+@@ -4576,8 +4870,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
      VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
      submit.commandBufferCount = 1u;
      submit.pCommandBuffers = &commands;
@@ -4755,7 +4776,7 @@ index e4d7e11..f0af60c 100644
      vkFreeCommandBuffers(device, command_pool, 1u, &commands);
  }
  
-@@ -4734,7 +5020,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
+@@ -4734,7 +5027,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
      descriptor_info.descriptorPool = descriptor_pool;
      descriptor_info.descriptorSetCount = 1u;
      descriptor_info.pSetLayouts = &descriptor_layout;
@@ -4770,7 +4791,7 @@ index e4d7e11..f0af60c 100644
      VkDescriptorImageInfo image_info{texture_sampler(), texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
      write.dstSet = texture.descriptor;
-@@ -4840,8 +5132,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4840,8 +5139,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      // Uploads are synchronous: the GPU finishes everything queued before this
      // returns, which counts as waiting rather than rendering.
      const perf::Clock::time_point wait_start = perf::Clock::now();
@@ -4780,7 +4801,7 @@ index e4d7e11..f0af60c 100644
      perf::add_wait_time(perf::Clock::now() - wait_start, perf::Stall::Upload);
      if (!reuse) {
          vkFreeCommandBuffers(device, command_pool, 1u, &commands);
-@@ -4851,6 +5142,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4851,6 +5149,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      }
  }
  
@@ -4833,7 +4854,7 @@ index e4d7e11..f0af60c 100644
  bool VulkanRenderer::Impl::stage_upload(const void *pixels, VkDeviceSize bytes, VkBuffer &buffer,
                                          VkDeviceSize &offset) {
      const auto make = [&](VkDeviceSize size, VkBuffer &made, VkDeviceMemory &memory, void *&mapped) {
-@@ -5117,16 +5454,288 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+@@ -5117,16 +5461,288 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
      texture.max_seen_v = max_seen_v;
      // The pack's hash reads the whole texture, so it is taken here, once per
      // upload, and never on the per-draw path above.
@@ -5123,7 +5144,7 @@ index e4d7e11..f0af60c 100644
      if (texture.replacement && pack) {
          // Until the image is decoded and on the GPU, the original is drawn.
          if (const VkDescriptorSet replaced = replacements.descriptor(*texture.replacement, *pack, frames)) {
-@@ -5179,6 +5788,9 @@ void VulkanRenderer::Impl::apply_texture_pack() {
+@@ -5179,6 +5795,9 @@ void VulkanRenderer::Impl::apply_texture_pack() {
          std::cout << "[texpack] " << error << "\n";
          return;
      }
@@ -5133,7 +5154,7 @@ index e4d7e11..f0af60c 100644
      pack_status = std::to_string(pack->entry_count()) + " textures";
      std::cout << "[texpack] " << pack->entry_count() << " textures from " << folder.string() << "\n";
  }
-@@ -6636,6 +7248,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
+@@ -6636,6 +7255,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
          keys.push_back(key_from(words));
      }
      prewarm->thread = std::thread([this, keys = std::move(keys)] {
@@ -5141,7 +5162,7 @@ index e4d7e11..f0af60c 100644
          const auto start = std::chrono::steady_clock::now();
          std::uint32_t made = 0u;
          for (const PipelineKey &key : keys) {
-@@ -6849,7 +7462,7 @@ bool VulkanRenderer::pump_events() {
+@@ -6849,7 +7469,7 @@ bool VulkanRenderer::pump_events() {
          // every other event while the on-screen keyboard is up.
          if (event.type == SDL_EVENT_GAMEPAD_ADDED) impl_->open_gamepad(event.gdevice.which);
          if (event.type == SDL_EVENT_GAMEPAD_REMOVED) impl_->close_gamepad(event.gdevice.which);
@@ -5150,7 +5171,7 @@ index e4d7e11..f0af60c 100644
          // reserved for the in-game menu.
          if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) impl_->update_display_info();
          if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) impl_->swapchain_dirty = true;
-@@ -6866,7 +7479,14 @@ bool VulkanRenderer::pump_events() {
+@@ -6866,7 +7486,14 @@ bool VulkanRenderer::pump_events() {
          if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) ||
              ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
               event.button.which != SDL_TOUCH_MOUSEID))
@@ -5165,7 +5186,7 @@ index e4d7e11..f0af60c 100644
          impl_->handle_touch(event);
          if (event.type == SDL_EVENT_MOUSE_MOTION && impl_->mouse_captured && event.motion.which != SDL_TOUCH_MOUSEID &&
              (!impl_->scripted_input || event.motion.which == kScriptedMouse)) {
-@@ -6880,9 +7500,82 @@ bool VulkanRenderer::pump_events() {
+@@ -6880,9 +7507,82 @@ bool VulkanRenderer::pump_events() {
          if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
              impl_->mouse_buttons &= ~(1u << event.button.button);
          if (impl_->event_hook && impl_->event_hook(event)) continue;
@@ -5226,7 +5247,7 @@ index e4d7e11..f0af60c 100644
 +                std::fflush(stdout);
 +            }
 +        }
-+    }
+     }
 +#if !defined(__ANDROID__)
 +    // Hide the pointer over the window after 2 seconds without moving; any move brings it back (above). While the mouse is
 +    // captured for the game, SDL hides it itself.
@@ -5243,12 +5264,12 @@ index e4d7e11..f0af60c 100644
 +            if (!SDL_CursorVisible()) SDL_ShowCursor();
 +            impl_->pointer_hidden = false;
 +        }
-     }
++    }
 +#endif
      // Only sample while the window has focus: a key still down when focus is
      // lost stays down in SDL's snapshot, which the guest sees as a held
      // direction it can never release.
-@@ -6919,6 +7612,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6919,6 +7619,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
          if (const int button = input::mouse_button_of(binding))
              return impl_->mouse_captured && (impl_->mouse_buttons & (1u << button)) != 0u;
          const int position = input::key_position(binding);
@@ -5259,7 +5280,7 @@ index e4d7e11..f0af60c 100644
          return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
                                   impl_->scripted_keys[static_cast<std::size_t>(position)]);
      });
-@@ -7312,7 +8009,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+@@ -7312,7 +8016,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
      const Impl::Guard guard(*impl_);
      scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
      if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
@@ -5272,7 +5293,7 @@ index e4d7e11..f0af60c 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7322,7 +8023,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+@@ -7322,7 +8030,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
  #if defined(__ANDROID__)
      fullscreen = true;
  #endif
@@ -5282,7 +5303,7 @@ index e4d7e11..f0af60c 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7813,6 +8515,13 @@ void VulkanRenderer::begin_display_list() {
+@@ -7813,6 +8522,13 @@ void VulkanRenderer::begin_display_list() {
      if (!impl_) return;
      const Impl::Guard guard(*impl_);
      ++impl_->display_lists;
@@ -5296,7 +5317,7 @@ index e4d7e11..f0af60c 100644
      impl_->list_texture_keys.clear();
      impl_->last_texture = nullptr;
  }
-@@ -7820,10 +8529,77 @@ void VulkanRenderer::begin_display_list() {
+@@ -7820,10 +8536,77 @@ void VulkanRenderer::begin_display_list() {
  void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
      Impl &impl = *impl_;
      if (!impl.ready) return;
@@ -5374,7 +5395,7 @@ index e4d7e11..f0af60c 100644
  }
  
  void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
-@@ -7832,6 +8608,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7832,6 +8615,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      const Impl::Guard guard(impl);
      const perf::SplitScope split(perf::Split::Draw);
      if (!impl.recording) begin_frame();
@@ -5404,7 +5425,7 @@ index e4d7e11..f0af60c 100644
      // Presents between flips fall due while the game draws, too: a busy
      // frame spends most of its time in here.
      if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
-@@ -7937,10 +8736,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7937,10 +8743,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
      // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
      // texture state it samples, to find the tiles a 2D screen is built from.
@@ -5426,7 +5447,7 @@ index e4d7e11..f0af60c 100644
  
      // Transformed triangles, strips and fans go straight into the vertex
      // buffer: each decoded vertex once, converted as it is written, and a
-@@ -8110,6 +8918,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8110,6 +8925,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
                                     static_cast<float>(call.texture.height));
          }
@@ -6045,7 +6066,7 @@ index e4d7e11..f0af60c 100644
      }
  
      if (trace && impl.draws < 400u) {
-@@ -9520,7 +10940,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+@@ -9520,7 +10947,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
  bool VulkanRenderer::Impl::interpolation_wanted() const {
      // Emulated time running ahead of real time already presents faster than
      // the game's own rate; the keyboard's held frame is shown as it is.
@@ -6875,6 +6896,112 @@ index 59780e2..9515514 100644
      if (msgdialog_instant()) {
          msg_set_answer(question ? msg::kPressedNo : msg::kPressedYes, "MSGDIALOG_INSTANT");
          return;
+diff --git a/host/input/touch_controls.cpp b/host/input/touch_controls.cpp
+index 12d1a1c..bb7c9fc 100644
+--- a/host/input/touch_controls.cpp
++++ b/host/input/touch_controls.cpp
+@@ -26,7 +26,7 @@ bool Circle::contains(Point p, float slack) const {
+     return dx * dx + dy * dy <= r * r;
+ }
+ 
+-Layout make_layout(float width, float height, Insets insets, float size, bool dpad) {
++Layout make_layout(float width, float height, Insets insets, float size, bool dpad, std::size_t combos) {
+     Layout layout;
+     layout.width = width;
+     layout.height = height;
+@@ -53,6 +53,17 @@ Layout make_layout(float width, float height, Insets insets, float size, bool dp
+     c[static_cast<std::size_t>(Control::Select)] = {{middle - small * 3.0f, top + small * 1.6f}, small};
+     c[static_cast<std::size_t>(Control::Menu)] = {{middle, top + small * 1.6f}, small};
+     c[static_cast<std::size_t>(Control::Start)] = {{middle + small * 3.0f, top + small * 1.6f}, small};
++    // The profile's combo buttons: three to a row, two rows, the last column next to the square.
++    layout.combo_count = std::min(combos, kMaxCombos);
++    const float combo_radius = face * 0.95f;
++    const float combo_step = combo_radius * 2.25f;
++    const float combo_right = diamond.x - spread - face - combo_radius * 1.3f;
++    for (std::size_t i = 0; i < layout.combo_count; ++i) {
++        const float column = static_cast<float>(i % 3u);
++        const float row = i < 3u ? -1.0f : 1.0f;
++        c[static_cast<std::size_t>(Control::Combo0) + i] = {
++            {combo_right - (2.0f - column) * combo_step, diamond.y + row * combo_radius * 1.2f}, combo_radius};
++    }
+     // The D-pad: at the left edge, half way down, clear of L above it.
+     const float reach = face * 2.3f;
+     layout.dpad_shown = dpad;
+@@ -93,7 +104,7 @@ std::optional<Control> Controls::control_at(Point at, bool face_only) const {
+     float best_distance = 0.0f;
+     for (std::size_t i = 0; i <= last; ++i) {
+         const Circle &circle = layout_.controls[i];
+-        if (!circle.contains(at, 1.2f)) continue;
++        if (!(circle.radius > 0.0f) || !circle.contains(at, 1.2f)) continue;
+         const float distance = std::hypot(at.x - circle.centre.x, at.y - circle.centre.y) / circle.radius;
+         if (!best || distance < best_distance) {
+             best = static_cast<Control>(i);
+@@ -195,12 +206,18 @@ std::uint16_t Controls::buttons() const {
+     std::uint16_t buttons = 0u;
+     for (const Finger &finger : fingers_) {
+         if (!finger.used) continue;
+-        if (finger.role == Role::Control && finger.over) buttons |= psp_button(finger.control);
++        if (finger.role == Role::Control && finger.over) buttons |= mask_of(finger.control);
+         if (finger.role == Role::DPad) buttons |= dpad_held_by(finger);
+     }
+     return buttons;
+ }
+ 
++std::uint16_t Controls::mask_of(Control control) const {
++    if (control < Control::Combo0) return psp_button(control);
++    const std::size_t index = static_cast<std::size_t>(control) - static_cast<std::size_t>(Control::Combo0);
++    return index < layout_.combo_count ? layout_.combo_buttons[index] : 0u;
++}
++
+ std::uint16_t Controls::dpad_held_by(const Finger &finger) const {
+     return dpad_buttons({finger.last.x - layout_.dpad.centre.x, finger.last.y - layout_.dpad.centre.y},
+                         layout_.dpad.radius);
+diff --git a/host/input/touch_controls.hpp b/host/input/touch_controls.hpp
+index 293be14..eb8b47f 100644
+--- a/host/input/touch_controls.hpp
++++ b/host/input/touch_controls.hpp
+@@ -21,7 +21,12 @@
+ // work together.
+ namespace portablekit::input::touch {
+ 
+-enum class Control : std::uint8_t { Triangle, Circle, Cross, Square, L, R, Start, Select, Menu, Count };
++// Combo0 to Combo5 are the profile's own buttons (GameProfile::touch_combos): each presses all the PSP buttons of its mask at
++// once, for a move a game makes from two buttons together.
++enum class Control : std::uint8_t {
++    Triangle, Circle, Cross, Square, L, R, Start, Select, Menu, Combo0, Combo1, Combo2, Combo3, Combo4, Combo5, Count
++};
++inline constexpr std::size_t kMaxCombos = 6;
+ inline constexpr std::size_t kControls = static_cast<std::size_t>(Control::Count);
+ 
+ // The PSP button (SceCtrlButtons) a control presses; 0 for the menu button.
+@@ -51,12 +56,18 @@ struct Layout {
+     Circle dpad{};
+     float stick_radius{};    // the stick's reach from where the thumb landed
+     float stick_split{};     // x: fingers landing left of it are for the stick
++    // The profile's combo buttons: how many there are, what each presses and its label (the controls Combo0...).
++    std::size_t combo_count{};
++    std::array<std::uint16_t, kMaxCombos> combo_buttons{};
++    std::array<const char *, kMaxCombos> combo_labels{};
+     float width{};
+     float height{};
+ };
+ // A layout for a width x height screen. `size` scales every control (1 is the
+ // default, sized for thumbs on a phone held sideways); `dpad` shows the D-pad.
+-[[nodiscard]] Layout make_layout(float width, float height, Insets insets, float size, bool dpad = true);
++// `combos` of the profile's buttons are placed in two rows to the left of the face buttons.
++[[nodiscard]] Layout make_layout(float width, float height, Insets insets, float size, bool dpad = true,
++                                 std::size_t combos = 0);
+ 
+ // The PSP D-pad bits (up 0x10, right 0x20, down 0x40, left 0x80) for a finger
+ // at `offset` from the D-pad's centre: one direction within 22.5 degrees of
+@@ -113,6 +124,7 @@ private:
+     [[nodiscard]] std::optional<Control> control_at(Point at, bool face_only) const;
+     Finger *find(std::uint64_t id);
+     [[nodiscard]] std::uint16_t dpad_held_by(const Finger &finger) const;
++    [[nodiscard]] std::uint16_t mask_of(Control control) const;
+ 
+     Layout layout_{};
+     std::array<Finger, kFingers> fingers_{};
 diff --git a/host/install/executable_preparation.cpp b/host/install/executable_preparation.cpp
 index d06b605..fd24685 100644
 --- a/host/install/executable_preparation.cpp
@@ -8282,12 +8409,14 @@ index 5a603c6..940f3f6 100644
  const ProfileVariant *active_variant() { return g_active_variant; }
  
 diff --git a/host/profile.hpp b/host/profile.hpp
-index ddcf7eb..bdce838 100644
+index ddcf7eb..624c878 100644
 --- a/host/profile.hpp
 +++ b/host/profile.hpp
-@@ -15,11 +15,13 @@
+@@ -14,12 +14,15 @@
+ #include "input/bindings.hpp"
  
  #include <array>
++#include <cstddef>
  #include <cstdint>
 +#include <filesystem>
  #include <span>
@@ -8299,7 +8428,7 @@ index ddcf7eb..bdce838 100644
  class Elf32Image;
  class Runtime;
  } // namespace psprecomp
-@@ -153,6 +155,19 @@ struct GameProfile {
+@@ -153,6 +156,19 @@ struct GameProfile {
      // Which release that is, as the installer names it when it is handed
      // another one: "the Japanese release". Null: it is named by disc id alone.
      const char *release_name = nullptr;
@@ -8319,7 +8448,7 @@ index ddcf7eb..bdce838 100644
      // Releases a player may mistake for it. The installer says the note of
      // the one it was handed, instead of "Other releases and regions are not
      // supported."
-@@ -176,10 +191,17 @@ struct GameProfile {
+@@ -176,10 +192,17 @@ struct GameProfile {
      // version nobody listed yet): true installs and runs it under the
      // interpreter, with a warning; false refuses it at setup.
      bool run_unknown_executables = false;
@@ -8337,7 +8466,7 @@ index ddcf7eb..bdce838 100644
      // argv[0] the game is started with, e.g. "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN".
      const char *boot_path;
      // Addresses of the code overlay slots inside the load image's BSS, from
-@@ -212,6 +234,30 @@ struct GameProfile {
+@@ -212,6 +235,37 @@ struct GameProfile {
      // agree on it, so it is the original release's code even when the port's
      // disc id is a different one.
      const char *adhoc_product_code;
@@ -8350,6 +8479,13 @@ index ddcf7eb..bdce838 100644
 +    // The key that signs the first bytes of every connection to an ad hoc server (adhoc/auth.hpp), so a relay that holds it only
 +    // takes builds that carry it. Null or empty: the build sends nothing.
 +    const char *adhoc_auth_key = nullptr;
++    // Buttons for a touch screen that press several PSP buttons at once (a move a game makes from two buttons together): up to six,
++    // each a label and the SceCtrlButtons mask it presses. They sit in two rows to the left of the face buttons.
++    const struct TouchCombo {
++        const char *label;
++        std::uint16_t buttons;
++    } *touch_combos = nullptr;
++    std::size_t touch_combo_count = 0;
 +    // Where the mod data actually is, as a UTF-8 path, for the Mods page's "Open the mods folder" button. A game that lets the player
 +    // choose where it goes (an Android download into the app's storage or an SD card) answers with that folder; empty, or unset: the
 +    // mods folder of the data folder.
@@ -8368,7 +8504,7 @@ index ddcf7eb..bdce838 100644
  
      // --- Controls ----------------------------------------------------------
      // What the triggers may press instead of L and R, for the way this game is
-@@ -246,6 +292,30 @@ struct GameProfile {
+@@ -246,6 +300,30 @@ struct GameProfile {
      // Called once the executable is in memory and before it runs, for the
      // per-game patches that have no better home. Null means there are none.
      void (*patch_loaded_image)(psprecomp::Runtime &, const psprecomp::Elf32Image &) = nullptr;
@@ -8399,7 +8535,7 @@ index ddcf7eb..bdce838 100644
  
      // --- The game's camera and view ----------------------------------------
      // Drives the game's own camera from what the player asks of it
-@@ -310,6 +380,12 @@ struct GameProfile {
+@@ -310,6 +388,12 @@ struct GameProfile {
  // null for the profile's own (and before it is known).
  void set_active_variant(const ProfileVariant *variant);
  [[nodiscard]] const ProfileVariant *active_variant();
@@ -10982,6 +11118,40 @@ index bdbe823..5866ef9 100644
      if (!settings.texture_pack_folder.empty()) info_row("Pack used from", settings.texture_pack_folder);
      if (!settings.texture_pack_folder.empty() &&
          button_row("Stop using the pack folder",
+diff --git a/host/ui/touch_overlay.cpp b/host/ui/touch_overlay.cpp
+index 4c0ca74..004b3e8 100644
+--- a/host/ui/touch_overlay.cpp
++++ b/host/ui/touch_overlay.cpp
+@@ -61,6 +61,7 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
+     for (std::size_t i = 0; i < input::touch::kControls; ++i) {
+         const auto control = static_cast<Control>(i);
+         const Circle &circle = layout.controls[i];
++        if (!(circle.radius > 0.0f)) continue;  // a combo button the profile does not have
+         const ImVec2 c{circle.centre.x, circle.centre.y};
+         const bool held = controls.held(control);
+         const float thickness = std::max(1.5f, circle.radius * 0.08f);
+@@ -70,7 +71,20 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
+         list->AddCircle(c, circle.radius, colour(255, 255, 255, base * (held ? 1.0f : 0.8f)), 0, thickness);
+         if (held) list->AddCircleFilled(c, circle.radius * 0.92f, colour(255, 255, 255, base * 0.35f));
+         const ImU32 ink = i < 4u ? symbol_colours[i] : colour(255, 255, 255, base);
+-        if (const char *text = label(control)) {
++        if (control >= Control::Combo0) {
++            // A profile's button: its name, small enough to fit inside.
++            const char *text = layout.combo_labels[i - static_cast<std::size_t>(Control::Combo0)];
++            if (text != nullptr) {
++                ImFont *font = ImGui::GetFont();
++                float size = circle.radius * 0.42f;
++                ImVec2 extent = font->CalcTextSizeA(size, 1e9f, 0.0f, text);
++                if (extent.x > circle.radius * 1.7f) {
++                    size *= circle.radius * 1.7f / extent.x;
++                    extent = font->CalcTextSizeA(size, 1e9f, 0.0f, text);
++                }
++                list->AddText(font, size, {c.x - extent.x * 0.5f, c.y - extent.y * 0.5f}, ink, text);
++            }
++        } else if (const char *text = label(control)) {
+             ImFont *font = ImGui::GetFont();
+             const float size = circle.radius * (text[1] == '\0' ? 0.9f : 0.42f);
+             const ImVec2 extent = font->CalcTextSizeA(size, 1e9f, 0.0f, text);
 diff --git a/host/ui/ui.hpp b/host/ui/ui.hpp
 index 20ce284..804e31d 100644
 --- a/host/ui/ui.hpp
