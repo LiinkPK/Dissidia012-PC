@@ -70,6 +70,7 @@ void d012_repair_save(const std::string &file_name, std::vector<std::uint8_t> &d
 #include <vector>
 
 bool d012_emendatus_on();  // d012_vk/d012_emendatus.cpp: the Emendatus Mod is running
+void d012_switch_edition(bool on);  // d012_vk/d012_emendatus.cpp: the mod on or off for the next start, and the game restarts
 std::string d012_mods_folder();  // d012_vk/d012_emendatus.cpp: where the mod's files are
 
 namespace d012_emendatus {
@@ -199,6 +200,8 @@ GameProfile build(const Release &r) {
         .touch_combos = kTouchCombos,
         .touch_combo_count = std::size(kTouchCombos),
         .save_loaded = &d012_repair_save,
+        .edition_name = "Emendatus",
+        .switch_edition = &::d012_switch_edition,
         .mods_folder = &::d012_mods_folder,
         .android_shared_data_folder = "Dissidia012HD",
         .adhoc_relay_server = "104.238.174.65",  // plain TCP 27312/27313 (Vultr, London)

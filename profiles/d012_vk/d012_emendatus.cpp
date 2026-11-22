@@ -1199,6 +1199,16 @@ void redirect_game_files(std::filesystem::path &executable, std::filesystem::pat
 
 bool d012_emendatus_on() { return g_on; }
 
+// Turns the mod on or off for the next start and restarts the game: the save list's answer to a save made in the other edition.
+void d012_switch_edition(bool on) {
+#if defined(PORTABLEKIT_HAS_RENDERER)
+    save_setting(on);
+    restart_game();
+#else
+    (void)on;
+#endif
+}
+
 // Where the mod's files are, for the Mods page's "Open the mods folder" button: the folder that holds emendatus_assets.bin, or, when
 // that file is not there yet, mods/ of the folder the player chose for the download (kept in the settings file). Empty when neither
 // is known: the button then opens the data folder's mods.

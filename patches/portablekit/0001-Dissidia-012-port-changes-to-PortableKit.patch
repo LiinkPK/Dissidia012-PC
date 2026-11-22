@@ -1,4 +1,4 @@
-From 9b39fbde1caa75f8c0fc4e549c6f42b9cefbe3fb Mon Sep 17 00:00:00 2001
+From 66d389dd58f2de9da9d6252ef9d2a337f31a4201 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -57,7 +57,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/hle/hle_font.cpp                         |   35 +-
  host/hle/hle_io.cpp                           |    5 +
  host/hle/hle_media.cpp                        |    9 +-
- host/hle/hle_savedata.cpp                     |    3 +-
+ host/hle/hle_savedata.cpp                     |    8 +-
  host/hle/hle_system.cpp                       |    1 +
  host/hle/hle_utility.cpp                      |    4 +
  host/input/touch_controls.cpp                 |   38 +-
@@ -81,7 +81,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/platform/android_jni.cpp                 |  174 ++
  host/platform/android_jni.hpp                 |   28 +
  host/profile.cpp                              |    8 +
- host/profile.hpp                              |   88 +
+ host/profile.hpp                              |  100 ++
  host/save_data/savedata_store.cpp             |   26 +-
  host/settings/settings.cpp                    |  127 +-
  host/settings/settings.hpp                    |   30 +-
@@ -91,6 +91,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/ui/layer.cpp                             |    7 +-
  host/ui/layer.hpp                             |    2 +-
  host/ui/menu.cpp                              | 1195 +++++++++++--
+ host/ui/save_list_dialog.cpp                  |   55 +
  host/ui/save_screen.cpp                       |   33 +-
  host/ui/save_screen.hpp                       |    3 +
  host/ui/setup_screens.cpp                     |   15 +-
@@ -112,7 +113,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 106 files changed, 11002 insertions(+), 372 deletions(-)
+ 107 files changed, 11074 insertions(+), 372 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -6855,7 +6856,7 @@ index e690158..93cf05b 100644
          const perf::Clock::time_point until =
              perf::Clock::now() + std::chrono::microseconds(static_cast<std::int64_t>(spin_ms * 1000.0));
 diff --git a/host/hle/hle_savedata.cpp b/host/hle/hle_savedata.cpp
-index 198dfaa..acc0083 100644
+index 198dfaa..191981e 100644
 --- a/host/hle/hle_savedata.cpp
 +++ b/host/hle/hle_savedata.cpp
 @@ -249,7 +249,8 @@ std::uint32_t do_load(psprecomp::GuestMemory &memory, std::uint32_t params, cons
@@ -6868,6 +6869,18 @@ index 198dfaa..acc0083 100644
      const auto count = static_cast<std::uint32_t>(std::min<std::size_t>(data.size(), capacity));
      memory.copy_in(buffer, std::span<const std::uint8_t>(data.data(), count));
      memory.store32(params + param::kDataSize, count);
+@@ -296,6 +297,11 @@ std::uint32_t do_save(psprecomp::GuestMemory &memory, std::uint32_t params, cons
+     contents.title = read_cstring(memory, params + param::kTitle, 128u);
+     contents.savedata_title = read_cstring(memory, params + param::kSavedataTitle, 128u);
+     contents.detail = read_cstring(memory, params + param::kDetail, 1024u);
++    // A save made in the profile's edition says so (see GameProfile::edition_name).
++    if (const std::string tag = portablekit::edition_tag();
++        !tag.empty() && portablekit::game().adhoc_edition_active != nullptr && portablekit::game().adhoc_edition_active() &&
++        contents.detail.find(tag) == std::string::npos)
++        contents.detail += (contents.detail.empty() ? "" : "  ") + tag;
+     contents.parental_level = memory.load8(params + param::kParentalLevel);
+     contents.icon0 = read_file_data(memory, params + param::kIcon0);
+     contents.icon1 = read_file_data(memory, params + param::kIcon1);
 diff --git a/host/hle/hle_system.cpp b/host/hle/hle_system.cpp
 index cf09b75..823fd37 100644
 --- a/host/hle/hle_system.cpp
@@ -8437,7 +8450,7 @@ index 5a603c6..940f3f6 100644
  const ProfileVariant *active_variant() { return g_active_variant; }
  
 diff --git a/host/profile.hpp b/host/profile.hpp
-index ddcf7eb..1b0490f 100644
+index ddcf7eb..5957df1 100644
 --- a/host/profile.hpp
 +++ b/host/profile.hpp
 @@ -14,12 +14,16 @@
@@ -8495,7 +8508,7 @@ index ddcf7eb..1b0490f 100644
      // argv[0] the game is started with, e.g. "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN".
      const char *boot_path;
      // Addresses of the code overlay slots inside the load image's BSS, from
-@@ -212,6 +236,40 @@ struct GameProfile {
+@@ -212,6 +236,46 @@ struct GameProfile {
      // agree on it, so it is the original release's code even when the port's
      // disc id is a different one.
      const char *adhoc_product_code;
@@ -8518,6 +8531,12 @@ index ddcf7eb..1b0490f 100644
 +    // Called with a save's data file as the game loads it from the memory stick, before the game sees it, to repair what a game
 +    // would crash on (a save from somewhere else). May change `data`. Null: nothing.
 +    void (*save_loaded)(const std::string &file_name, std::vector<std::uint8_t> &data) = nullptr;
++    // The name of the edition (see adhoc_edition_active), e.g. "Emendatus". While it is active, the saves the game writes carry
++    // "[name]" at the end of their detail text, which the save list shows; a save with that tag and one without it do not mix, so
++    // loading one made in the other edition first asks whether to switch (`switch_edition`) or to load it anyway.
++    const char *edition_name = nullptr;
++    // Turns the edition on or off for the next start and restarts the game. Null: the player is only told.
++    void (*switch_edition)(bool on) = nullptr;
 +    // Where the mod data actually is, as a UTF-8 path, for the Mods page's "Open the mods folder" button. A game that lets the player
 +    // choose where it goes (an Android download into the app's storage or an SD card) answers with that folder; empty, or unset: the
 +    // mods folder of the data folder.
@@ -8536,7 +8555,7 @@ index ddcf7eb..1b0490f 100644
  
      // --- Controls ----------------------------------------------------------
      // What the triggers may press instead of L and R, for the way this game is
-@@ -246,6 +304,30 @@ struct GameProfile {
+@@ -246,6 +310,30 @@ struct GameProfile {
      // Called once the executable is in memory and before it runs, for the
      // per-game patches that have no better home. Null means there are none.
      void (*patch_loaded_image)(psprecomp::Runtime &, const psprecomp::Elf32Image &) = nullptr;
@@ -8567,7 +8586,20 @@ index ddcf7eb..1b0490f 100644
  
      // --- The game's camera and view ----------------------------------------
      // Drives the game's own camera from what the player asks of it
-@@ -310,6 +392,12 @@ struct GameProfile {
+@@ -299,6 +387,12 @@ struct GameProfile {
+ // through this and nothing else.
+ [[nodiscard]] const GameProfile &game();
+ 
++// "[Emendatus]" for a profile whose edition has a name, else empty: what a save written in the active edition carries.
++[[nodiscard]] inline std::string edition_tag() {
++    const char *name = game().edition_name;
++    return name != nullptr && *name != '\0' ? std::string("[") + name + "]" : std::string();
++}
++
+ // --- Editions (ProfileVariant) ----------------------------------------------
+ // The edition whose executable, or encrypted EBOOT.BIN, has this SHA-256; null
+ // for the profile's own and for an unknown one.
+@@ -310,6 +404,12 @@ struct GameProfile {
  // null for the profile's own (and before it is known).
  void set_active_variant(const ProfileVariant *variant);
  [[nodiscard]] const ProfileVariant *active_variant();
@@ -10925,6 +10957,80 @@ index 1b830d9..2eae38d 100644
      const bool window_open = layer.run([&] { return menu.frame(); }, true);
      layer.set_interactive(false);
      layer.renderer().set_game_input(true);
+diff --git a/host/ui/save_list_dialog.cpp b/host/ui/save_list_dialog.cpp
+index e2fbbfe..0a90b5b 100644
+--- a/host/ui/save_list_dialog.cpp
++++ b/host/ui/save_list_dialog.cpp
+@@ -5,6 +5,7 @@
+ #include "ui/widgets.hpp"
+ 
+ #include "gpu/vulkan_renderer.hpp"
++#include "profile.hpp"
+ 
+ #include "imgui.h"
+ #include "imgui_internal.h"
+@@ -82,7 +83,61 @@ std::pair<std::string, bool> question(const SaveSlot &slot, SaveAction action) {
+     return {what, true};
+ }
+ 
++// A save made in the other edition (the profile's edition_name tag present or missing against the active one): what to tell the player
++// before loading it, or empty when it matches or the game has no editions.
++std::string edition_warning(const SaveSlot &slot, SaveAction action) {
++    const portablekit::GameProfile &profile = portablekit::game();
++    if (action != SaveAction::Load || !slot.exists || profile.edition_name == nullptr || profile.adhoc_edition_active == nullptr)
++        return {};
++    const bool active = profile.adhoc_edition_active();
++    const bool tagged = slot.detail.find(portablekit::edition_tag()) != std::string::npos;
++    if (tagged == active) return {};
++    const std::string name = profile.edition_name;
++    return tagged ? "This save was made with the " + name + " Mod, which is off. Loading it as it is can crash the game.\n\n"
++                    "Turn " + name + " on? The game restarts. No loads the save anyway."
++                  : "This save was made without the " + name + " Mod, which is on. Loading it as it is can crash the game.\n\n"
++                    "Turn " + name + " off? The game restarts. No loads the save anyway.";
++}
++
++void ask_question(std::size_t index);
++
+ void ask(std::size_t index) {
++    Dialog &d = dialog();
++    const std::string warning = edition_warning(d.request.slots[index], d.request.action);
++    if (warning.empty() || portablekit::game().switch_edition == nullptr) {
++        ask_question(index);
++        return;
++    }
++    d.selected = index;
++    d.asking = true;
++    MessageRequest request;
++    request.text = warning;
++    request.question = true;
++    request.default_no = false;
++    open_game_message(std::move(request), [index](MessageAnswer answer) {
++        Dialog &state = dialog();
++        if (!state.open) return;
++        if (answer == MessageAnswer::Yes) {
++            // The edition is switched for the next start and the game restarts; the dialog goes with it.
++            portablekit::game().switch_edition(!portablekit::game().adhoc_edition_active());
++            return;
++        }
++        if (answer == MessageAnswer::Back) {
++            // Back leaves the warning, as it does the question: the list again.
++            state.asking = false;
++            if (state.request.single) {
++                finish(std::nullopt);
++                return;
++            }
++            take_game();
++            state.focus_pending = true;
++            return;
++        }
++        ask_question(index);  // No: the save loads as it is, after the usual question
++    });
++}
++
++void ask_question(std::size_t index) {
+     Dialog &d = dialog();
+     d.selected = index;
+     d.asking = true;
 diff --git a/host/ui/save_screen.cpp b/host/ui/save_screen.cpp
 index 57c2b04..cc5aa89 100644
 --- a/host/ui/save_screen.cpp
