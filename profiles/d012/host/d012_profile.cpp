@@ -21,11 +21,10 @@
 #include "../../d012_vk/d012_discord.hpp"
 #include "../../d012_vk/d012_netplay_trace.hpp"
 
-// The battle moves the game makes from two buttons at once, as buttons of their own on a touch screen (SceCtrlButtons: L 0x100,
-// R 0x200, triangle 0x1000, circle 0x2000, cross 0x4000, square 0x8000). The game takes them only when both go down together.
+// The one battle move on a touch screen that has no button on a controller: EX Mode, R + square (a controller's L3). Dodge and dash are
+// L2 and R2, and the assists and the summon are the D-pad in battle (d012_camera.cpp), as on a controller.
 constexpr portablekit::GameProfile::TouchCombo kTouchCombos[] = {
-    {"Brave assist", 0x0100u | 0x2000u}, {"EX Mode", 0x0200u | 0x8000u}, {"Dodge", 0x0200u | 0x4000u},
-    {"HP assist", 0x0100u | 0x8000u},    {"Summon", 0x0200u | 0x2000u},  {"Dash", 0x0200u | 0x1000u},
+    {"EX Mode", 0x0200u | 0x8000u},
 };
 
 // The key that signs every online connection (third_party PortableKit adhoc/auth.hpp). Official builds get it from the build's
