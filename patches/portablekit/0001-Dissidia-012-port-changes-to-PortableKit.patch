@@ -1,4 +1,4 @@
-From 9130ce6d7a5808196293dea46256dc378f3efb21 Mon Sep 17 00:00:00 2001
+From 9b2ad540b2d4f1cb3ed52f8016b928438477383b Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -47,7 +47,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/gpu/texture_pack.hpp                     |   61 +-
  host/gpu/texture_pack_import.cpp              |   61 +-
  host/gpu/texture_pack_import.hpp              |    4 +
- host/gpu/vulkan_renderer.cpp                  | 1475 +++++++++++++++-
+ host/gpu/vulkan_renderer.cpp                  | 1452 +++++++++++++++-
  host/gpu/vulkan_renderer.hpp                  |   35 +
  host/hle/hle_adhoc.cpp                        |  121 +-
  host/hle/hle_adhoc_matching.cpp               |  124 ++
@@ -110,7 +110,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 104 files changed, 10950 insertions(+), 362 deletions(-)
+ 104 files changed, 10927 insertions(+), 362 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -4235,7 +4235,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..1183c26 100644
+index e4d7e11..94416b2 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -4496,15 +4496,15 @@ index e4d7e11..1183c26 100644
          std::unique_lock<std::mutex> guard(lock_);
          for (;;) {
              wake_.wait(guard, [this] { return stopping_ || !queue_.empty(); });
-@@ -934,8 +1078,59 @@ struct VulkanRenderer::Impl {
+@@ -934,7 +1078,58 @@ struct VulkanRenderer::Impl {
          // How far down a 512-tall texture has been drawn, which decides how
          // much of it the pack's hash covers; see texture_pack.hpp.
          std::uint16_t max_seen_v{};
 +        // Hash of the texture's bytes, the same on every run (addresses are
 +        // not); how kHudTextures names the interface's pieces.
 +        std::uint32_t content_hash{};
-     };
- 
++    };
++
 +    std::uint64_t hud_frame{};
 +    bool saw_3d{};  // a 3D draw has been made in the frame so far
 +    // g_d012_defer_3d: the 3D draws into the shown picture are kept, with copies of the guest data they point at, and drawn at the
@@ -4514,7 +4514,7 @@ index e4d7e11..1183c26 100644
 +        std::vector<std::uint8_t> raw;
 +        std::array<float, 96> bones{};
 +        bool has_bones{};
-+    };
+     };
 +    std::vector<DeferredDraw> deferred;
 +    const GuestMemory *deferred_memory{};
 +    bool replaying{};
@@ -4552,10 +4552,9 @@ index e4d7e11..1183c26 100644
 +    bool in_layout_span{};
 +    std::uint32_t span_kind{};
 +    std::uint32_t span_id{};
-+
+ 
      RendererConfig config;
      SDL_Window *window{};
-     VkInstance instance{};
 @@ -1213,6 +1408,9 @@ struct VulkanRenderer::Impl {
      input::touch::Controls touch;
      bool touch_visible{};
@@ -4724,37 +4723,7 @@ index e4d7e11..1183c26 100644
          std::cout << "[render] Vulkan " << VK_API_VERSION_MAJOR(properties.apiVersion) << "."
                    << VK_API_VERSION_MINOR(properties.apiVersion) << "." << VK_API_VERSION_PATCH(properties.apiVersion)
                    << ", driver 0x" << std::hex << properties.driverVersion << ", vendor 0x" << properties.vendorID
-@@ -3486,6 +3756,29 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
-               << impl.target_extent.height << "\n";
-     impl.ready = true;
-     impl.note_window_size();
-+#if !defined(__ANDROID__) && !defined(__APPLE__)
-+    // First run: a weak graphics card starts on the Low quality preset instead of the default High (settings::Quality). Only a device
-+    // that is not a discrete GPU, or has under 3 GiB of device-local memory, is moved; every other keeps the defaults. An environment
-+    // variable that sets either option wins. The player can change it at once on the Video page.
-+    if (settings::first_run() && portablekit::env("INTERNAL_SCALE") == nullptr && portablekit::env("TEXTURE_PACK") == nullptr) {
-+        VkPhysicalDeviceMemoryProperties heaps{};
-+        vkGetPhysicalDeviceMemoryProperties(impl.physical_device, &heaps);
-+        VkDeviceSize local_bytes = 0;
-+        for (std::uint32_t i = 0; i < heaps.memoryHeapCount; ++i)
-+            if ((heaps.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0u)
-+                local_bytes = std::max(local_bytes, heaps.memoryHeaps[i].size);
-+        const bool discrete = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
-+        if (!discrete || local_bytes < (3ull << 30)) {
-+            settings::Settings &chosen = settings::current();
-+            settings::apply_quality(chosen, settings::Quality::Low);
-+            set_internal_scale(chosen.internal_scale);
-+            set_texture_pack(chosen.texture_pack);
-+            settings::save();
-+            std::cout << "[render] first run: " << (discrete ? "a card with " : "a shared-memory or software device with ")
-+                      << (local_bytes >> 20u) << " MiB of device memory; quality set to Low (Video page)\n";
-+        }
-+    }
-+#endif
- #if !defined(__ANDROID__)
-     // An exit that never stops the thread (one past the game's own, such as
-     // the setup screens closing) stops it before the statics it uses go:
-@@ -4515,8 +4808,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
+@@ -4515,8 +4785,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
      void *mapped = nullptr;
      vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped);
      const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM || swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
@@ -4766,7 +4735,7 @@ index e4d7e11..1183c26 100644
          std::cout << "[render] window " << capture_extent.width << "x" << capture_extent.height << " -> "
                    << capture_path << std::endl;
      else
-@@ -4576,8 +4870,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
+@@ -4576,8 +4847,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
      VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
      submit.commandBufferCount = 1u;
      submit.pCommandBuffers = &commands;
@@ -4776,7 +4745,7 @@ index e4d7e11..1183c26 100644
      vkFreeCommandBuffers(device, command_pool, 1u, &commands);
  }
  
-@@ -4734,7 +5027,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
+@@ -4734,7 +5004,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
      descriptor_info.descriptorPool = descriptor_pool;
      descriptor_info.descriptorSetCount = 1u;
      descriptor_info.pSetLayouts = &descriptor_layout;
@@ -4791,7 +4760,7 @@ index e4d7e11..1183c26 100644
      VkDescriptorImageInfo image_info{texture_sampler(), texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
      write.dstSet = texture.descriptor;
-@@ -4840,8 +5139,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4840,8 +5116,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      // Uploads are synchronous: the GPU finishes everything queued before this
      // returns, which counts as waiting rather than rendering.
      const perf::Clock::time_point wait_start = perf::Clock::now();
@@ -4801,7 +4770,7 @@ index e4d7e11..1183c26 100644
      perf::add_wait_time(perf::Clock::now() - wait_start, perf::Stall::Upload);
      if (!reuse) {
          vkFreeCommandBuffers(device, command_pool, 1u, &commands);
-@@ -4851,6 +5149,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4851,6 +5126,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      }
  }
  
@@ -4854,7 +4823,7 @@ index e4d7e11..1183c26 100644
  bool VulkanRenderer::Impl::stage_upload(const void *pixels, VkDeviceSize bytes, VkBuffer &buffer,
                                          VkDeviceSize &offset) {
      const auto make = [&](VkDeviceSize size, VkBuffer &made, VkDeviceMemory &memory, void *&mapped) {
-@@ -5117,16 +5461,288 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+@@ -5117,16 +5438,288 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
      texture.max_seen_v = max_seen_v;
      // The pack's hash reads the whole texture, so it is taken here, once per
      // upload, and never on the per-draw path above.
@@ -5144,7 +5113,7 @@ index e4d7e11..1183c26 100644
      if (texture.replacement && pack) {
          // Until the image is decoded and on the GPU, the original is drawn.
          if (const VkDescriptorSet replaced = replacements.descriptor(*texture.replacement, *pack, frames)) {
-@@ -5179,6 +5795,9 @@ void VulkanRenderer::Impl::apply_texture_pack() {
+@@ -5179,6 +5772,9 @@ void VulkanRenderer::Impl::apply_texture_pack() {
          std::cout << "[texpack] " << error << "\n";
          return;
      }
@@ -5154,7 +5123,7 @@ index e4d7e11..1183c26 100644
      pack_status = std::to_string(pack->entry_count()) + " textures";
      std::cout << "[texpack] " << pack->entry_count() << " textures from " << folder.string() << "\n";
  }
-@@ -6636,6 +7255,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
+@@ -6636,6 +7232,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
          keys.push_back(key_from(words));
      }
      prewarm->thread = std::thread([this, keys = std::move(keys)] {
@@ -5162,7 +5131,7 @@ index e4d7e11..1183c26 100644
          const auto start = std::chrono::steady_clock::now();
          std::uint32_t made = 0u;
          for (const PipelineKey &key : keys) {
-@@ -6849,7 +7469,7 @@ bool VulkanRenderer::pump_events() {
+@@ -6849,7 +7446,7 @@ bool VulkanRenderer::pump_events() {
          // every other event while the on-screen keyboard is up.
          if (event.type == SDL_EVENT_GAMEPAD_ADDED) impl_->open_gamepad(event.gdevice.which);
          if (event.type == SDL_EVENT_GAMEPAD_REMOVED) impl_->close_gamepad(event.gdevice.which);
@@ -5171,7 +5140,7 @@ index e4d7e11..1183c26 100644
          // reserved for the in-game menu.
          if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) impl_->update_display_info();
          if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) impl_->swapchain_dirty = true;
-@@ -6866,7 +7486,14 @@ bool VulkanRenderer::pump_events() {
+@@ -6866,7 +7463,14 @@ bool VulkanRenderer::pump_events() {
          if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) ||
              ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
               event.button.which != SDL_TOUCH_MOUSEID))
@@ -5186,7 +5155,7 @@ index e4d7e11..1183c26 100644
          impl_->handle_touch(event);
          if (event.type == SDL_EVENT_MOUSE_MOTION && impl_->mouse_captured && event.motion.which != SDL_TOUCH_MOUSEID &&
              (!impl_->scripted_input || event.motion.which == kScriptedMouse)) {
-@@ -6880,9 +7507,82 @@ bool VulkanRenderer::pump_events() {
+@@ -6880,9 +7484,82 @@ bool VulkanRenderer::pump_events() {
          if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
              impl_->mouse_buttons &= ~(1u << event.button.button);
          if (impl_->event_hook && impl_->event_hook(event)) continue;
@@ -5247,7 +5216,7 @@ index e4d7e11..1183c26 100644
 +                std::fflush(stdout);
 +            }
 +        }
-     }
++    }
 +#if !defined(__ANDROID__)
 +    // Hide the pointer over the window after 2 seconds without moving; any move brings it back (above). While the mouse is
 +    // captured for the game, SDL hides it itself.
@@ -5264,12 +5233,12 @@ index e4d7e11..1183c26 100644
 +            if (!SDL_CursorVisible()) SDL_ShowCursor();
 +            impl_->pointer_hidden = false;
 +        }
-+    }
+     }
 +#endif
      // Only sample while the window has focus: a key still down when focus is
      // lost stays down in SDL's snapshot, which the guest sees as a held
      // direction it can never release.
-@@ -6919,6 +7619,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6919,6 +7596,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
          if (const int button = input::mouse_button_of(binding))
              return impl_->mouse_captured && (impl_->mouse_buttons & (1u << button)) != 0u;
          const int position = input::key_position(binding);
@@ -5280,7 +5249,7 @@ index e4d7e11..1183c26 100644
          return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
                                   impl_->scripted_keys[static_cast<std::size_t>(position)]);
      });
-@@ -7312,7 +8016,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+@@ -7312,7 +7993,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
      const Impl::Guard guard(*impl_);
      scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
      if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
@@ -5293,7 +5262,7 @@ index e4d7e11..1183c26 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7322,7 +8030,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+@@ -7322,7 +8007,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
  #if defined(__ANDROID__)
      fullscreen = true;
  #endif
@@ -5303,7 +5272,7 @@ index e4d7e11..1183c26 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7813,6 +8522,13 @@ void VulkanRenderer::begin_display_list() {
+@@ -7813,6 +8499,13 @@ void VulkanRenderer::begin_display_list() {
      if (!impl_) return;
      const Impl::Guard guard(*impl_);
      ++impl_->display_lists;
@@ -5317,7 +5286,7 @@ index e4d7e11..1183c26 100644
      impl_->list_texture_keys.clear();
      impl_->last_texture = nullptr;
  }
-@@ -7820,10 +8536,77 @@ void VulkanRenderer::begin_display_list() {
+@@ -7820,10 +8513,77 @@ void VulkanRenderer::begin_display_list() {
  void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
      Impl &impl = *impl_;
      if (!impl.ready) return;
@@ -5395,7 +5364,7 @@ index e4d7e11..1183c26 100644
  }
  
  void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
-@@ -7832,6 +8615,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7832,6 +8592,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      const Impl::Guard guard(impl);
      const perf::SplitScope split(perf::Split::Draw);
      if (!impl.recording) begin_frame();
@@ -5425,7 +5394,7 @@ index e4d7e11..1183c26 100644
      // Presents between flips fall due while the game draws, too: a busy
      // frame spends most of its time in here.
      if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
-@@ -7937,10 +8743,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7937,10 +8720,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
      // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
      // texture state it samples, to find the tiles a 2D screen is built from.
@@ -5447,7 +5416,7 @@ index e4d7e11..1183c26 100644
  
      // Transformed triangles, strips and fans go straight into the vertex
      // buffer: each decoded vertex once, converted as it is written, and a
-@@ -8110,6 +8925,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8110,6 +8902,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
                                     static_cast<float>(call.texture.height));
          }
@@ -6066,7 +6035,7 @@ index e4d7e11..1183c26 100644
      }
  
      if (trace && impl.draws < 400u) {
-@@ -9520,7 +10947,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+@@ -9520,7 +10924,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
  bool VulkanRenderer::Impl::interpolation_wanted() const {
      // Emulated time running ahead of real time already presents faster than
      // the game's own rate; the keyboard's held frame is shown as it is.
@@ -8596,7 +8565,7 @@ index f09c4fa..1856fde 100644
          auto plain = decrypt_data(*file, *mode, key);
          if (!plain) {
 diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
-index 54078af..51493b2 100644
+index 54078af..e324658 100644
 --- a/host/settings/settings.cpp
 +++ b/host/settings/settings.cpp
 @@ -4,6 +4,7 @@
@@ -8766,7 +8735,7 @@ index 54078af..51493b2 100644
 +
 +Quality quality_of(const Settings &s) {
 +    if (s.internal_scale == 1u && !s.texture_pack && !s.hd_text) return Quality::Low;
-+    if (s.internal_scale == 2u && !s.texture_pack && !s.hd_text) return Quality::Medium;
++    if (s.internal_scale == 2u && s.texture_pack && !s.hd_text) return Quality::Medium;
 +    if (s.internal_scale == 2u && s.texture_pack && s.hd_text) return Quality::High;
 +    return Quality::Custom;
 +}
@@ -8775,12 +8744,12 @@ index 54078af..51493b2 100644
 +    switch (quality) {
 +    case Quality::Low:
 +        s.internal_scale = 1u;
-+        s.texture_pack = false;
++        s.texture_pack = false;  // only the Low preset turns the HD textures off
 +        s.hd_text = false;
 +        break;
 +    case Quality::Medium:
 +        s.internal_scale = 2u;
-+        s.texture_pack = false;
++        s.texture_pack = true;
 +        s.hd_text = false;
 +        break;
 +    case Quality::High:
