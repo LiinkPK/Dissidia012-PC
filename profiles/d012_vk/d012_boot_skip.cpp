@@ -48,6 +48,14 @@ State &state() {
     return s;
 }
 
+bool g_forcing_allowed = false;
+
+// Seconds since the first line, so a log shows how long each screen lasted.
+double seconds() {
+    static const auto start = std::chrono::steady_clock::now();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+
 void stop(State &s, const char *why) {
     if (!s.forcing) return;
     s.forcing = false;
@@ -59,9 +67,13 @@ void stop(State &s, const char *why) {
 void on_read(const AllegrexContext &ctx) {
     State &s = state();
     const std::uint32_t buffer = ctx.gpr[5], size = ctx.gpr[6];
+    if (size >= 50'000u) {
+        std::printf("[bootskip] %.2f s: read of %u bytes into 0x%08X\n", seconds(), size, buffer);
+        std::fflush(stdout);
+    }
     if (size < kSceneBytes || buffer < kSceneBufferLow || buffer >= kSceneBufferHigh) return;
     ++s.scene_reads;
-    std::printf("[bootskip] scene read %d (%u bytes into 0x%08X)\n", s.scene_reads, size, buffer);
+    std::printf("[bootskip] %.2f s: scene read %d\n", seconds(), s.scene_reads);
     std::fflush(stdout);
     stop(s, "the next screen is loaded");
 }
@@ -73,10 +85,14 @@ void on_pad(Runtime &rt, const AllegrexContext &ctx) {
     const bool held = (rt.memory().load32(buffer + 4u) & kStart) != 0u;
     const bool pressed = held && !s.start_was_held;
     s.start_was_held = held;
+    if (pressed) {
+        std::printf("[bootskip] %.2f s: Start pressed\n", seconds());
+        std::fflush(stdout);
+    }
     // Only on the logo (one scene read so far) or the credits (two); the title menu is the third read.
     const bool on_a_skippable_screen = s.scene_reads >= 1 && s.scene_reads < kTitleRead;
     if (s.forcing && std::chrono::steady_clock::now() - s.forced_at > kLongest) stop(s, "15 seconds");
-    if (pressed && on_a_skippable_screen && !s.forcing) {
+    if (pressed && on_a_skippable_screen && !s.forcing && g_forcing_allowed) {
         s.forcing = true;
         s.forced_at = std::chrono::steady_clock::now();
         portablekit::fast_loading::force(true);
@@ -88,7 +104,11 @@ void on_pad(Runtime &rt, const AllegrexContext &ctx) {
 } // namespace
 
 void install(portablekit::HleRegistrar &hle) {
-    if (const char *off = portablekit::env("NO_BOOT_SKIP"); off != nullptr && off[0] != '\0' && off[0] != '0') return;
+    // Off unless D012_BOOT_SKIP=1: it is a trace of the start-up screens for now (every big read and every Start press, with the
+    // time), not a skip that works. Setting it to 2 also runs the fast-forward, which does not stop on the right screen.
+    const char *on = portablekit::env("BOOT_SKIP");
+    if (on == nullptr || on[0] == '\0' || on[0] == '0') return;
+    g_forcing_allowed = on[0] == '2';
     const portablekit::HleFunction read = hle.bound_function("IoFileMgrForUser", kSceIoRead);
     if (read) {
         hle.bind("IoFileMgrForUser", kSceIoRead, [read](Runtime &rt, AllegrexContext &ctx) {
