@@ -118,11 +118,9 @@ struct PortableLayout {
         const std::filesystem::path folder = portablekit::executable_directory();
         std::error_code ec;
         const bool game_folder = !folder.empty() && std::filesystem::is_regular_file(folder / "game" / "EBOOT.ELF", ec);
-#if defined(D012_INSTALLER_BUILD)
+        // Always: the data folder is <folder>/data (settings, saves, textures/), never the user's AppData, whether or not the game has
+        // been set up from a disc image yet. A clean copy has no game/EBOOT.ELF until the first run.
         const bool portable = !folder.empty();
-#else
-        const bool portable = game_folder;
-#endif
 #if defined(D012_RELEASE_BUILD)
         const bool no_interpreter = true;
 #else
