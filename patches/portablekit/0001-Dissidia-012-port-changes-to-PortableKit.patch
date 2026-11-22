@@ -1,4 +1,4 @@
-From ac0da99bcd1fffd1560d8ff0eeaa5b5fdbc303fc Mon Sep 17 00:00:00 2001
+From 4f21a9d2138a5faa0b55c0a314491d3b6b10ae42 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -89,7 +89,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/ui/font_menu.cpp                         |  103 +-
  host/ui/layer.cpp                             |    7 +-
  host/ui/layer.hpp                             |    2 +-
- host/ui/menu.cpp                              | 1172 +++++++++++--
+ host/ui/menu.cpp                              | 1174 +++++++++++--
  host/ui/save_screen.cpp                       |   33 +-
  host/ui/save_screen.hpp                       |    3 +
  host/ui/setup_screens.cpp                     |   15 +-
@@ -111,7 +111,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 105 files changed, 10979 insertions(+), 364 deletions(-)
+ 105 files changed, 10980 insertions(+), 365 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -9334,7 +9334,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..1ad6745 100644
+index 1b830d9..7814c3a 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -10075,10 +10075,12 @@ index 1b830d9..1ad6745 100644
      return "None";
  }
  
-@@ -1130,12 +1582,80 @@ void play_together() {
+@@ -1129,13 +1581,81 @@ void play_together() {
+     settings::Settings &s = settings::current();
      static std::string copied;
      static std::string typed_address;
-     section("Play together");
+-    section("Play together");
++    section("Online multiplayer");
 +    if (text_row("nickname", "Nickname", s.adhoc_nickname, 32u, true, printable_ascii,
 +                 options_for("network.nickname", "The name other players and the server see. Empty: the player name. "
 +                                                 "Applies the next time the game goes on line."))) {
