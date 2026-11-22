@@ -1,4 +1,4 @@
-From 7a2ea5b900f66fb6e0bd2ebc531615893e9e9461 Mon Sep 17 00:00:00 2001
+From bbdcc32653ecd595c55ed0cbb79ce559d28e1234 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -47,7 +47,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/gpu/texture_pack_import.hpp              |    4 +
  host/gpu/vulkan_renderer.cpp                  | 1464 +++++++++++++++-
  host/gpu/vulkan_renderer.hpp                  |   35 +
- host/hle/hle_adhoc.cpp                        |  116 +-
+ host/hle/hle_adhoc.cpp                        |  121 +-
  host/hle/hle_adhoc_matching.cpp               |  124 ++
  host/hle/hle_adhoc_matching.hpp               |   60 +
  host/hle/hle_adhoc_matching_api.cpp           |  184 ++
@@ -105,7 +105,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   48 +
- 99 files changed, 10708 insertions(+), 351 deletions(-)
+ 99 files changed, 10713 insertions(+), 351 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/matching.cpp
  create mode 100644 host/adhoc/matching.hpp
@@ -5862,7 +5862,7 @@ index 9b08d55..f3ccbf2 100644
      // Writes the framebuffer shown a frame or two ago back to guest VRAM, in
      // the guest's pixel format at 480x272, so game code that copies a frame
 diff --git a/host/hle/hle_adhoc.cpp b/host/hle/hle_adhoc.cpp
-index fcc7fc2..d15a2ed 100644
+index fcc7fc2..73567f7 100644
 --- a/host/hle/hle_adhoc.cpp
 +++ b/host/hle/hle_adhoc.cpp
 @@ -16,6 +16,7 @@
@@ -5882,7 +5882,15 @@ index fcc7fc2..d15a2ed 100644
  #include <cstdio>
  #include <cstdlib>
  #include <iostream>
-@@ -242,7 +245,7 @@ void start_client() {
+@@ -34,6 +37,7 @@
+ #include <random>
+ #include <sstream>
+ #include <string>
++#include <string_view>
+ 
+ namespace portablekit {
+ namespace {
+@@ -242,7 +246,7 @@ void start_client() {
      identity.server = s.adhoc ? adhoc_server_address() : std::string{};
      identity.nickname = nickname();
      identity.mac = own_mac();
@@ -5891,7 +5899,7 @@ index fcc7fc2..d15a2ed 100644
      Client::get().start(identity);
  }
  
-@@ -358,6 +361,8 @@ void register_adhocctl(HleRegistrar &hle) {
+@@ -358,6 +362,8 @@ void register_adhocctl(HleRegistrar &hle) {
          if (s.ctl_initialized) Client::get().stop();
          s.ctl_initialized = false;
          s.handlers.clear();
@@ -5900,7 +5908,7 @@ index fcc7fc2..d15a2ed 100644
          done(ctx, "sceNetAdhocctlTerm", 0, 0u);
      });
      hle.add("sceNetAdhocctl", "sceNetAdhocctlAddHandler", [](Runtime &, AllegrexContext &ctx) {
-@@ -422,6 +427,9 @@ void register_adhocctl(HleRegistrar &hle) {
+@@ -422,6 +428,9 @@ void register_adhocctl(HleRegistrar &hle) {
              State &s = state();
              if (!s.ctl_initialized) return done(ctx, name, 1, err::kCtlNotInitialized);
              log_once(std::string("adhocctl-") + name, std::string("[adhoc] ") + name + " (UNVERIFIED: no game traced yet)");
@@ -5910,7 +5918,7 @@ index fcc7fc2..d15a2ed 100644
              if (!settings::current().adhoc || adhoc_server_address().empty()) {
                  Client::log("[adhoc] no server is set up (menu: Network); joining fails", true);
                  notify_handlers(kEventError, err::kCtlTimeout);
-@@ -488,6 +496,29 @@ void register_adhocctl(HleRegistrar &hle) {
+@@ -488,6 +497,29 @@ void register_adhocctl(HleRegistrar &hle) {
          memory.store32(length_address, count * kPeerInfoSize);
          done(ctx, "sceNetAdhocctlGetPeerList", 2, 0u, std::to_string(count) + " peers");
      });
@@ -5940,7 +5948,7 @@ index fcc7fc2..d15a2ed 100644
  }
  
  // sceNetAdhoc: PDP ---------------------------------------------------------------
-@@ -649,7 +680,12 @@ std::optional<std::uint32_t> try_stream_send(psprecomp::GuestMemory &memory, int
+@@ -649,7 +681,12 @@ std::optional<std::uint32_t> try_stream_send(psprecomp::GuestMemory &memory, int
      if (info.state != adhoc::StreamState::Established) return stream_error(info);
      const std::uint32_t length = memory.load32(length_address);
      if (length == 0u) return 0u;
@@ -5954,7 +5962,7 @@ index fcc7fc2..d15a2ed 100644
      if (room == 0u) return std::nullopt;
      std::string bytes(std::min<std::size_t>(room, length), '\0');
      for (std::size_t i = 0; i < bytes.size(); ++i)
-@@ -697,7 +733,20 @@ void register_ptp(HleRegistrar &hle) {
+@@ -697,7 +734,20 @@ void register_ptp(HleRegistrar &hle) {
              return std::nullopt;
          };
          if (const auto result = check(false)) return done(ctx, name, 3, *result);
@@ -5976,7 +5984,7 @@ index fcc7fc2..d15a2ed 100644
          block(ctx, name, 3, arg(ctx, 1), check);
      });
      // (srcmac*, srcport, buffer, retry interval, retry count, backlog, unused)
-@@ -974,11 +1023,71 @@ std::string adhoc_player_name() { return nickname(); }
+@@ -974,11 +1024,75 @@ std::string adhoc_player_name() { return nickname(); }
  
  bool adhoc_networking_on() { return state().ctl_initialized || state().adhoc_initialized; }
  
@@ -6017,6 +6025,10 @@ index fcc7fc2..d15a2ed 100644
 +
 +std::string adhoc_effective_product(std::string product) {
 +    const GameProfile &profile = game();
++    // The profile's product code replaces the one the game logs in with, so a game with several releases (each with its own code)
++    // meets its players across all of them.
++    if (profile.adhoc_product_code != nullptr && std::string_view(profile.adhoc_product_code).size() == 9u)
++        product = profile.adhoc_product_code;
 +    if (profile.adhoc_edition_mark != 0 && profile.adhoc_edition_active != nullptr && profile.adhoc_edition_active() &&
 +        !product.empty())
 +        product[0] = profile.adhoc_edition_mark;
@@ -6048,7 +6060,7 @@ index fcc7fc2..d15a2ed 100644
  void register_adhoc(HleRegistrar &hle) {
      register_net(hle);
      register_adhocctl(hle);
-@@ -986,6 +1095,7 @@ void register_adhoc(HleRegistrar &hle) {
+@@ -986,6 +1100,7 @@ void register_adhoc(HleRegistrar &hle) {
      register_ptp(hle);
      register_discover(hle);
      register_netconf(hle);

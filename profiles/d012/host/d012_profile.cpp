@@ -145,7 +145,8 @@ GameProfile build(const Release &r) {
         .save_game_name = r.disc_id,
         .save_folders = r.saves,
 
-        .adhoc_product_code = r.disc_id,
+        // One code for both releases: online play ignores the disc, so the USA and EUR discs meet.
+        .adhoc_product_code = "ULES01505",
         // The Emendatus Mod changes the game's data, so it only plays the Emendatus Mod and the stock game (with or without the
         // memory expansion, which changes no gameplay) only plays the stock game: the product code carries the mark.
         .adhoc_edition_mark = 'E',
