@@ -16,6 +16,7 @@
 
 #include "d012_hle.hpp"
 #include "d012_icon.hpp"
+#include "../../d012_vk/d012_boot_skip.hpp"
 #include "../../d012_vk/d012_ability_trace.hpp"
 #include "../../d012_vk/d012_discord.hpp"
 #include "../../d012_vk/d012_netplay_trace.hpp"
@@ -64,6 +65,7 @@ void register_hle(HleRegistrar &hle) {
     d012_discord::install(hle);
     d012_ability_trace::install(hle);
     d012_netplay_trace::install(hle);
+    d012_boot_skip::install(hle);
 }
 
 // One overlay window. The game loads OVL_MENU_APP.ELF, OVL_BATTLE_APP.ELF or OVL_EXTRA_APP.ELF there; each is

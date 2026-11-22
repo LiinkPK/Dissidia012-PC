@@ -49,6 +49,7 @@ portablekit_add_game(d012_native
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_discord.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_ability_trace.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_netplay_trace.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/d012_boot_skip.cpp"
             "${D012_PORT_DIR}/host/d012_camera.cpp"
             "${D012_PORT_DIR}/host/d012_crash_report.cpp"
             "${D012_PORT_DIR}/host/d012_test_switches.cpp"
