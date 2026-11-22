@@ -21,6 +21,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
+#include <string>
 
 namespace d012_boot_skip {
 namespace {
@@ -49,11 +51,32 @@ State &state() {
 }
 
 bool g_forcing_allowed = false;
+bool g_snapshots = false;
+int g_snapshot_count = 0;
+bool g_after_pending = false;
+std::chrono::steady_clock::time_point g_after_due{};
 
 // Seconds since the first line, so a log shows how long each screen lasted.
 double seconds() {
     static const auto start = std::chrono::steady_clock::now();
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+
+// The game's RAM (0x08800000..0x0A000000) to <temp>/d012_boot/snap_N_<what>.bin, to find what changes from one screen to the next.
+void snapshot(Runtime &rt, const char *what) {
+    constexpr std::uint32_t kFrom = 0x08800000u, kBytes = 0x01800000u;
+    const std::uint8_t *ram = static_cast<const std::uint8_t *>(rt.memory().raw_pointer(kFrom, kBytes));
+    if (ram == nullptr) return;
+    const std::filesystem::path folder = std::filesystem::temp_directory_path() / "d012_boot";
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    const std::filesystem::path file = folder / ("snap_" + std::to_string(g_snapshot_count++) + "_" + what + ".bin");
+    if (std::FILE *out = std::fopen(file.string().c_str(), "wb")) {
+        std::fwrite(ram, 1, kBytes, out);
+        std::fclose(out);
+        std::printf("[bootskip] %.2f s: RAM saved to %s\n", seconds(), file.string().c_str());
+        std::fflush(stdout);
+    }
 }
 
 void stop(State &s, const char *why) {
@@ -88,6 +111,15 @@ void on_pad(Runtime &rt, const AllegrexContext &ctx) {
     if (pressed) {
         std::printf("[bootskip] %.2f s: Start pressed\n", seconds());
         std::fflush(stdout);
+        if (g_snapshots && g_snapshot_count < 8) {
+            snapshot(rt, "before_start");
+            g_after_pending = true;
+            g_after_due = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+        }
+    }
+    if (g_after_pending && std::chrono::steady_clock::now() >= g_after_due) {
+        g_after_pending = false;
+        snapshot(rt, "after_start");
     }
     // Only on the logo (one scene read so far) or the credits (two); the title menu is the third read.
     const bool on_a_skippable_screen = s.scene_reads >= 1 && s.scene_reads < kTitleRead;
@@ -105,10 +137,12 @@ void on_pad(Runtime &rt, const AllegrexContext &ctx) {
 
 void install(portablekit::HleRegistrar &hle) {
     // Off unless D012_BOOT_SKIP=1: it is a trace of the start-up screens for now (every big read and every Start press, with the
-    // time), not a skip that works. Setting it to 2 also runs the fast-forward, which does not stop on the right screen.
+    // time), not a skip that works. 2 also runs the fast-forward, which does not stop on the right screen. 3 saves the game's RAM at
+    // each Start press and 1.5 s after it (up to 8 files of 24 MB in <temp>/d012_boot).
     const char *on = portablekit::env("BOOT_SKIP");
     if (on == nullptr || on[0] == '\0' || on[0] == '0') return;
     g_forcing_allowed = on[0] == '2';
+    g_snapshots = on[0] == '3';
     const portablekit::HleFunction read = hle.bound_function("IoFileMgrForUser", kSceIoRead);
     if (read) {
         hle.bind("IoFileMgrForUser", kSceIoRead, [read](Runtime &rt, AllegrexContext &ctx) {
