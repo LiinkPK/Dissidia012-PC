@@ -1,6 +1,7 @@
 #pragma once
 
-// Start skips the Square Enix logo and the credits at start-up (d012_boot_skip.cpp); D012_NO_BOOT_SKIP=1 turns it off.
+// Start skips the Square Enix logo, the credits and the title animation at start-up, one screen per press (d012_boot_skip.cpp).
+// D012_NO_BOOT_SKIP=1 turns it off.
 
 namespace portablekit {
 class HleRegistrar;
