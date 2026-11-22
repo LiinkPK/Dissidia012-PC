@@ -1,4 +1,4 @@
-From 187c3dedf34daf799601c27ea3096a3d8b6f3709 Mon Sep 17 00:00:00 2001
+From f03f688545f14b92d136b82d3d246609634d5e83 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -78,14 +78,14 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/profile.cpp                              |    8 +
  host/profile.hpp                              |   73 +
  host/save_data/savedata_store.cpp             |   26 +-
- host/settings/settings.cpp                    |  119 +-
+ host/settings/settings.cpp                    |  120 +-
  host/settings/settings.hpp                    |   28 +-
  host/single_instance.hpp                      |  157 ++
  host/ui/file_browser.cpp                      |   28 +-
  host/ui/font_menu.cpp                         |  103 +-
  host/ui/layer.cpp                             |    7 +-
  host/ui/layer.hpp                             |    2 +-
- host/ui/menu.cpp                              | 1159 ++++++++++++-
+ host/ui/menu.cpp                              | 1170 +++++++++++--
  host/ui/save_screen.cpp                       |   32 +-
  host/ui/setup_screens.cpp                     |   15 +-
  host/ui/texture_pack_screen.cpp               |   66 +-
@@ -105,7 +105,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   48 +
- 99 files changed, 10681 insertions(+), 339 deletions(-)
+ 99 files changed, 10681 insertions(+), 351 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/matching.cpp
  create mode 100644 host/adhoc/matching.hpp
@@ -3982,7 +3982,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..d12a9a5 100644
+index e4d7e11..f0af60c 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -4964,14 +4964,14 @@ index e4d7e11..d12a9a5 100644
 +#endif
          if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
              impl_->overlay_visible = !impl_->overlay_visible;
-+        // Numpad 1, 2 and 3: Game speed 2x, 4x and 8x; the same key again, or numpad 0, goes back to Normal. Not online (the speed is locked there)
++        // Numpad 1, 2 and 3: Game speed 2x, 4x and 8x; numpad 0 goes back to Normal (the same key again does nothing). Not online (the speed is locked there)
 +        // and not while a text field is being typed in.
 +        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && !SDL_TextInputActive(impl_->window) && !adhoc_online_mode()) {
 +            const std::uint32_t wanted = event.key.key == SDLK_KP_0 ? 1u : event.key.key == SDLK_KP_1 ? 2u : event.key.key == SDLK_KP_2 ? 4u : event.key.key == SDLK_KP_3 ? 8u : 0u;
 +            if (wanted != 0u) {
 +                settings::Settings &s = settings::current();
 +                s.unthrottled = false;
-+                s.game_speed = s.game_speed == wanted ? 1u : wanted;  // numpad 0 (wanted 1) is always Normal
++                s.game_speed = wanted;  // only numpad 0 goes back to Normal
 +                std::printf("[speed] game speed %ux\n", s.game_speed);
 +                std::fflush(stdout);
 +            }
@@ -8178,7 +8178,7 @@ index f09c4fa..1856fde 100644
          auto plain = decrypt_data(*file, *mode, key);
          if (!plain) {
 diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
-index 54078af..7709e09 100644
+index 54078af..51493b2 100644
 --- a/host/settings/settings.cpp
 +++ b/host/settings/settings.cpp
 @@ -4,6 +4,7 @@
@@ -8281,7 +8281,7 @@ index 54078af..7709e09 100644
  };
  
  State &state() {
-@@ -468,12 +515,24 @@ State &state() {
+@@ -468,12 +515,25 @@ State &state() {
      return value;
  }
  
@@ -8292,6 +8292,7 @@ index 54078af..7709e09 100644
 +    values.sharp_textures = false;
 +    values.menu_pause_multiplayer = false;
 +    // Lower when behind and Fast loading are always on, for everyone, so online players never disagree on them.
++    values.unthrottled = false;  // no Unlimited: Game speed is Normal, 2x, 4x or 8x
 +    values.frame_rate_auto = true;
 +    values.fast_loading = true;
 +}
@@ -8306,7 +8307,7 @@ index 54078af..7709e09 100644
      } catch (const std::exception &e) {
          std::cerr << "[settings] cannot read settings.ini: " << e.what() << "\n";
      }
-@@ -486,6 +545,20 @@ void load(State &s) {
+@@ -486,6 +546,20 @@ void load(State &s) {
          field.parse_variable(s.values, text);
          s.overrides[field.key] = env_name(field.variable);
      }
@@ -8327,7 +8328,7 @@ index 54078af..7709e09 100644
      // Bindings settings.ini did not hold are defaults, which must not take a
      // key it gave another control.
      std::array<bool, input::kActions> saved{};
-@@ -509,6 +582,7 @@ void load(State &s) {
+@@ -509,6 +583,7 @@ void load(State &s) {
          s.values.name_entry = NameEntry::Fixed;
          s.overrides["input.name_entry"] = env_name("OSK_TEXT");
      }
@@ -8335,7 +8336,7 @@ index 54078af..7709e09 100644
  }
  
  } // namespace
-@@ -519,6 +593,50 @@ Settings &current() {
+@@ -519,6 +594,50 @@ Settings &current() {
      return s.values;
  }
  
@@ -8386,7 +8387,7 @@ index 54078af..7709e09 100644
  std::string game_default_name() {
      const char *name = game().default_player_name;
      return name != nullptr ? name : "";
-@@ -532,7 +650,6 @@ Settings defaults_for(Platform platform) {
+@@ -532,7 +651,6 @@ Settings defaults_for(Platform platform) {
      // The game's keyboard first; a phone then turns the mouse off either way.
      if (const auto keyboard = game().keyboard_defaults) keyboard(values.bindings, values.mouse);
      if (platform == Platform::Android) {
@@ -8890,7 +8891,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..928a6cd 100644
+index 1b830d9..1b0c771 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -9298,7 +9299,7 @@ index 1b830d9..928a6cd 100644
 +    }
 +    parse_codes(f);
 +}
-+
+ 
 +void save_cheats() {
 +    CheatFile &f = cheat_file();
 +    std::ofstream out(f.path, std::ios::binary | std::ios::trunc);
@@ -9307,7 +9308,7 @@ index 1b830d9..928a6cd 100644
 +    std::error_code ec;
 +    f.stamp = std::filesystem::last_write_time(f.path, ec);
 +}
- 
++
 +// The question about the old texture folder is asked once: what was answered is kept in settings.ini as the folder's path.
 +const char *const kOldTextureKey = "textures.old_folder_asked";
 +std::string old_texture_asked() {
@@ -9534,7 +9535,7 @@ index 1b830d9..928a6cd 100644
          RowOptions o = options_for("video.frame_rate_auto",
                                     "On lowers the frame rate by itself when presenting that often would slow the "
                                     "game. Off keeps the chosen rate, and the game may then run below full speed.");
-@@ -389,13 +812,25 @@ void Menu::video() {
+@@ -389,13 +812,23 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -9547,17 +9548,15 @@ index 1b830d9..928a6cd 100644
      {
 +        const bool online = adhoc_online_mode();
 +        RowOptions o = options_for("video.unthrottled", "Normal holds the game to real time. 2x, 4x and 8x run it that "
-+                                                        "many times faster (sound off); Unlimited as fast as frames can be "
-+                                                        "drawn. Numpad 1, 2 and 3 switch to 2x, 4x and 8x without the menu, and 0 back to Normal.");
++                                                        "many times faster (sound off). Numpad 1, 2 and 3 switch to 2x, 4x and 8x without the menu, and 0 back to Normal.");
 +        if (online) {
 +            o.disabled = true;
 +            o.note = "Locked to Normal while you play online";
 +        }
-+        static const char *const kSpeeds[] = {"Normal", "2x", "4x", "8x", "Unlimited"};
-+        const int current = online ? 0 : s.unthrottled ? 4 : s.game_speed == 2u ? 1 : s.game_speed == 4u ? 2 : s.game_speed == 8u ? 3 : 0;
++        static const char *const kSpeeds[] = {"Normal", "2x", "4x", "8x"};
++        const int current = online ? 0 : s.game_speed == 2u ? 1 : s.game_speed == 4u ? 2 : s.game_speed == 8u ? 3 : 0;
 +        if (const int delta = choice_row("Game speed", kSpeeds[current], o); delta != 0 && !online) {
-+            const int next = cycle(current, delta, 5);
-+            s.unthrottled = next == 4;
++            const int next = cycle(current, delta, 4);
 +            s.game_speed = next == 1 ? 2u : next == 2 ? 4u : next == 3 ? 8u : 1u;
 +            settings::save();
 +        }
@@ -9566,7 +9565,15 @@ index 1b830d9..928a6cd 100644
          RowOptions o = options_for("video.fast_loading",
                                     "Lets the game run ahead of real time while it loads and is silent, so loads "
                                     "take as long as the computer needs. Never during play, sound, movies or "
-@@ -588,6 +1023,17 @@ bool address_character(char32_t c) {
+@@ -579,7 +1012,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
+ }
+ 
+ // Host names: printable ASCII without spaces.
+-bool host_character(char32_t c) { return c > 0x20u && c < 0x7Fu; }
+ 
+ // What an address to join may hold: a host name or IPv4 address, a colon and
+ // a port, or an IPv6 address in brackets.
+@@ -588,6 +1020,17 @@ bool address_character(char32_t c) {
             c == U':' || c == U'-' || c == U'[' || c == U']';
  }
  
@@ -9584,7 +9591,7 @@ index 1b830d9..928a6cd 100644
  // Only for a game that tilts (GameProfile::tilt).
  void Menu::tilt_controls() {
      const TiltControls *tilt = portablekit::game().tilt;
-@@ -724,6 +1170,12 @@ void Menu::controls() {
+@@ -724,6 +1167,12 @@ void Menu::controls() {
          s.confirm_south = !s.confirm_south;
          settings::save();
      }
@@ -9597,7 +9604,7 @@ index 1b830d9..928a6cd 100644
      int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
      if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
                     options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
-@@ -958,6 +1410,7 @@ void Menu::controls() {
+@@ -958,6 +1407,7 @@ void Menu::controls() {
              if (settings::overridden_by(key).empty()) value = fallback;
          };
          restore("input.confirm", s.confirm_south, d.confirm_south);
@@ -9605,7 +9612,7 @@ index 1b830d9..928a6cd 100644
          restore("input.dead_zone", s.dead_zone, d.dead_zone);
          restore("input.stick_square", s.stick_square, d.stick_square);
          restore("input.trigger", s.trigger, d.trigger);
-@@ -1065,7 +1518,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+@@ -1065,7 +1515,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -9614,7 +9621,7 @@ index 1b830d9..928a6cd 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1086,7 +1539,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1086,7 +1536,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -9623,7 +9630,7 @@ index 1b830d9..928a6cd 100644
      return "None";
  }
  
-@@ -1130,12 +1583,80 @@ void play_together() {
+@@ -1130,12 +1580,80 @@ void play_together() {
      static std::string copied;
      static std::string typed_address;
      section("Play together");
@@ -9706,7 +9713,7 @@ index 1b830d9..928a6cd 100644
          const std::vector<adhoc::LocalAddress> addresses = adhoc::local_addresses();
          if (addresses.empty()) info_row("Your addresses", "No network is connected");
          for (const adhoc::LocalAddress &address : addresses) {
-@@ -1150,6 +1671,23 @@ void play_together() {
+@@ -1150,6 +1668,23 @@ void play_together() {
                  copied = text;
              }
          }
@@ -9730,7 +9737,7 @@ index 1b830d9..928a6cd 100644
          if (!copied.empty()) info_row("Copied", copied);
          ImGui::PushID("hosted players");
          for (std::size_t i = 0; i < status.players.size(); ++i) {
-@@ -1172,7 +1710,7 @@ void play_together() {
+@@ -1172,7 +1707,7 @@ void play_together() {
          if (button_row("Host a session###hosting",
                         {false, {},
                          "Runs a server in this game for the others to join: no other program, no port forwarding "
@@ -9739,7 +9746,7 @@ index 1b830d9..928a6cd 100644
              adhoc_host_start();
          if (const std::string error = adhoc_host_error(); !error.empty()) info_row("Cannot host", error);
      }
-@@ -1181,7 +1719,13 @@ void play_together() {
+@@ -1181,7 +1716,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -9754,7 +9761,7 @@ index 1b830d9..928a6cd 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1191,10 +1735,13 @@ void play_together() {
+@@ -1191,10 +1732,13 @@ void play_together() {
          const std::string label = (joined(address) ? "Joined " : "Join ") + host.info.name + "   " + address + ", " +
                                    players_text(host.info.players) + "###found " + std::to_string(host.info.session);
          if (button_row(label.c_str(), {false, {}, "A session hosted on this network. Joining it takes you out of any "
@@ -9770,10 +9777,11 @@ index 1b830d9..928a6cd 100644
      if (text_row("join_address", "Address", typed_address, 100u, true, address_character,
                   {false, {},
                    "The host's address, for a VPN without broadcast such as Tailscale: the host's screen lists it. "
-@@ -1219,13 +1766,6 @@ void Menu::network() {
+@@ -1218,29 +1762,6 @@ void Menu::network() {
+     adhoc::Client &client = adhoc::Client::get();
      const adhoc::Diagnostics d = client.diagnostics();
      play_together();
-     section("Ad hoc play");
+-    section("Ad hoc play");
 -    if (toggle_row("Ad hoc play", s.adhoc,
 -                   options_for("network.adhoc", "Multiplayer with other players. Off, the game says the wireless "
 -                                                "switch is off. Turning it off in a gathering hall leaves it."))) {
@@ -9781,23 +9789,25 @@ index 1b830d9..928a6cd 100644
 -        settings::save();
 -        adhoc_apply_settings();
 -    }
-     if (text_row("server", "Server", s.adhoc_server, 100u, true, host_character,
-                  options_for("network.server", "The session or PSP ad hoc server the game goes on line with: host "
-                                                "name or address, host:port if it is not on 27312. Joining fills "
-@@ -1234,12 +1774,6 @@ void Menu::network() {
-         settings::save();
-         adhoc_apply_settings();
-     }
+-    if (text_row("server", "Server", s.adhoc_server, 100u, true, host_character,
+-                 options_for("network.server", "The session or PSP ad hoc server the game goes on line with: host "
+-                                               "name or address, host:port if it is not on 27312. Joining fills "
+-                                               "it in; for a public server, type its name. Applies the next time "
+-                                               "the game goes on line."))) {
+-        settings::save();
+-        adhoc_apply_settings();
+-    }
 -    if (text_row("nickname", "Nickname", s.adhoc_nickname, 32u, true, printable_ascii,
 -                 options_for("network.nickname", "The name other players and the server see. Empty: the player name. "
 -                                                 "Applies the next time the game goes on line."))) {
 -        settings::save();
 -        adhoc_apply_settings();
 -    }
- 
+-
      section("Status");
      info_row("Connection", connection_text(d));
-@@ -1313,7 +1847,7 @@ void Menu::network() {
+     if (adhoc_hosting()) {
+@@ -1313,7 +1834,7 @@ void Menu::network() {
      if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
      if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                       "Drop the server connection and connect again at once. The group is joined "
@@ -9806,7 +9816,15 @@ index 1b830d9..928a6cd 100644
          client.reconnect_now();
      if (button_row("Disconnect", {!d.group && !d.joining, {},
                                    "Leave the group as if the other players were lost. The game shows its own "
-@@ -1329,12 +1863,88 @@ void Menu::network() {
+@@ -1322,19 +1843,95 @@ void Menu::network() {
+         client.disconnect_now();
+ 
+     ImGui::Dummy({0.0f, font_gap()});
+-    if (button_row("Restore network defaults", {false, {}, "Ad hoc play off and no server. Your address stays."})) {
++    if (button_row("Restore network defaults", {false, {}, "Back to the defaults: not connected to a server. Your address stays."})) {
+         const settings::Settings &defaults = settings::defaults();
+         const auto restore = [&](const char *key, auto &value, const auto &fallback) {
+             if (settings::overridden_by(key).empty()) value = fallback;
          };
          restore("network.adhoc", s.adhoc, defaults.adhoc);
          restore("network.server", s.adhoc_server, defaults.adhoc_server);
@@ -9895,7 +9913,7 @@ index 1b830d9..928a6cd 100644
  void Menu::system() {
      if (save_screen(back_)) {
          if (take_restart_request()) {
-@@ -1360,14 +1970,6 @@ void Menu::system() {
+@@ -1360,14 +1957,6 @@ void Menu::system() {
          s.menu_pause = !s.menu_pause;
          settings::save();
      }
@@ -9910,7 +9928,7 @@ index 1b830d9..928a6cd 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
      // An Android app's data folder is out of the file manager's reach; its
      // log goes where the player picks instead, to send with a report.
-@@ -1375,18 +1977,21 @@ void Menu::system() {
+@@ -1375,18 +1964,21 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -9934,7 +9952,7 @@ index 1b830d9..928a6cd 100644
          if (std::filesystem::is_directory(storage / "logs", ec))
              std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
          const auto copied = android::pick_folder_and_copy(local);
-@@ -1396,24 +2001,91 @@ void Menu::system() {
+@@ -1396,24 +1988,91 @@ void Menu::system() {
                                                       : "Not saved: " + copied->error;
      }
      if (!saved_log_path().empty()) info_row("Log", saved_log_path());
@@ -10030,7 +10048,7 @@ index 1b830d9..928a6cd 100644
      if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
      info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
      info_row("Data folder", data_dir);
-@@ -1439,6 +2111,108 @@ bool Menu::confirm_dialog() {
+@@ -1439,6 +2098,108 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -10139,7 +10157,7 @@ index 1b830d9..928a6cd 100644
          const bool quit = confirm_ == Confirm::Quit;
          heading(quit ? "Quit the game?" : "Set up game data again?");
          paragraph(quit ? "Progress since your last save is lost."
-@@ -1447,8 +2221,17 @@ bool Menu::confirm_dialog() {
+@@ -1447,8 +2208,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -10159,7 +10177,7 @@ index 1b830d9..928a6cd 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -1466,6 +2249,77 @@ bool Menu::confirm_dialog() {
+@@ -1466,6 +2236,77 @@ bool Menu::confirm_dialog() {
      return keep_open;
  }
  
@@ -10237,7 +10255,7 @@ index 1b830d9..928a6cd 100644
  // Seconds the menu hint has left, or a negative number once it is gone.
  double hint_seconds_left() {
      static const Clock::time_point first_frame = Clock::now();
-@@ -1588,6 +2442,70 @@ void add_menu_rows(void (*rows)()) {
+@@ -1588,6 +2429,70 @@ void add_menu_rows(void (*rows)()) {
      if (rows != nullptr) port_rows().push_back(rows);
  }
  
@@ -10308,7 +10326,7 @@ index 1b830d9..928a6cd 100644
  void draw_over_game() {
      Layer &layer = Layer::get();
      if (!layer.attached()) return;
-@@ -1610,6 +2528,51 @@ void draw_over_game() {
+@@ -1610,6 +2515,51 @@ void draw_over_game() {
          layer.end_frame();
          return;
      }
@@ -10360,7 +10378,7 @@ index 1b830d9..928a6cd 100644
      const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
      const bool overlay = network_overlay();
      const bool touch = !menu && layer.renderer().touch_controls_visible();
-@@ -1639,7 +2602,7 @@ void draw_over_game() {
+@@ -1639,7 +2589,7 @@ void draw_over_game() {
  
  bool menu_pauses() {
      const settings::Settings &s = settings::current();
@@ -10369,7 +10387,7 @@ index 1b830d9..928a6cd 100644
  }
  
  void open_menu_over_game() {
-@@ -1650,6 +2613,9 @@ void open_menu_over_game() {
+@@ -1650,6 +2600,9 @@ void open_menu_over_game() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      menu.emplace(false);
@@ -10379,7 +10397,7 @@ index 1b830d9..928a6cd 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -1659,9 +2625,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+@@ -1659,9 +2612,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
  bool menu_requested() {
      Layer &layer = Layer::get();
      if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
@@ -10407,7 +10425,7 @@ index 1b830d9..928a6cd 100644
  }
  
  bool run_menu() {
-@@ -1670,6 +2652,9 @@ bool run_menu() {
+@@ -1670,6 +2639,9 @@ bool run_menu() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      Menu menu(true);
