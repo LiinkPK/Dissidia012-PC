@@ -118,9 +118,19 @@ struct PortableLayout {
         const std::filesystem::path folder = portablekit::executable_directory();
         std::error_code ec;
         const bool game_folder = !folder.empty() && std::filesystem::is_regular_file(folder / "game" / "EBOOT.ELF", ec);
-        // Always: the data folder is <folder>/data (settings, saves, textures/), never the user's AppData, whether or not the game has
-        // been set up from a disc image yet. A clean copy has no game/EBOOT.ELF until the first run.
+#if defined(__ANDROID__) || defined(__APPLE__)
+        // A phone's or an app bundle's own folder is read-only: its data goes where the platform puts it (user_data.cpp), unless the
+        // layout is asked for (the installer build, or a game/ folder beside the program).
+#if defined(D012_INSTALLER_BUILD)
         const bool portable = !folder.empty();
+#else
+        const bool portable = game_folder;
+#endif
+#else
+        // Windows and Linux, always: the data folder is <folder>/data (settings, saves, textures/), never the user's AppData, whether or
+        // not the game has been set up from a disc image yet. A clean copy has no game/EBOOT.ELF until the first run.
+        const bool portable = !folder.empty();
+#endif
 #if defined(D012_RELEASE_BUILD)
         const bool no_interpreter = true;
 #else
