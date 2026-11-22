@@ -91,3 +91,6 @@ crash_report.txt
 
 # The server setup for the online relay: stays local
 /scripts/setup_relay_server.sh
+
+# The relay server's source package (scripts/setup_relay_server.sh), made by hand
+relay-src.tar.gz
