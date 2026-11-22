@@ -1,4 +1,4 @@
-From 4f21a9d2138a5faa0b55c0a314491d3b6b10ae42 Mon Sep 17 00:00:00 2001
+From 9b39fbde1caa75f8c0fc4e549c6f42b9cefbe3fb Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -57,6 +57,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/hle/hle_font.cpp                         |   35 +-
  host/hle/hle_io.cpp                           |    5 +
  host/hle/hle_media.cpp                        |    9 +-
+ host/hle/hle_savedata.cpp                     |    3 +-
  host/hle/hle_system.cpp                       |    1 +
  host/hle/hle_utility.cpp                      |    4 +
  host/input/touch_controls.cpp                 |   38 +-
@@ -80,7 +81,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/platform/android_jni.cpp                 |  174 ++
  host/platform/android_jni.hpp                 |   28 +
  host/profile.cpp                              |    8 +
- host/profile.hpp                              |   84 +
+ host/profile.hpp                              |   88 +
  host/save_data/savedata_store.cpp             |   26 +-
  host/settings/settings.cpp                    |  127 +-
  host/settings/settings.hpp                    |   30 +-
@@ -89,7 +90,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/ui/font_menu.cpp                         |  103 +-
  host/ui/layer.cpp                             |    7 +-
  host/ui/layer.hpp                             |    2 +-
- host/ui/menu.cpp                              | 1174 +++++++++++--
+ host/ui/menu.cpp                              | 1195 +++++++++++--
  host/ui/save_screen.cpp                       |   33 +-
  host/ui/save_screen.hpp                       |    3 +
  host/ui/setup_screens.cpp                     |   15 +-
@@ -105,13 +106,13 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  include/psprecomp/runtime.hpp                 |    3 +
  packaging/android/AndroidManifest.xml         |    8 +
  packaging/android/build_apk.sh                |   17 +
- .../teamgdb/portablekit/GameActivity.java     |  316 ++++
+ .../teamgdb/portablekit/GameActivity.java     |  317 ++++
  src/runtime.cpp                               |   30 +-
  third_party/bc7enc16/LICENSE                  |   76 +
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 105 files changed, 10980 insertions(+), 365 deletions(-)
+ 106 files changed, 11002 insertions(+), 372 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -6853,6 +6854,20 @@ index e690158..93cf05b 100644
          static const bool poll = portablekit::env("NO_CODE_PRESENT_POLL") == nullptr;
          const perf::Clock::time_point until =
              perf::Clock::now() + std::chrono::microseconds(static_cast<std::int64_t>(spin_ms * 1000.0));
+diff --git a/host/hle/hle_savedata.cpp b/host/hle/hle_savedata.cpp
+index 198dfaa..acc0083 100644
+--- a/host/hle/hle_savedata.cpp
++++ b/host/hle/hle_savedata.cpp
+@@ -249,7 +249,8 @@ std::uint32_t do_load(psprecomp::GuestMemory &memory, std::uint32_t params, cons
+                   << ": " << loaded.reason << "\n";
+         return result::kLoadDataBroken;
+     }
+-    const auto &data = loaded.contents.data;
++    std::vector<std::uint8_t> data = loaded.contents.data;
++    if (portablekit::game().save_loaded != nullptr) portablekit::game().save_loaded(files.file_name, data);
+     const auto count = static_cast<std::uint32_t>(std::min<std::size_t>(data.size(), capacity));
+     memory.copy_in(buffer, std::span<const std::uint8_t>(data.data(), count));
+     memory.store32(params + param::kDataSize, count);
 diff --git a/host/hle/hle_system.cpp b/host/hle/hle_system.cpp
 index cf09b75..823fd37 100644
 --- a/host/hle/hle_system.cpp
@@ -8422,15 +8437,16 @@ index 5a603c6..940f3f6 100644
  const ProfileVariant *active_variant() { return g_active_variant; }
  
 diff --git a/host/profile.hpp b/host/profile.hpp
-index ddcf7eb..624c878 100644
+index ddcf7eb..1b0490f 100644
 --- a/host/profile.hpp
 +++ b/host/profile.hpp
-@@ -14,12 +14,15 @@
+@@ -14,12 +14,16 @@
  #include "input/bindings.hpp"
  
  #include <array>
 +#include <cstddef>
  #include <cstdint>
++#include <vector>
 +#include <filesystem>
  #include <span>
  #include <string>
@@ -8441,7 +8457,7 @@ index ddcf7eb..624c878 100644
  class Elf32Image;
  class Runtime;
  } // namespace psprecomp
-@@ -153,6 +156,19 @@ struct GameProfile {
+@@ -153,6 +157,19 @@ struct GameProfile {
      // Which release that is, as the installer names it when it is handed
      // another one: "the Japanese release". Null: it is named by disc id alone.
      const char *release_name = nullptr;
@@ -8461,7 +8477,7 @@ index ddcf7eb..624c878 100644
      // Releases a player may mistake for it. The installer says the note of
      // the one it was handed, instead of "Other releases and regions are not
      // supported."
-@@ -176,10 +192,17 @@ struct GameProfile {
+@@ -176,10 +193,17 @@ struct GameProfile {
      // version nobody listed yet): true installs and runs it under the
      // interpreter, with a warning; false refuses it at setup.
      bool run_unknown_executables = false;
@@ -8479,7 +8495,7 @@ index ddcf7eb..624c878 100644
      // argv[0] the game is started with, e.g. "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN".
      const char *boot_path;
      // Addresses of the code overlay slots inside the load image's BSS, from
-@@ -212,6 +235,37 @@ struct GameProfile {
+@@ -212,6 +236,40 @@ struct GameProfile {
      // agree on it, so it is the original release's code even when the port's
      // disc id is a different one.
      const char *adhoc_product_code;
@@ -8499,6 +8515,9 @@ index ddcf7eb..624c878 100644
 +        std::uint16_t buttons;
 +    } *touch_combos = nullptr;
 +    std::size_t touch_combo_count = 0;
++    // Called with a save's data file as the game loads it from the memory stick, before the game sees it, to repair what a game
++    // would crash on (a save from somewhere else). May change `data`. Null: nothing.
++    void (*save_loaded)(const std::string &file_name, std::vector<std::uint8_t> &data) = nullptr;
 +    // Where the mod data actually is, as a UTF-8 path, for the Mods page's "Open the mods folder" button. A game that lets the player
 +    // choose where it goes (an Android download into the app's storage or an SD card) answers with that folder; empty, or unset: the
 +    // mods folder of the data folder.
@@ -8517,7 +8536,7 @@ index ddcf7eb..624c878 100644
  
      // --- Controls ----------------------------------------------------------
      // What the triggers may press instead of L and R, for the way this game is
-@@ -246,6 +300,30 @@ struct GameProfile {
+@@ -246,6 +304,30 @@ struct GameProfile {
      // Called once the executable is in memory and before it runs, for the
      // per-game patches that have no better home. Null means there are none.
      void (*patch_loaded_image)(psprecomp::Runtime &, const psprecomp::Elf32Image &) = nullptr;
@@ -8548,7 +8567,7 @@ index ddcf7eb..624c878 100644
  
      // --- The game's camera and view ----------------------------------------
      // Drives the game's own camera from what the player asks of it
-@@ -310,6 +388,12 @@ struct GameProfile {
+@@ -310,6 +392,12 @@ struct GameProfile {
  // null for the profile's own (and before it is known).
  void set_active_variant(const ProfileVariant *variant);
  [[nodiscard]] const ProfileVariant *active_variant();
@@ -9334,7 +9353,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..7814c3a 100644
+index 1b830d9..2eae38d 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -9686,7 +9705,7 @@ index 1b830d9..7814c3a 100644
 +        }
 +    }
 +}
-+
+ 
 +// Reads the file again when it is new or has changed on disk.
 +#if defined(PORTABLEKIT_ANDROID_APP)
 +// The APK carries no memory stick folder, so the cheat file is fetched, once per run, from the profile's address when it is missing or
@@ -9742,7 +9761,7 @@ index 1b830d9..7814c3a 100644
 +    }
 +    parse_codes(f);
 +}
- 
++
 +void save_cheats() {
 +    CheatFile &f = cheat_file();
 +    std::ofstream out(f.path, std::ios::binary | std::ios::trunc);
@@ -10075,18 +10094,32 @@ index 1b830d9..7814c3a 100644
      return "None";
  }
  
-@@ -1129,13 +1581,81 @@ void play_together() {
+@@ -1129,13 +1581,89 @@ void play_together() {
      settings::Settings &s = settings::current();
      static std::string copied;
      static std::string typed_address;
 -    section("Play together");
 +    section("Online multiplayer");
-+    if (text_row("nickname", "Nickname", s.adhoc_nickname, 32u, true, printable_ascii,
-+                 options_for("network.nickname", "The name other players and the server see. Empty: the player name. "
-+                                                 "Applies the next time the game goes on line."))) {
-+        settings::save();
-+        adhoc_apply_settings();
-+    }
++    // Play online comes first, so a controller lands on it with the title above it in view; then the nickname and the room.
++    const auto nickname_row = [&] {
++        if (text_row("nickname", "Nickname", s.adhoc_nickname, 32u, true, printable_ascii,
++                     options_for("network.nickname", "The name other players and the server see. Empty: the player name. "
++                                                     "Applies the next time the game goes on line."))) {
++            settings::save();
++            adhoc_apply_settings();
++        }
++    };
++    const auto room_row = [&] {
++        upper_room(s.adhoc_room);
++        if (text_row("room", "Room", s.adhoc_room, 12u, true, room_character,
++                     {false, {},
++                      "Players with the same room meet on the relay. Make one up, or press Play online to get one, "
++                      "and tell it to your friends. Changing it applies at once."})) {
++            upper_room(s.adhoc_room);
++            settings::save();
++            if (adhoc_relay_selected()) adhoc_apply_settings(true);
++        }
++    };
 +    // Through the profile's public relay: nobody opens a port, and a room code is all the others need. When the relay cannot be
 +    // reached, this game hosts directly instead (the router's ports are opened, see below) and shows the address to share.
 +    static bool relay_fell_back = false;
@@ -10094,15 +10127,6 @@ index 1b830d9..7814c3a 100644
 +        static bool relay_timing = false;
 +        static Clock::time_point relay_since;
 +        if (!adhoc_hosting()) {
-+            upper_room(s.adhoc_room);
-+            if (text_row("room", "Room", s.adhoc_room, 12u, true, room_character,
-+                         {false, {},
-+                          "Players with the same room meet on the relay. Make one up, or press Play online to get one, "
-+                          "and tell it to your friends. Changing it applies at once."})) {
-+                upper_room(s.adhoc_room);
-+                settings::save();
-+                if (adhoc_relay_selected()) adhoc_apply_settings(true);
-+            }
 +            const bool relay_on = adhoc_relay_selected();
 +            if (button_row((relay_on ? "Playing online###relay" : "Play online###relay"),
 +                           {false, {},
@@ -10146,10 +10170,13 @@ index 1b830d9..7814c3a 100644
 +            } else {
 +                relay_timing = false;
 +            }
++            nickname_row();
++            room_row();
 +        }
 +        if (relay_fell_back && adhoc_hosting())
 +            info_row("Relay", "Not reachable, so this game hosts directly. Share the internet address below.");
 +    }
++    if (adhoc_relay_address().empty() || adhoc_hosting()) nickname_row();
      if (adhoc_hosting()) {
          const adhoc::ServerStatus status = adhoc_host_status();
          const std::string suffix =
@@ -10160,7 +10187,7 @@ index 1b830d9..7814c3a 100644
          const std::vector<adhoc::LocalAddress> addresses = adhoc::local_addresses();
          if (addresses.empty()) info_row("Your addresses", "No network is connected");
          for (const adhoc::LocalAddress &address : addresses) {
-@@ -1150,6 +1670,23 @@ void play_together() {
+@@ -1150,6 +1678,23 @@ void play_together() {
                  copied = text;
              }
          }
@@ -10184,7 +10211,7 @@ index 1b830d9..7814c3a 100644
          if (!copied.empty()) info_row("Copied", copied);
          ImGui::PushID("hosted players");
          for (std::size_t i = 0; i < status.players.size(); ++i) {
-@@ -1172,7 +1709,7 @@ void play_together() {
+@@ -1172,7 +1717,7 @@ void play_together() {
          if (button_row("Host a session###hosting",
                         {false, {},
                          "Runs a server in this game for the others to join: no other program, no port forwarding "
@@ -10193,7 +10220,7 @@ index 1b830d9..7814c3a 100644
              adhoc_host_start();
          if (const std::string error = adhoc_host_error(); !error.empty()) info_row("Cannot host", error);
      }
-@@ -1181,7 +1718,13 @@ void play_together() {
+@@ -1181,7 +1726,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -10208,7 +10235,7 @@ index 1b830d9..7814c3a 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1191,10 +1734,13 @@ void play_together() {
+@@ -1191,10 +1742,13 @@ void play_together() {
          const std::string label = (joined(address) ? "Joined " : "Join ") + host.info.name + "   " + address + ", " +
                                    players_text(host.info.players) + "###found " + std::to_string(host.info.session);
          if (button_row(label.c_str(), {false, {}, "A session hosted on this network. Joining it takes you out of any "
@@ -10224,7 +10251,7 @@ index 1b830d9..7814c3a 100644
      if (text_row("join_address", "Address", typed_address, 100u, true, address_character,
                   {false, {},
                    "The host's address, for a VPN without broadcast such as Tailscale: the host's screen lists it. "
-@@ -1218,29 +1764,6 @@ void Menu::network() {
+@@ -1218,29 +1772,6 @@ void Menu::network() {
      adhoc::Client &client = adhoc::Client::get();
      const adhoc::Diagnostics d = client.diagnostics();
      play_together();
@@ -10254,7 +10281,7 @@ index 1b830d9..7814c3a 100644
      section("Status");
      info_row("Connection", connection_text(d));
      if (adhoc_hosting()) {
-@@ -1313,7 +1836,7 @@ void Menu::network() {
+@@ -1313,7 +1844,7 @@ void Menu::network() {
      if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
      if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                       "Drop the server connection and connect again at once. The group is joined "
@@ -10263,7 +10290,7 @@ index 1b830d9..7814c3a 100644
          client.reconnect_now();
      if (button_row("Disconnect", {!d.group && !d.joining, {},
                                    "Leave the group as if the other players were lost. The game shows its own "
-@@ -1322,19 +1845,95 @@ void Menu::network() {
+@@ -1322,28 +1853,105 @@ void Menu::network() {
          client.disconnect_now();
  
      ImGui::Dummy({0.0f, font_gap()});
@@ -10282,6 +10309,12 @@ index 1b830d9..7814c3a 100644
      }
  }
  
+-void Menu::system() {
+-    if (save_screen(back_)) {
+-        if (take_restart_request()) {
+-            install::request_restart_on_exit();
+-            quit_ = true;
+-            close_ = true;
 +void Menu::cheats() {
 +    const std::lock_guard<std::mutex> lock(cheat_mutex());
 +    load_cheats();
@@ -10342,7 +10375,7 @@ index 1b830d9..7814c3a 100644
 +                if (found->second.changed != 0u) note += ", " + std::to_string(found->second.changed) + " changed by the game";
 +            }
 +            info_row(title.c_str(), note);
-+        }
+         }
 +        if (!any) info_row("Status", "No cheat is on");
 +    }
 +}
@@ -10357,10 +10390,20 @@ index 1b830d9..7814c3a 100644
 +    for (void (*rows)() : mod_rows()) rows();
 +}
 +
- void Menu::system() {
-     if (save_screen(back_)) {
-         if (take_restart_request()) {
-@@ -1360,14 +1959,6 @@ void Menu::system() {
++void Menu::system() {
++    const bool screen_open = save_screen(back_);
++    // A restart asked for by the import screen, or by a port's own rows on this page (ui::request_restart).
++    if (take_restart_request()) {
++        install::request_restart_on_exit();
++        quit_ = true;
++        close_ = true;
+         return;
+     }
++    if (screen_open) return;
+     std::string data_dir;
+     try {
+         data_dir = install::path_to_utf8(install::user_data_directory());
+@@ -1360,14 +1968,6 @@ void Menu::system() {
          s.menu_pause = !s.menu_pause;
          settings::save();
      }
@@ -10375,7 +10418,7 @@ index 1b830d9..7814c3a 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
      // An Android app's data folder is out of the file manager's reach; its
      // log goes where the player picks instead, to send with a report.
-@@ -1375,18 +1966,21 @@ void Menu::system() {
+@@ -1375,18 +1975,21 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -10399,7 +10442,7 @@ index 1b830d9..7814c3a 100644
          if (std::filesystem::is_directory(storage / "logs", ec))
              std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
          const auto copied = android::pick_folder_and_copy(local);
-@@ -1396,24 +1990,91 @@ void Menu::system() {
+@@ -1396,24 +1999,91 @@ void Menu::system() {
                                                       : "Not saved: " + copied->error;
      }
      if (!saved_log_path().empty()) info_row("Log", saved_log_path());
@@ -10495,7 +10538,7 @@ index 1b830d9..7814c3a 100644
      if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
      info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
      info_row("Data folder", data_dir);
-@@ -1439,6 +2100,108 @@ bool Menu::confirm_dialog() {
+@@ -1439,6 +2109,108 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -10604,7 +10647,7 @@ index 1b830d9..7814c3a 100644
          const bool quit = confirm_ == Confirm::Quit;
          heading(quit ? "Quit the game?" : "Set up game data again?");
          paragraph(quit ? "Progress since your last save is lost."
-@@ -1447,8 +2210,17 @@ bool Menu::confirm_dialog() {
+@@ -1447,8 +2219,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -10624,7 +10667,7 @@ index 1b830d9..7814c3a 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -1466,6 +2238,77 @@ bool Menu::confirm_dialog() {
+@@ -1466,6 +2247,77 @@ bool Menu::confirm_dialog() {
      return keep_open;
  }
  
@@ -10702,7 +10745,7 @@ index 1b830d9..7814c3a 100644
  // Seconds the menu hint has left, or a negative number once it is gone.
  double hint_seconds_left() {
      static const Clock::time_point first_frame = Clock::now();
-@@ -1588,6 +2431,70 @@ void add_menu_rows(void (*rows)()) {
+@@ -1588,6 +2440,70 @@ void add_menu_rows(void (*rows)()) {
      if (rows != nullptr) port_rows().push_back(rows);
  }
  
@@ -10773,7 +10816,7 @@ index 1b830d9..7814c3a 100644
  void draw_over_game() {
      Layer &layer = Layer::get();
      if (!layer.attached()) return;
-@@ -1610,6 +2517,51 @@ void draw_over_game() {
+@@ -1610,6 +2526,51 @@ void draw_over_game() {
          layer.end_frame();
          return;
      }
@@ -10825,7 +10868,7 @@ index 1b830d9..7814c3a 100644
      const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
      const bool overlay = network_overlay();
      const bool touch = !menu && layer.renderer().touch_controls_visible();
-@@ -1639,7 +2591,7 @@ void draw_over_game() {
+@@ -1639,7 +2600,7 @@ void draw_over_game() {
  
  bool menu_pauses() {
      const settings::Settings &s = settings::current();
@@ -10834,7 +10877,7 @@ index 1b830d9..7814c3a 100644
  }
  
  void open_menu_over_game() {
-@@ -1650,6 +2602,9 @@ void open_menu_over_game() {
+@@ -1650,6 +2611,9 @@ void open_menu_over_game() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      menu.emplace(false);
@@ -10844,7 +10887,7 @@ index 1b830d9..7814c3a 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -1659,9 +2614,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+@@ -1659,9 +2623,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
  bool menu_requested() {
      Layer &layer = Layer::get();
      if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
@@ -10872,7 +10915,7 @@ index 1b830d9..7814c3a 100644
  }
  
  bool run_menu() {
-@@ -1670,6 +2641,9 @@ bool run_menu() {
+@@ -1670,6 +2650,9 @@ bool run_menu() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      Menu menu(true);
@@ -12481,7 +12524,7 @@ index 1cae59e..484144d 100755
  "$strip" --strip-unneeded "$lib"/*.so
  # Every function a packed library imports must be in Android $min_sdk's system
 diff --git a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
-index cec636d..4048d93 100644
+index cec636d..748b716 100644
 --- a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 +++ b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 @@ -2,6 +2,7 @@ package io.github.teamgdb.portablekit;
@@ -12509,7 +12552,7 @@ index cec636d..4048d93 100644
              finishPick(uri != null ? uri.toString() : null);
              return;
          }
-@@ -138,6 +149,100 @@ public class GameActivity extends SDLActivity {
+@@ -138,6 +149,101 @@ public class GameActivity extends SDLActivity {
          Runtime.getRuntime().exit(0);
      }
  
@@ -12559,7 +12602,8 @@ index cec636d..4048d93 100644
 +                // and a return to the game.
 +                try {
 +                    Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-+                    pick.putExtra(DocumentsContract.EXTRA_INITIAL_URI, tree);
++                    // The starting folder is a document address: the picker ignores a tree address there and opens at Recent.
++                    pick.putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder);
 +                    pick.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 +                    activity.startActivity(pick);
 +                    final String shown = path;
@@ -12610,7 +12654,7 @@ index cec636d..4048d93 100644
      /** The document that stands for a picked tree itself. */
      public static String treeRoot(String treeUri) {
          Uri tree = Uri.parse(treeUri);
-@@ -193,4 +298,215 @@ public class GameActivity extends SDLActivity {
+@@ -193,4 +299,215 @@ public class GameActivity extends SDLActivity {
              return -1;
          }
      }

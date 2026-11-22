@@ -127,6 +127,9 @@ struct Pad {
     // The read at which a battle camera was running while raw pad 0 was fed by ad hoc (or a replay): the stick must not move
     // that camera, but the button shortcuts still apply (they are ordinary buttons, sent to the other player like any).
     std::uint32_t fed_read = 0xFFFF0000u;
+    // The read at which any battle camera ran, whatever the game's camera option says (manual or automatic): the button
+    // shortcuts follow the battle, not the camera mode.
+    std::uint32_t battle_read = 0xFFFF0000u;
     bool r3 = false;
 };
 
@@ -167,6 +170,8 @@ int local_camera(Guest *g, gaddr camera, bool *fed_externally = nullptr) {
 // What the stick asks of this camera: turn > 0 is what D-pad right does,
 // closer > 0 what D-pad up does, after the player's two direction options.
 bool camera_stick(Guest *g, gaddr camera, float &turn, float &closer) {
+    // A battle camera is running, in automatic camera mode too (CAM_MANUAL 0 is the game's own camera option): the shortcuts apply.
+    if (g_ld32s(g, camera + CAM_STEP_SOURCE) == 0) pad().battle_read = pad().reads;
     bool fed = false;
     const int player = local_camera(g, camera, &fed);
     if (player < 0) {
@@ -449,7 +454,7 @@ void install(portablekit::HleRegistrar &hle) {
         //   D-pad left        manual Summon          R1 + Circle
         // D-pad up and down no longer move the camera closer or away (the right stick does that), and D-pad left no longer
         // turns it (the right stick does that too); D-pad right still turns it.
-        const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads;
+        const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
         if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             std::uint32_t add = 0u;

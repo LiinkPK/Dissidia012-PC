@@ -19,6 +19,8 @@
 #include "ui/ui.hpp"
 #include "ui/widgets.hpp"
 
+#include <imgui.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -149,56 +151,78 @@ bool unlock_copy(const Slot &source, const Slot &target, std::string &message) {
     return true;
 }
 
-enum class Stage { Idle, PickSource, PickTarget, Confirm, Done };
-Stage g_stage = Stage::Idle;
+enum class Stage { PickSource, PickTarget, Confirm, Done };
+bool g_open = false;  // the popup is up
+Stage g_stage = Stage::PickSource;
 Slot g_source, g_target;
 std::string g_message;
 bool g_ok = false;
 
-void system_rows() {
-    const bool available = !sd::memory_stick().empty() && sd::game_key().has_value();
-    ui::section("Unlock all");
+void close_popup() {
+    g_open = false;
+    g_stage = Stage::PickSource;
+    ImGui::CloseCurrentPopup();
+}
+
+// The popup that holds the whole flow: pick the save to copy, pick where the copy goes, confirm, result.
+void popup() {
+    if (!g_open) return;
+    if (!ImGui::IsPopupOpen("##unlock_all")) ImGui::OpenPopup("##unlock_all");
+    const ImGuiIO &io = ImGui::GetIO();
+    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+    ImGui::SetNextWindowSize({io.DisplaySize.x * 0.7f, io.DisplaySize.y * 0.8f}, ImGuiCond_Always);
+    if (!ImGui::BeginPopupModal("##unlock_all", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) return;
     const std::vector<Slot> all = slots();
+    const float full = ImGui::GetContentRegionAvail().x;
+    const float gap = ImGui::GetTextLineHeightWithSpacing() * 0.5f;
+    // The list takes the room the heading and the Cancel button leave; the slots scroll inside it.
+    const auto list_height = [&] { return ImGui::GetContentRegionAvail().y - ImGui::GetTextLineHeightWithSpacing() * 3.4f; };
+    bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
     switch (g_stage) {
-    case Stage::Idle: {
-        const bool any = std::any_of(all.begin(), all.end(), [](const Slot &s) { return s.used; });
-        ui::paragraph("Makes a copy of one of your saves with every character, costume, item, ability and summon unlocked and all the "
-                      "story progress done. The save you copy is not changed, and your friend cards come with it.",
+    case Stage::PickSource: {
+        ui::heading("Unlock all");
+        ui::paragraph("Choose the save to copy, then where the copy goes. The copy has every character, costume, item, ability and "
+                      "summon unlocked and all the story progress done; the save you copy is not changed, and your friend cards come "
+                      "with it.",
                       ui::colors::kTextDim);
-        if (ui::button_row("Unlock all...###unlockstart",
-                           {!available || !any, {},
-                            !available ? "Available once the game has loaded its save: go back to the title screen."
-                            : !any     ? "Play and save once first."
-                                       : "Choose the save to copy, then where the copy goes."}))
-            g_stage = Stage::PickSource;
-        break;
-    }
-    case Stage::PickSource:
+        ImGui::Dummy({0.0f, gap * 0.5f});
         ui::paragraph("Which save do you want to copy?");
+        ImGui::BeginChild("##unlock_list", {0.0f, list_height()}, ImGuiChildFlags_NavFlattened);
+        bool first = true;
         for (const Slot &slot : all) {
             if (!slot.used) continue;
-            if (ui::button_row((slot_label(slot) + "###unlocksrc" + slot.name).c_str(), {false, {}, "Copy this save."})) {
+            if (ui::big_button((slot_label(slot) + "###unlocksrc" + slot.name).c_str(), full, first)) {
                 g_source = slot;
                 g_stage = Stage::PickTarget;
             }
+            if (first) ImGui::SetItemDefaultFocus();
+            first = false;
         }
-        if (ui::button_row("Cancel###unlockcancel1", {false, {}, "Changes nothing."})) g_stage = Stage::Idle;
+        ImGui::EndChild();
         break;
-    case Stage::PickTarget:
-        ui::paragraph("Copy " + slot_label(g_source) + " with everything unlocked to which save?");
+    }
+    case Stage::PickTarget: {
+        ui::heading("Where does the copy go?");
+        ui::paragraph("Copy " + slot_label(g_source) + " with everything unlocked to which save?", ui::colors::kTextDim);
+        ImGui::BeginChild("##unlock_list", {0.0f, list_height()}, ImGuiChildFlags_NavFlattened);
+        bool first = true;
         for (const Slot &slot : all) {
             const bool same = slot.name == g_source.name;
             const std::string label = slot_label(slot) + (same ? "   (the one you are copying)" : slot.used ? "   in use" : "   empty");
-            if (ui::button_row((label + "###unlocktgt" + slot.name).c_str(),
-                               {same, {}, slot.used ? "This save is replaced by the copy." : "A new save is made here."},
-                               slot.used && !same ? ui::colors::kAccentBright : ui::colors::kText)) {
+            if (ui::big_button((label + "###unlocktgt" + slot.name).c_str(), full, false, same, slot.used && !same)) {
                 g_target = slot;
                 g_stage = Stage::Confirm;
             }
+            if (first && !same) {
+                ImGui::SetItemDefaultFocus();
+                first = false;
+            }
         }
-        if (ui::button_row("Cancel###unlockcancel2", {false, {}, "Changes nothing."})) g_stage = Stage::Idle;
+        ImGui::EndChild();
         break;
-    case Stage::Confirm:
+    }
+    case Stage::Confirm: {
+        ui::heading("Make the copy?");
         if (g_target.used) {
             ui::paragraph(slot_label(g_target) + " already has a save. It is replaced by a copy of " + slot_label(g_source) +
                               " with everything unlocked. This cannot be undone, and there is no backup of the save it replaces.",
@@ -206,27 +230,58 @@ void system_rows() {
         } else {
             ui::paragraph("A new save is made in " + slot_label(g_target) + ": a copy of " + slot_label(g_source) +
                               " with everything unlocked. " + slot_label(g_source) + " is not changed. Unlocking cannot be undone "
-                              "in the new save.",
-                          ui::colors::kText);
+                              "in the new save.");
         }
-        if (ui::button_row("Yes, make the copy###unlockyes", {false, {}, "Writes the save now."},
-                           g_target.used ? ui::colors::kDanger : ui::colors::kAccentBright)) {
+        ImGui::Dummy({0.0f, gap});
+        if (ui::big_button("Yes, make the copy###unlockyes", full, !g_target.used, false, g_target.used)) {
             g_ok = unlock_copy(g_source, g_target, g_message);
             g_stage = Stage::Done;
         }
-        if (ui::button_row("Cancel###unlockcancel3", {false, {}, "Changes nothing."})) g_stage = Stage::Idle;
+        ImGui::SetItemDefaultFocus();
         break;
-    case Stage::Done:
+    }
+    case Stage::Done: {
+        ui::heading(g_ok ? "Done" : "Not done");
         ui::paragraph(g_message, g_ok ? ui::colors::kGood : ui::colors::kDanger);
         if (g_ok) {
             ui::paragraph("The game reads a save when you load it. If you replaced the save you are playing, restart now: saving "
-                          "before that would put your current game back over the copy.");
-            if (ui::button_row("Restart now###unlockrestart", {false, {}, "Closes the game and starts it again at the title screen."}))
+                          "before that would put your current game back over the copy.",
+                          ui::colors::kTextDim);
+            ImGui::Dummy({0.0f, gap});
+            if (ui::big_button("Restart now###unlockrestart", full, true)) {
                 ui::request_restart();
+                close_popup();
+                ImGui::EndPopup();
+                return;
+            }
+            ImGui::SetItemDefaultFocus();
         }
-        if (ui::button_row("Done###unlockdone", {false, {}, "Back to the page."})) g_stage = Stage::Idle;
         break;
     }
+    }
+    ImGui::Dummy({0.0f, gap * 0.5f});
+    if (ui::big_button(g_stage == Stage::Done ? "Close###unlockclose" : "Cancel###unlockcancel", full) || cancelled) {
+        close_popup();
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::EndPopup();
+}
+
+void system_rows() {
+    const bool available = !sd::memory_stick().empty() && sd::game_key().has_value();
+    ui::section("Unlock all");
+    const std::vector<Slot> all = slots();
+    const bool any = std::any_of(all.begin(), all.end(), [](const Slot &s) { return s.used; });
+    if (ui::button_row("Unlock all...###unlockstart",
+                       {!available || !any, {},
+                        !available ? "Available once the game has loaded its save: go back to the title screen."
+                        : !any     ? "Play and save once first."
+                                   : "Makes a copy of one of your saves with everything unlocked and story progress done. The save you copy is not changed."})) {
+        g_open = true;
+        g_stage = Stage::PickSource;
+    }
+    popup();
 }
 
 struct Install {

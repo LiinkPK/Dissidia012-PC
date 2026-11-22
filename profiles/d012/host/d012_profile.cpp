@@ -12,6 +12,10 @@
 
 #include "profile.hpp"
 
+#include <cstdio>
+#include <string>
+#include <vector>
+
 #include "gpu/frame_interpolation.hpp"
 
 #include "d012_hle.hpp"
@@ -27,6 +31,29 @@ constexpr portablekit::GameProfile::TouchCombo kTouchCombos[] = {
     {"EX Mode", 0x0200u | 0x8000u},
 };
 
+// The downloaded 100% saves equip two Cloud abilities (low ids 0x13 and 0x14) that have no row in the game's ability table (Cloud's end
+// at 0x12): the game reads a null row and crashes when a battle starts. They are cleared from Cloud's equipped sets as the save loads
+// (the abilities stay learned). The image is version 10, 0x3ECC8 bytes: 31 character records of 0x778 bytes from 0x50, each starting
+// with the character's id (Cloud is 13) and holding 5 equipment sets of 0xC6 bytes from +0x10.
+void d012_repair_save(const std::string &file_name, std::vector<std::uint8_t> &data) {
+    constexpr std::size_t kImage = 0x3ECC8u, kRecords = 0x50u, kRecord = 0x778u, kSet = 0xC6u;
+    if (file_name != "DISSIDIA.BIN" || data.size() != kImage || data[0] != 10u) return;
+    unsigned cleared = 0;
+    for (std::size_t slot = 0; slot < 31u; ++slot) {
+        const std::size_t base = kRecords + slot * kRecord;
+        if (data[base] != 13u) continue;
+        for (std::size_t set = 0; set < 5u; ++set)
+            for (std::size_t i = 0; i < 0x20u; ++i) {
+                std::uint8_t &id = data[base + 0x10u + set * kSet + i];
+                if (id == 0x13u || id == 0x14u) {
+                    id = 0xFFu;
+                    ++cleared;
+                }
+            }
+    }
+    if (cleared != 0u) std::printf("[save] cleared %u Cloud abilities that have no row in the game's table\n", cleared);
+}
+
 // The key that signs every online connection (third_party PortableKit adhoc/auth.hpp). Official builds get it from the build's
 // D012_RELAY_KEY environment variable (CMake writes d012_relay_key.hpp); a build without it sends nothing and the relay refuses it.
 #if __has_include("d012_relay_key.hpp")
@@ -36,9 +63,11 @@ constexpr portablekit::GameProfile::TouchCombo kTouchCombos[] = {
 #define D012_RELAY_KEY ""
 #endif
 
+#include <cstdio>
 #include <filesystem>
 #include <span>
 #include <string_view>
+#include <vector>
 
 bool d012_emendatus_on();  // d012_vk/d012_emendatus.cpp: the Emendatus Mod is running
 std::string d012_mods_folder();  // d012_vk/d012_emendatus.cpp: where the mod's files are
@@ -169,6 +198,7 @@ GameProfile build(const Release &r) {
         .adhoc_auth_key = D012_RELAY_KEY,
         .touch_combos = kTouchCombos,
         .touch_combo_count = std::size(kTouchCombos),
+        .save_loaded = &d012_repair_save,
         .mods_folder = &::d012_mods_folder,
         .android_shared_data_folder = "Dissidia012HD",
         .adhoc_relay_server = "104.238.174.65",  // plain TCP 27312/27313 (Vultr, London)
