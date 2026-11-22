@@ -1,4 +1,4 @@
-From f03f688545f14b92d136b82d3d246609634d5e83 Mon Sep 17 00:00:00 2001
+From 7a2ea5b900f66fb6e0bd2ebc531615893e9e9461 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -12,7 +12,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  cmake/PortableKit.cmake                       |   16 +-
  docs/SOURCE_PROVENANCE.md                     |    1 +
  host/adhoc/client.cpp                         |   24 +-
- host/adhoc/host.cpp                           |   55 +-
+ host/adhoc/host.cpp                           |   66 +-
  host/adhoc/matching.cpp                       |  232 +++
  host/adhoc/matching.hpp                       |  167 ++
  host/adhoc/matching_receive.cpp               |  156 ++
@@ -66,7 +66,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/install/user_data.hpp                    |   11 +
  host/kernel/fast_loading.cpp                  |   22 +-
  host/kernel/fast_loading.hpp                  |    4 +
- host/kernel/kernel.cpp                        |   19 +-
+ host/kernel/kernel.cpp                        |   35 +-
  host/kernel/kernel.hpp                        |    3 +-
  host/main.cpp                                 |  109 +-
  host/overlays.cpp                             |    5 +-
@@ -105,7 +105,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   48 +
- 99 files changed, 10681 insertions(+), 351 deletions(-)
+ 99 files changed, 10708 insertions(+), 351 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/matching.cpp
  create mode 100644 host/adhoc/matching.hpp
@@ -360,7 +360,7 @@ index 7a13ef5..43d4ede 100644
      const char *bytes = static_cast<const char *>(data);
      for (std::size_t done = 0; done < count;) {
 diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
-index 5edd4b4..c627e59 100644
+index 5edd4b4..758485c 100644
 --- a/host/adhoc/host.cpp
 +++ b/host/adhoc/host.cpp
 @@ -4,12 +4,14 @@
@@ -406,7 +406,7 @@ index 5edd4b4..c627e59 100644
      adhoc::Client::log("[adhoc] stopped hosting", true);
      adhoc_apply_settings(true);
  }
-@@ -119,6 +126,52 @@ void adhoc_shutdown() noexcept {
+@@ -119,6 +126,63 @@ void adhoc_shutdown() noexcept {
      adhoc::Client::get().shutdown();
  }
  
@@ -452,7 +452,18 @@ index 5edd4b4..c627e59 100644
 +
 +bool adhoc_online_mode() { return adhoc_session_active() || adhoc_relay_selected(); }
 +
-+unsigned adhoc_game_speed() { return adhoc_online_mode() ? 1u : settings::current().game_speed; }
++double adhoc_game_speed() {
++    if (adhoc_online_mode()) return 1.0;
++    // The setting is the step the player picked and the menu shows (2x, 4x, 8x). The factor it runs at is 2.5, 6.3 or 16: from Normal
++    // (1) each step is about 2.5 times the one before, because speed is felt as a ratio, so every step up feels the same. The pacing
++    // keeps these exactly (measured at 14).
++    switch (settings::current().game_speed) {
++    case 2u: return 2.5;
++    case 4u: return 6.3;
++    case 8u: return 16.0;
++    default: return 1.0;
++    }
++}
 +
 +bool adhoc_unthrottled() { return settings::current().unthrottled && !adhoc_online_mode(); }
 +
@@ -1831,7 +1842,7 @@ index d136927..65664cb 100644
                  published = now;
                  publish(now);
 diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
-index c41a0b1..516da49 100644
+index c41a0b1..cb9cc3a 100644
 --- a/host/adhoc/session.hpp
 +++ b/host/adhoc/session.hpp
 @@ -17,6 +17,37 @@ void adhoc_apply_settings(bool switch_now = false);
@@ -1865,8 +1876,8 @@ index c41a0b1..516da49 100644
 +[[nodiscard]] bool adhoc_online_mode();
 +// The Game speed setting as it applies now: Unlimited never applies while the game is online (the setting itself is kept).
 +[[nodiscard]] bool adhoc_unthrottled();
-+// The Game speed multiplier (1, 2, 4 or 8) as it applies now: always 1 while the game is online.
-+[[nodiscard]] unsigned adhoc_game_speed();
++// The factor Game speed runs at now: 1, 2.5, 6.3 or 16 for the steps the menu calls Normal, 2x, 4x and 8x; always 1 while the game is online.
++[[nodiscard]] double adhoc_game_speed();
 +// True when a host's or player's product code is of the edition this instance runs.
 +[[nodiscard]] bool adhoc_same_edition(const std::string &product);
  
@@ -7115,7 +7126,7 @@ index 7b1dbad..13f3831 100644
  
  } // namespace portablekit::fast_loading
 diff --git a/host/kernel/kernel.cpp b/host/kernel/kernel.cpp
-index a811bbe..871e92a 100644
+index a811bbe..e20c188 100644
 --- a/host/kernel/kernel.cpp
 +++ b/host/kernel/kernel.cpp
 @@ -5,6 +5,7 @@
@@ -7156,7 +7167,7 @@ index a811bbe..871e92a 100644
 -    const bool fast = fast_loading::active();
 -    if (fast != pacing_fast_) {
 +    // Game speed (2x, 4x, 8x) is the same hold with a smaller factor; a load running fast takes precedence.
-+    const double speed = fast_loading::active() ? fast_loading::kMaxSpeed : static_cast<double>(adhoc_game_speed());
++    const double speed = fast_loading::active() ? fast_loading::kMaxSpeed : adhoc_game_speed();
 +    const bool fast = speed > 1.0;
 +    if (fast != pacing_fast_ || speed != pacing_speed_) {
          pacing_fast_ = fast;
@@ -7164,15 +7175,32 @@ index a811bbe..871e92a 100644
          pacing_started_ = false;
      }
      using Clock = std::chrono::steady_clock;
-@@ -545,7 +554,7 @@ bool Kernel::pace_to_real_time() {
+@@ -545,8 +554,24 @@ bool Kernel::pace_to_real_time() {
          std::chrono::duration_cast<std::chrono::microseconds>(now - pacing_real_base_).count();
      const std::int64_t virtual_us = static_cast<std::int64_t>(now_us_ - pacing_virtual_base_);
      const std::int64_t ahead_us =
 -        fast ? static_cast<std::int64_t>(static_cast<double>(virtual_us) / fast_loading::kMaxSpeed) - real_us
 +        fast ? static_cast<std::int64_t>(static_cast<double>(virtual_us) / speed) - real_us
               : virtual_us - real_us;
++    // Game speed above 1: once a second, the speed the game really ran at against the one asked for. Where the two differ the
++    // computer cannot keep up, and the steps above that point look alike.
++    if (speed > 1.0 && !fast_loading::active()) {
++        static Clock::time_point window_real{};
++        static std::uint64_t window_virtual = 0;
++        if (window_real == Clock::time_point{} || now - window_real > std::chrono::seconds(5)) {
++            window_real = now;
++            window_virtual = now_us_;
++        } else if (now - window_real >= std::chrono::seconds(1)) {
++            const double real_s = std::chrono::duration<double>(now - window_real).count();
++            std::printf("[speed] asked %.1fx, ran at %.2fx\n", speed, static_cast<double>(now_us_ - window_virtual) / 1e6 / real_s);
++            std::fflush(stdout);
++            window_real = now;
++            window_virtual = now_us_;
++        }
++    }
      // Ahead of real time: wait. More than a tenth of a second behind (a slow
      // frame, a load): drop the debt instead of racing to make it up.
+     constexpr std::int64_t kMinSleepUs = 1000;
 diff --git a/host/kernel/kernel.hpp b/host/kernel/kernel.hpp
 index d542b73..276dfe1 100644
 --- a/host/kernel/kernel.hpp
