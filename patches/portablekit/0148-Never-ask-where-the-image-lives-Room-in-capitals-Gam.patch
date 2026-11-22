@@ -1,0 +1,243 @@
+From 123fad9b48df664a39e9fdfb7acb53e0ab2bd926 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Sun, 22 Nov 2026 15:02:31 +0100
+Subject: [PATCH] Never ask where the image lives, Room in capitals, Game speed
+ Normal online
+
+The setup never asks whether to copy the disc image into the data folder: it is used where it is (Android still copies, an app cannot
+read elsewhere). The Room is kept in capitals, as typed, shown and saved. While the game is online (hosting, joining, in a group or on
+the relay) Game speed is locked to Normal: the row is disabled, and no pacing code honours Unlimited (adhoc_unthrottled); the setting is
+kept and applies again when the session ends.
+---
+ host/adhoc/host.cpp                |  2 ++
+ host/adhoc/session.hpp             |  2 ++
+ host/gpu/vulkan_renderer.cpp       |  3 ++-
+ host/hle/hle_media.cpp             |  3 ++-
+ host/install/installer_dialogs.cpp |  4 ++++
+ host/kernel/fast_loading.cpp       |  2 +-
+ host/kernel/kernel.cpp             |  3 ++-
+ host/settings/settings.cpp         | 10 ++++++++--
+ host/ui/menu.cpp                   | 25 ++++++++++++++++++++-----
+ host/ui/setup_screens.cpp          |  5 +++++
+ 10 files changed, 48 insertions(+), 11 deletions(-)
+
+diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
+index c34b5c0..563fae3 100644
+--- a/host/adhoc/host.cpp
++++ b/host/adhoc/host.cpp
+@@ -168,6 +168,8 @@ void adhoc_auto_relay() {
+ 
+ bool adhoc_online_mode() { return adhoc_session_active() || adhoc_relay_selected(); }
+ 
++bool adhoc_unthrottled() { return settings::current().unthrottled && !adhoc_online_mode(); }
++
+ void adhoc_join(const std::string &address) {
+     if (address.empty()) return;
+     if (adhoc_hosting()) {
+diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
+index b075a0e..cf20000 100644
+--- a/host/adhoc/session.hpp
++++ b/host/adhoc/session.hpp
+@@ -42,6 +42,8 @@ void adhoc_leave_relay();
+ void adhoc_auto_relay();
+ // True while cheats must stay off: hosting, in a group or joining one, or set to play through the relay ("Playing online").
+ [[nodiscard]] bool adhoc_online_mode();
++// The Game speed setting as it applies now: Unlimited never applies while the game is online (the setting itself is kept).
++[[nodiscard]] bool adhoc_unthrottled();
+ // True when a host's or player's product code is of the edition this instance runs.
+ [[nodiscard]] bool adhoc_same_edition(const std::string &product);
+ 
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 39a7b9d..1fa2f76 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -24,6 +24,7 @@
+ #include "input/bindings.hpp"
+ #include "input/motion.hpp"
+ #include "input/stick.hpp"
++#include "adhoc/session.hpp"
+ #include "settings/settings.hpp"
+ 
+ // PNG for the screenshot key (the same encoder the texture pack uses; static here, so the two copies do not meet).
+@@ -10927,7 +10928,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+ bool VulkanRenderer::Impl::interpolation_wanted() const {
+     // Emulated time running ahead of real time already presents faster than
+     // the game's own rate; the keyboard's held frame is shown as it is.
+-    return frame_rate != settings::FrameRate::Fps30 && !settings::current().unthrottled && !holding && !fast_forward &&
++    return frame_rate != settings::FrameRate::Fps30 && !adhoc_unthrottled() && !holding && !fast_forward &&
+            governor.rate() > pacing::game_rate() + 0.5;
+ }
+ 
+diff --git a/host/hle/hle_media.cpp b/host/hle/hle_media.cpp
+index 2c2f01a..eb8fbee 100644
+--- a/host/hle/hle_media.cpp
++++ b/host/hle/hle_media.cpp
+@@ -20,6 +20,7 @@
+ #include "camera/camera_input.hpp"
+ #include "camera/camera_driver.hpp"
+ #include "input/bindings.hpp"
++#include "adhoc/session.hpp"
+ #include "settings/settings.hpp"
+ #include "gpu/ge_state.hpp"
+ #include "perf/frame_stats.hpp"
+@@ -348,7 +349,7 @@ void present_frame(Runtime &rt) {
+         const char *text = portablekit::env("TEST_GUEST_SPIN_MS");
+         return text != nullptr ? std::clamp(std::strtod(text, nullptr), 0.0, 30.0) : 0.0;
+     }();
+-    if (spin_ms > 0.0 && !settings::current().unthrottled && !fast_loading::active()) {
++    if (spin_ms > 0.0 && !adhoc_unthrottled() && !fast_loading::active()) {
+         static const bool poll = portablekit::env("NO_CODE_PRESENT_POLL") == nullptr;
+         const perf::Clock::time_point until =
+             perf::Clock::now() + std::chrono::microseconds(static_cast<std::int64_t>(spin_ms * 1000.0));
+diff --git a/host/install/installer_dialogs.cpp b/host/install/installer_dialogs.cpp
+index 7d53cb0..7ccf7da 100644
+--- a/host/install/installer_dialogs.cpp
++++ b/host/install/installer_dialogs.cpp
+@@ -143,6 +143,10 @@ public:
+         (void)data_dir;
+         return ImageStorage::Copy;
+ #endif
++        // Never asked: the image is used where it is, and nothing is copied into the data folder.
++        (void)info;
++        (void)data_dir;
++        return ImageStorage::InPlace;
+         const std::uint64_t tenths = (info.size_bytes + 50'000'000u) / 100'000'000u;
+         const std::string size = std::to_string(tenths / 10u) + "." + std::to_string(tenths % 10u) + " GB";
+         const std::string text = "The image is " + std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display +
+diff --git a/host/kernel/fast_loading.cpp b/host/kernel/fast_loading.cpp
+index 128c927..ef47afd 100644
+--- a/host/kernel/fast_loading.cpp
++++ b/host/kernel/fast_loading.cpp
+@@ -43,7 +43,7 @@ bool windowed() {
+ Guards sample_guards() {
+     const settings::Settings &s = settings::current();
+     Guards guards;
+-    guards.enabled = s.fast_loading && !s.unthrottled && windowed();
++    guards.enabled = s.fast_loading && !adhoc_unthrottled() && windowed();
+     guards.buttons_held = state().buttons_held;
+     guards.movie = mpeg_active();
+     guards.online = adhoc_networking_on() || adhoc_session_active();
+diff --git a/host/kernel/kernel.cpp b/host/kernel/kernel.cpp
+index e3bd816..94246a4 100644
+--- a/host/kernel/kernel.cpp
++++ b/host/kernel/kernel.cpp
+@@ -5,6 +5,7 @@
+ #include "kernel/stall_watchdog.hpp"
+ #include "kernel/load_trace.hpp"
+ #include "perf/frame_stats.hpp"
++#include "adhoc/session.hpp"
+ #include "settings/settings.hpp"
+ #include "psprecomp/common.hpp"
+ 
+@@ -524,7 +525,7 @@ bool Kernel::pace_to_real_time() {
+     // three times PSP speed on a 60-90 Hz display. Runs without a window, and
+     // the unthrottled setting (<prefix>_UNTHROTTLED), keep the unpaced clock.
+     static const bool windowed = portablekit::env("NO_RENDER") == nullptr;
+-    if (!windowed || settings::current().unthrottled) {
++    if (!windowed || adhoc_unthrottled()) {
+         // Turning pacing back on starts from the current moment.
+         pacing_started_ = false;
+         return false;
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index d14cd9f..2ebbd1d 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -17,6 +17,12 @@
+ namespace portablekit::settings {
+ namespace {
+ 
++std::string upper_ascii(std::string text) {
++    for (char &c : text)
++        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
++    return text;
++}
++
+ // One setting: its key in settings.ini, the variable that overrides it, and
+ // how both spell its value.
+ struct Field {
+@@ -399,10 +405,10 @@ const std::vector<Field> &fields() {
+          [](const Settings &s) { return s.adhoc_server; }, [](Settings &s, const char *t) { s.adhoc_server = t; }},
+         {"network.room", "ADHOC_ROOM",
+          [](Settings &s, const std::string &t) {
+-             s.adhoc_room = t;
++             s.adhoc_room = upper_ascii(t);
+              return true;
+          },
+-         [](const Settings &s) { return s.adhoc_room; }, [](Settings &s, const char *t) { s.adhoc_room = t; }},
++         [](const Settings &s) { return s.adhoc_room; }, [](Settings &s, const char *t) { s.adhoc_room = upper_ascii(t); }},
+         {"network.nickname", "ADHOC_NICKNAME",
+          [](Settings &s, const std::string &t) {
+              s.adhoc_nickname = t;
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 65bb6d9..c6e9f31 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -810,11 +810,18 @@ void Menu::video() {
+             settings::save();
+         }
+     }
+-    if (choice_row("Game speed", s.unthrottled ? "Unlimited" : "Normal",
+-                   options_for("video.unthrottled", "Normal holds the game to real time. Unlimited lets it run as "
+-                                                    "fast as frames can be drawn, which also speeds up the game."))) {
+-        s.unthrottled = !s.unthrottled;
+-        settings::save();
++    {
++        const bool online = adhoc_online_mode();
++        RowOptions o = options_for("video.unthrottled", "Normal holds the game to real time. Unlimited lets it run as "
++                                                        "fast as frames can be drawn, which also speeds up the game.");
++        if (online) {
++            o.disabled = true;
++            o.note = "Locked to Normal while you play online";
++        }
++        if (choice_row("Game speed", s.unthrottled && !online ? "Unlimited" : "Normal", o) && !online) {
++            s.unthrottled = !s.unthrottled;
++            settings::save();
++        }
+     }
+     {
+         RowOptions o = options_for("video.fast_loading",
+@@ -1014,6 +1021,12 @@ bool room_character(char32_t c) {
+     return (c >= U'0' && c <= U'9') || (c >= U'a' && c <= U'z') || (c >= U'A' && c <= U'Z');
+ }
+ 
++// The room is kept in capitals: typed in lower case, it is shown and used in capitals.
++void upper_room(std::string &room) {
++    for (char &c : room)
++        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
++}
++
+ // Only for a game that tilts (GameProfile::tilt).
+ void Menu::tilt_controls() {
+     const TiltControls *tilt = portablekit::game().tilt;
+@@ -1576,10 +1589,12 @@ void play_together() {
+         static bool relay_timing = false;
+         static Clock::time_point relay_since;
+         if (!adhoc_hosting()) {
++            upper_room(s.adhoc_room);
+             if (text_row("room", "Room", s.adhoc_room, 12u, true, room_character,
+                          {false, {},
+                           "Players with the same room meet on the relay. Make one up, or press Play online to get one, "
+                           "and tell it to your friends. Changing it applies at once."})) {
++                upper_room(s.adhoc_room);
+                 settings::save();
+                 if (adhoc_relay_selected()) adhoc_apply_settings(true);
+             }
+diff --git a/host/ui/setup_screens.cpp b/host/ui/setup_screens.cpp
+index 83dd794..fa1823e 100644
+--- a/host/ui/setup_screens.cpp
++++ b/host/ui/setup_screens.cpp
+@@ -220,6 +220,11 @@ std::optional<install::ImageStorage> SetupScreens::choose_storage(const fs::path
+     (void)data_dir;
+     return install::ImageStorage::Copy;
+ #endif
++    // Never asked: the image is used where it is, and nothing is copied into the data folder.
++    (void)image;
++    (void)info;
++    (void)data_dir;
++    return install::ImageStorage::InPlace;
+     Layer &layer = Layer::get();
+     const std::uint64_t needed = install::space_needed_to_copy(info);
+     const std::optional<std::uint64_t> space = install::available_space(data_dir);
+-- 
+2.54.0.windows.1
+

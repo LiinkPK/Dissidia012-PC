@@ -1,0 +1,26 @@
+From 902e17bedd67a7b128f93b3e83dcf2a2383c08ea Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Sun, 22 Nov 2026 15:21:17 +0100
+Subject: [PATCH] Fix the newline in the [speed] line
+
+---
+ host/gpu/vulkan_renderer.cpp | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 661f57a..d12a9a5 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -7553,8 +7553,7 @@ bool VulkanRenderer::pump_events() {
+                 settings::Settings &s = settings::current();
+                 s.unthrottled = false;
+                 s.game_speed = s.game_speed == wanted ? 1u : wanted;  // numpad 0 (wanted 1) is always Normal
+-                std::printf("[speed] game speed %ux
+-", s.game_speed);
++                std::printf("[speed] game speed %ux\n", s.game_speed);
+                 std::fflush(stdout);
+             }
+         }
+-- 
+2.54.0.windows.1
+

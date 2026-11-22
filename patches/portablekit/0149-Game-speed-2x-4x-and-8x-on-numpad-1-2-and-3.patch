@@ -1,0 +1,224 @@
+From 4ef0c17f97480e71c59a1781f0ad5e50782209eb Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Sun, 22 Nov 2026 15:06:47 +0100
+Subject: [PATCH] Game speed 2x, 4x and 8x, on numpad 1, 2 and 3
+
+Game speed is Normal, 2x, 4x, 8x or Unlimited (settings.ini video.game_speed, D012_GAME_SPEED). 2x, 4x and 8x use the pacing hold that fast
+loading uses, with a smaller factor, drop the game's sound (it would play that many times too fast), thin the presents out and turn frame
+interpolation off. Numpad 1, 2 and 3 switch to 2x, 4x and 8x, and the same key again back to Normal, outside the menu's text fields. While
+the game is online the speed is always Normal (adhoc_game_speed) and the keys do nothing.
+---
+ host/adhoc/host.cpp          |  2 ++
+ host/adhoc/session.hpp       |  2 ++
+ host/gpu/vulkan_renderer.cpp | 15 ++++++++++++++-
+ host/hle/hle_media.cpp       |  4 ++--
+ host/kernel/fast_loading.cpp |  2 ++
+ host/kernel/kernel.cpp       |  9 ++++++---
+ host/kernel/kernel.hpp       |  3 ++-
+ host/settings/settings.cpp   | 12 ++++++++++++
+ host/settings/settings.hpp   |  1 +
+ host/ui/menu.cpp             | 13 +++++++++----
+ 10 files changed, 52 insertions(+), 11 deletions(-)
+
+diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
+index 563fae3..c627e59 100644
+--- a/host/adhoc/host.cpp
++++ b/host/adhoc/host.cpp
+@@ -168,6 +168,8 @@ void adhoc_auto_relay() {
+ 
+ bool adhoc_online_mode() { return adhoc_session_active() || adhoc_relay_selected(); }
+ 
++unsigned adhoc_game_speed() { return adhoc_online_mode() ? 1u : settings::current().game_speed; }
++
+ bool adhoc_unthrottled() { return settings::current().unthrottled && !adhoc_online_mode(); }
+ 
+ void adhoc_join(const std::string &address) {
+diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
+index cf20000..516da49 100644
+--- a/host/adhoc/session.hpp
++++ b/host/adhoc/session.hpp
+@@ -44,6 +44,8 @@ void adhoc_auto_relay();
+ [[nodiscard]] bool adhoc_online_mode();
+ // The Game speed setting as it applies now: Unlimited never applies while the game is online (the setting itself is kept).
+ [[nodiscard]] bool adhoc_unthrottled();
++// The Game speed multiplier (1, 2, 4 or 8) as it applies now: always 1 while the game is online.
++[[nodiscard]] unsigned adhoc_game_speed();
+ // True when a host's or player's product code is of the edition this instance runs.
+ [[nodiscard]] bool adhoc_same_edition(const std::string &product);
+ 
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 1fa2f76..6af87bd 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -7545,6 +7545,19 @@ bool VulkanRenderer::pump_events() {
+ #endif
+         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
+             impl_->overlay_visible = !impl_->overlay_visible;
++        // Numpad 1, 2 and 3: Game speed 2x, 4x and 8x; the same key again goes back to Normal. Not online (the speed is locked there)
++        // and not while a text field is being typed in.
++        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && !SDL_TextInputActive(impl_->window) && !adhoc_online_mode()) {
++            const std::uint32_t wanted = event.key.key == SDLK_KP_1 ? 2u : event.key.key == SDLK_KP_2 ? 4u : event.key.key == SDLK_KP_3 ? 8u : 0u;
++            if (wanted != 0u) {
++                settings::Settings &s = settings::current();
++                s.unthrottled = false;
++                s.game_speed = s.game_speed == wanted ? 1u : wanted;
++                std::printf("[speed] game speed %ux
++", s.game_speed);
++                std::fflush(stdout);
++            }
++        }
+     }
+ #if !defined(__ANDROID__)
+     // Hide the pointer over the window after 2 seconds without moving; any move brings it back (above). While the mouse is
+@@ -10928,7 +10941,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+ bool VulkanRenderer::Impl::interpolation_wanted() const {
+     // Emulated time running ahead of real time already presents faster than
+     // the game's own rate; the keyboard's held frame is shown as it is.
+-    return frame_rate != settings::FrameRate::Fps30 && !adhoc_unthrottled() && !holding && !fast_forward &&
++    return frame_rate != settings::FrameRate::Fps30 && !adhoc_unthrottled() && adhoc_game_speed() == 1u && !holding && !fast_forward &&
+            governor.rate() > pacing::game_rate() + 0.5;
+ }
+ 
+diff --git a/host/hle/hle_media.cpp b/host/hle/hle_media.cpp
+index eb8fbee..93cf05b 100644
+--- a/host/hle/hle_media.cpp
++++ b/host/hle/hle_media.cpp
+@@ -312,7 +312,7 @@ void present_frame(Runtime &rt) {
+     ui::draw_over_game();
+     renderer.write_back_frame(rt.memory());
+     // A load running fast flips far more often than the display refreshes.
+-    renderer.set_fast_forward(fast_loading::active());
++    renderer.set_fast_forward(fast_loading::active() || adhoc_game_speed() > 1u);
+     // The real time the frame stands for, which frame interpolation spaces
+     // its presents by: that of the vblank the game's frame started from.
+     const bool presented = renderer.present(address, kernel().real_time_of(frame_start_us(kernel().last_vblank_us())));
+@@ -349,7 +349,7 @@ void present_frame(Runtime &rt) {
+         const char *text = portablekit::env("TEST_GUEST_SPIN_MS");
+         return text != nullptr ? std::clamp(std::strtod(text, nullptr), 0.0, 30.0) : 0.0;
+     }();
+-    if (spin_ms > 0.0 && !adhoc_unthrottled() && !fast_loading::active()) {
++    if (spin_ms > 0.0 && !adhoc_unthrottled() && adhoc_game_speed() == 1u && !fast_loading::active()) {
+         static const bool poll = portablekit::env("NO_CODE_PRESENT_POLL") == nullptr;
+         const perf::Clock::time_point until =
+             perf::Clock::now() + std::chrono::microseconds(static_cast<std::int64_t>(spin_ms * 1000.0));
+diff --git a/host/kernel/fast_loading.cpp b/host/kernel/fast_loading.cpp
+index ef47afd..d0bfaaa 100644
+--- a/host/kernel/fast_loading.cpp
++++ b/host/kernel/fast_loading.cpp
+@@ -81,6 +81,8 @@ void note_disc_read() { state().detector.disc_read(kernel().now_us()); }
+ bool note_audio(int peak) {
+     // Forced fast time: the sound the game makes is dropped, not played sixteen times too fast.
+     if (state().forced && sample_guards().enabled) return true;
++    // Game speed above 1: the sound would play that many times too fast, so it is dropped.
++    if (adhoc_game_speed() > 1u && windowed()) return true;
+     Detector &detector = state().detector;
+     const bool was_fast = detector.fast();
+     const bool drop = detector.audio(kernel().now_us(), peak);
+diff --git a/host/kernel/kernel.cpp b/host/kernel/kernel.cpp
+index 94246a4..871e92a 100644
+--- a/host/kernel/kernel.cpp
++++ b/host/kernel/kernel.cpp
+@@ -534,9 +534,12 @@ bool Kernel::pace_to_real_time() {
+     // fast as real time (kernel/fast_loading.hpp). Either change starts the
+     // hold over from the current moment, so a load that ran fast is not made
+     // up for afterwards, and normal time is not rushed to catch up with it.
+-    const bool fast = fast_loading::active();
+-    if (fast != pacing_fast_) {
++    // Game speed (2x, 4x, 8x) is the same hold with a smaller factor; a load running fast takes precedence.
++    const double speed = fast_loading::active() ? fast_loading::kMaxSpeed : static_cast<double>(adhoc_game_speed());
++    const bool fast = speed > 1.0;
++    if (fast != pacing_fast_ || speed != pacing_speed_) {
+         pacing_fast_ = fast;
++        pacing_speed_ = speed;
+         pacing_started_ = false;
+     }
+     using Clock = std::chrono::steady_clock;
+@@ -551,7 +554,7 @@ bool Kernel::pace_to_real_time() {
+         std::chrono::duration_cast<std::chrono::microseconds>(now - pacing_real_base_).count();
+     const std::int64_t virtual_us = static_cast<std::int64_t>(now_us_ - pacing_virtual_base_);
+     const std::int64_t ahead_us =
+-        fast ? static_cast<std::int64_t>(static_cast<double>(virtual_us) / fast_loading::kMaxSpeed) - real_us
++        fast ? static_cast<std::int64_t>(static_cast<double>(virtual_us) / speed) - real_us
+              : virtual_us - real_us;
+     // Ahead of real time: wait. More than a tenth of a second behind (a slow
+     // frame, a load): drop the debt instead of racing to make it up.
+diff --git a/host/kernel/kernel.hpp b/host/kernel/kernel.hpp
+index d542b73..276dfe1 100644
+--- a/host/kernel/kernel.hpp
++++ b/host/kernel/kernel.hpp
+@@ -422,7 +422,8 @@ private:
+     std::uint64_t busy_waits_{};
+     std::chrono::steady_clock::time_point busy_since_{};
+     bool pacing_started_{};
+-    bool pacing_fast_{};  // the hold lets emulated time run ahead: a load runs fast
++    bool pacing_fast_{};  // the hold lets emulated time run ahead: a load runs fast, or Game speed is above 1
++    double pacing_speed_{1.0};
+     std::chrono::steady_clock::time_point pacing_real_base_{};
+     std::uint64_t pacing_virtual_base_{};
+     IdleHook idle_hook_;
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 2ebbd1d..88f1582 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -212,6 +212,18 @@ const std::vector<Field> &fields() {
+          [](Settings &s, const std::string &t) { return parse_bool(t, s.unthrottled); },
+          [](const Settings &s) { return std::string(s.unthrottled ? "1" : "0"); },
+          [](Settings &s, const char *t) { s.unthrottled = variable_present(t); }},
++        {"video.game_speed", "GAME_SPEED",
++         [](Settings &s, const std::string &t) {
++             std::uint32_t value = 1u;
++             if (!parse_uint(t, 1u, 8u, value) || (value != 1u && value != 2u && value != 4u && value != 8u)) return false;
++             s.game_speed = value;
++             return true;
++         },
++         [](const Settings &s) { return std::to_string(s.game_speed); },
++         [](Settings &s, const char *t) {
++             const long value = t != nullptr ? std::strtol(t, nullptr, 10) : 1;
++             if (value == 2 || value == 4 || value == 8) s.game_speed = static_cast<std::uint32_t>(value);
++         }},
+         {"video.fast_loading", "FAST_LOADING",
+          [](Settings &s, const std::string &t) { return parse_bool(t, s.fast_loading); },
+          [](const Settings &s) { return std::string(s.fast_loading ? "1" : "0"); },
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 8684d03..f3fb98e 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -54,6 +54,7 @@ struct Settings {
+     bool texture_pack{true};           // draw an installed HD texture pack's images instead of the game's
+     std::string texture_pack_folder;   // a pack used where it is instead of textures/<disc id>; empty: none
+     bool unthrottled{};                // let emulated time run ahead of real time
++    std::uint32_t game_speed{1};       // 1, 2, 4 or 8 times real time (never online; see adhoc_game_speed)
+     bool fast_loading{true};           // ...but only while the game loads (kernel/fast_loading.hpp)
+     FrameRate frame_rate{FrameRate::Fps30};
+     bool frame_rate_auto{true};        // lower the frame rate rather than slow the game
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index c6e9f31..031557d 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -812,14 +812,19 @@ void Menu::video() {
+     }
+     {
+         const bool online = adhoc_online_mode();
+-        RowOptions o = options_for("video.unthrottled", "Normal holds the game to real time. Unlimited lets it run as "
+-                                                        "fast as frames can be drawn, which also speeds up the game.");
++        RowOptions o = options_for("video.unthrottled", "Normal holds the game to real time. 2x, 4x and 8x run it that "
++                                                        "many times faster (sound off); Unlimited as fast as frames can be "
++                                                        "drawn. Numpad 1, 2 and 3 switch to 2x, 4x and 8x without the menu.");
+         if (online) {
+             o.disabled = true;
+             o.note = "Locked to Normal while you play online";
+         }
+-        if (choice_row("Game speed", s.unthrottled && !online ? "Unlimited" : "Normal", o) && !online) {
+-            s.unthrottled = !s.unthrottled;
++        static const char *const kSpeeds[] = {"Normal", "2x", "4x", "8x", "Unlimited"};
++        const int current = online ? 0 : s.unthrottled ? 4 : s.game_speed == 2u ? 1 : s.game_speed == 4u ? 2 : s.game_speed == 8u ? 3 : 0;
++        if (const int delta = choice_row("Game speed", kSpeeds[current], o); delta != 0 && !online) {
++            const int next = cycle(current, delta, 5);
++            s.unthrottled = next == 4;
++            s.game_speed = next == 1 ? 2u : next == 2 ? 4u : next == 3 ? 8u : 1u;
+             settings::save();
+         }
+     }
+-- 
+2.54.0.windows.1
+
