@@ -123,6 +123,9 @@ struct Pad {
     // The read at which the local camera last took input; far in the past
     // at first.
     std::uint32_t live_read = 0xFFFF0000u;
+    // The read at which a battle camera was running while raw pad 0 was fed by ad hoc (or a replay): the stick must not move
+    // that camera, but the button shortcuts still apply (they are ordinary buttons, sent to the other player like any).
+    std::uint32_t fed_read = 0xFFFF0000u;
     bool r3 = false;
 };
 
@@ -146,21 +149,31 @@ float stick_axis(std::uint8_t raw) {
 // input: the gates of the game's own pad accessors (input muted, a replay
 // playing) and hardware feeding pad 0 (not ad-hoc): 0 for the player's camera,
 // -1 for any other.
-int local_camera(Guest *g, gaddr camera) {
+int local_camera(Guest *g, gaddr camera, bool *fed_externally = nullptr) {
     if (g_ld8(g, camera + CAM_MANUAL) == 0) return -1;
     const gaddr pads = g_ld32(g, G_PAD_MANAGER);
     if (pads == 0) return -1;
     if ((g_ld32(g, pads + PAD_FLAGS) & (PAD_FLAG_REPLAY | PAD_FLAG_MUTED)) != 0) return -1;
     const gaddr listens = g_ld32(g, camera + CAM_PAD);
-    if (listens == pads + PAD_LOGICAL0) return g_ld32s(g, pads + PAD_RAW0_MODE) != 1 ? 0 : -1;
+    if (listens == pads + PAD_LOGICAL0) {
+        const bool fed = g_ld32s(g, pads + PAD_RAW0_MODE) == 1;
+        if (fed_externally != nullptr) *fed_externally = fed;
+        return fed ? -1 : 0;
+    }
     return -1;
 }
 
 // What the stick asks of this camera: turn > 0 is what D-pad right does,
 // closer > 0 what D-pad up does, after the player's two direction options.
 bool camera_stick(Guest *g, gaddr camera, float &turn, float &closer) {
-    const int player = local_camera(g, camera);
-    if (player < 0) return false;
+    bool fed = false;
+    const int player = local_camera(g, camera, &fed);
+    if (player < 0) {
+        // Ad hoc play: the camera stays as the game has it (turning it would differ between the two machines), but a
+        // battle is running, so the button shortcuts may apply.
+        if (fed && g_ld32s(g, camera + CAM_STEP_SOURCE) == 0) pad().fed_read = pad().reads;
+        return false;
+    }
     Pad &p = pad();
     // R3 presses SELECT only for a battle combatant's camera (time step
     // source 0, battle 0x08B0E200): the Story Mode world map runs this
@@ -435,7 +448,8 @@ void install(portablekit::HleRegistrar &hle) {
         //   D-pad left        manual Summon          R1 + Circle
         // D-pad up and down no longer move the camera closer or away (the right stick does that), and D-pad left no longer
         // turns it (the right stick does that too); D-pad right still turns it.
-        if (live && options().shortcuts) {
+        const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads;
+        if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             std::uint32_t add = 0u;
             if ((extra & ext::kExtraL3) != 0u) add |= kR1 | kSquare;
