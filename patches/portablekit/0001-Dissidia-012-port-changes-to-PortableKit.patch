@@ -1,4 +1,4 @@
-From 38521afc0091c15824fc9c9b253adf22177d6b22 Mon Sep 17 00:00:00 2001
+From b8f2a523dcdac354eb94f9ad0e059b8d4cbcb11d Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -104,13 +104,13 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  include/psprecomp/runtime.hpp                 |    3 +
  packaging/android/AndroidManifest.xml         |    8 +
  packaging/android/build_apk.sh                |   17 +
- .../teamgdb/portablekit/GameActivity.java     |  305 ++++
+ .../teamgdb/portablekit/GameActivity.java     |  316 ++++
  src/runtime.cpp                               |   30 +-
  third_party/bc7enc16/LICENSE                  |   76 +
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 104 files changed, 10937 insertions(+), 363 deletions(-)
+ 104 files changed, 10948 insertions(+), 363 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -12403,7 +12403,7 @@ index 1cae59e..484144d 100755
  "$strip" --strip-unneeded "$lib"/*.so
  # Every function a packed library imports must be in Android $min_sdk's system
 diff --git a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
-index cec636d..167813a 100644
+index cec636d..4048d93 100644
 --- a/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 +++ b/packaging/android/java/io/github/teamgdb/portablekit/GameActivity.java
 @@ -2,6 +2,7 @@ package io.github.teamgdb.portablekit;
@@ -12431,7 +12431,7 @@ index cec636d..167813a 100644
              finishPick(uri != null ? uri.toString() : null);
              return;
          }
-@@ -138,6 +149,89 @@ public class GameActivity extends SDLActivity {
+@@ -138,6 +149,100 @@ public class GameActivity extends SDLActivity {
          Runtime.getRuntime().exit(0);
      }
  
@@ -12476,6 +12476,26 @@ index cec636d..167813a 100644
 +                while (relative.startsWith("/")) relative = relative.substring(1);
 +                Uri folder = DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + relative);
 +                Uri tree = DocumentsContract.buildTreeDocumentUri("com.android.externalstorage.documents", "primary:" + relative);
++                // First, the system's own folder picker opened at the folder: it shows the folder's files on every phone. A "view this
++                // folder" request is not used first because some file managers accept it and close at once, which looks like a white screen
++                // and a return to the game.
++                try {
++                    Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
++                    pick.putExtra(DocumentsContract.EXTRA_INITIAL_URI, tree);
++                    pick.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++                    activity.startActivity(pick);
++                    final String shown = path;
++                    activity.runOnUiThread(new Runnable() {
++                        @Override public void run() {
++                            android.widget.Toast.makeText(activity, "The folder is " + shown + ". Press back to return to the game.",
++                                android.widget.Toast.LENGTH_LONG).show();
++                        }
++                    });
++                    android.util.Log.i("openFolder", "folder picker opened at " + path);
++                    return true;
++                } catch (Exception e) {
++                    android.util.Log.w("openFolder", "the folder picker did not open: " + e);
++                }
 +                // Not every file manager answers the same request: ask in several ways, naming the common managers first, and
 +                // end with the system's own folder picker opened at the folder.
 +                final String[] managers = {null, "com.google.android.documentsui", "com.android.documentsui",
@@ -12496,15 +12516,6 @@ index cec636d..167813a 100644
 +                        }
 +                    }
 +                }
-+                try {
-+                    Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-+                    pick.putExtra(DocumentsContract.EXTRA_INITIAL_URI, tree);
-+                    pick.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-+                    activity.startActivity(pick);
-+                    return true;
-+                } catch (Exception e) {
-+                    android.util.Log.w("openFolder", "the folder picker did not open: " + e);
-+                }
 +            }
 +        } catch (Exception e) {
 +            // fall through to the message
@@ -12521,7 +12532,7 @@ index cec636d..167813a 100644
      /** The document that stands for a picked tree itself. */
      public static String treeRoot(String treeUri) {
          Uri tree = Uri.parse(treeUri);
-@@ -193,4 +287,215 @@ public class GameActivity extends SDLActivity {
+@@ -193,4 +298,215 @@ public class GameActivity extends SDLActivity {
              return -1;
          }
      }
