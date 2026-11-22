@@ -53,6 +53,7 @@ constexpr std::uint32_t kSceCtrlReadBufferPositive = 0x1F803938u;
 constexpr std::uint32_t kSelect = 0x0001u;
 constexpr std::uint32_t kHold = 0x00020000u;
 // The PSP buttons the battle shortcuts below press (SceCtrlButtons).
+constexpr std::uint32_t kDpadRight = 0x0020u;
 constexpr std::uint32_t kDpadUp = 0x0010u, kDpadDown = 0x0040u, kDpadLeft = 0x0080u, kL1 = 0x0100u, kR1 = 0x0200u;
 constexpr std::uint32_t kTriangle = 0x1000u, kCircle = 0x2000u, kCross = 0x4000u, kSquare = 0x8000u;
 // A battle camera must have taken input within this many pad reads for R3
@@ -462,6 +463,25 @@ void install(portablekit::HleRegistrar &hle) {
                 if ((buttons & kDpadDown) != 0u) buttons = (buttons & ~kDpadDown) | kL1 | kSquare;
                 if ((buttons & kDpadLeft) != 0u) buttons = (buttons & ~kDpadLeft) | kR1 | kCircle;
                 rt.memory().store32(at, buttons | add);
+            }
+        }
+        // Ad hoc battle: the right stick cannot turn the camera itself (the camera is part of the simulation both machines
+        // run), but the D-pad bits of the pad state can, because they are sent like any button and each side turns the
+        // camera by the stock amount. Pushing the stick presses the D-pad bit the game turns, or moves closer or away, with.
+        if (!live && p.reads - p.fed_read <= kLiveReads) {
+            float turn = stick_axis(p.x), closer = -stick_axis(p.y);
+            if (options().invert_x) turn = -turn;
+            if (options().invert_y) closer = -closer;
+            std::uint32_t camera_bits = 0u;
+            if (turn > 0.5f) camera_bits |= kDpadRight;
+            else if (turn < -0.5f) camera_bits |= kDpadLeft;
+            if (closer > 0.5f) camera_bits |= kDpadUp;
+            else if (closer < -0.5f) camera_bits |= kDpadDown;
+            if (camera_bits != 0u) {
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    const std::uint32_t at = buffer + i * 16u + 4u;
+                    rt.memory().store32(at, rt.memory().load32(at) | camera_bits);
+                }
             }
         }
         p.r3 = r3;
