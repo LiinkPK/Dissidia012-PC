@@ -1,4 +1,4 @@
-From 6659941f6ca4b6521a7803a2a2dd82e725fe5985 Mon Sep 17 00:00:00 2001
+From ac0da99bcd1fffd1560d8ff0eeaa5b5fdbc303fc Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -90,7 +90,8 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/ui/layer.cpp                             |    7 +-
  host/ui/layer.hpp                             |    2 +-
  host/ui/menu.cpp                              | 1172 +++++++++++--
- host/ui/save_screen.cpp                       |   32 +-
+ host/ui/save_screen.cpp                       |   33 +-
+ host/ui/save_screen.hpp                       |    3 +
  host/ui/setup_screens.cpp                     |   15 +-
  host/ui/texture_pack_screen.cpp               |   66 +-
  host/ui/touch_overlay.cpp                     |   20 +-
@@ -110,7 +111,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 104 files changed, 10975 insertions(+), 364 deletions(-)
+ 105 files changed, 10979 insertions(+), 364 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -10880,7 +10881,7 @@ index 1b830d9..1ad6745 100644
      layer.set_interactive(false);
      layer.renderer().set_game_input(true);
 diff --git a/host/ui/save_screen.cpp b/host/ui/save_screen.cpp
-index 57c2b04..40f2643 100644
+index 57c2b04..cc5aa89 100644
 --- a/host/ui/save_screen.cpp
 +++ b/host/ui/save_screen.cpp
 @@ -10,12 +10,20 @@
@@ -10967,6 +10968,26 @@ index 57c2b04..40f2643 100644
                                        "Copy all of this game's saves, the install data included, to the backups "
                                        "folder or a folder you choose."}))
          go(Stage::Backup);
+@@ -649,5 +669,6 @@ bool save_screen(bool back) {
+ }
+ 
+ bool take_restart_request() { return std::exchange(state().restart, false); }
++void request_restart() { state().restart = true; }
+ 
+ } // namespace portablekit::ui
+diff --git a/host/ui/save_screen.hpp b/host/ui/save_screen.hpp
+index fba0276..a798f5a 100644
+--- a/host/ui/save_screen.hpp
++++ b/host/ui/save_screen.hpp
+@@ -24,5 +24,8 @@ bool save_screen(bool back);
+ 
+ // Once, after the player chose to restart the game to load an imported save.
+ [[nodiscard]] bool take_restart_request();
++// Asks for that restart, for a port that changed a save itself (the profile's own save rows): the menu restarts the game like
++// after an import.
++void request_restart();
+ 
+ } // namespace portablekit::ui
 diff --git a/host/ui/setup_screens.cpp b/host/ui/setup_screens.cpp
 index d440b66..fa1823e 100644
 --- a/host/ui/setup_screens.cpp
