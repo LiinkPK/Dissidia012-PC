@@ -110,6 +110,9 @@ if [ "${WITHOUT_EMENDATUS:-0}" != 1 ]; then
 else
   rm -f "$REL"/overlays/*ovl089DD4C0_battle_85688873* "$REL"/overlays/*ovl089DD4C0_menu_56F41D05* "$REL"/overlays/*ovl0A601000_suppreacc_* "$REL"/overlays/*ovl0ABBC700_plugin_* "$REL"/overlays/*ovl0BFE8000_block2_*
 fi
+# Every package ships the memory-expansion edition, with the Emendatus Mod or without it.
+for f in "$B1"/corpora/*expanded*; do [ -f "$f" ] && join "corpora/$(basename "$f")" "$REL/corpora/$(basename "$f")"; done
+ls "$REL"/corpora/*expanded* >/dev/null 2>&1 || { echo "ERROR: no memory-expansion corpus in $B1/corpora: every package ships the expansion edition"; exit 1; }
 # FFmpeg's libraries (real files, not links)
 if [ -d "$B1/lib" ]; then
   for f in "$B1"/lib/*.dylib; do [ -f "$f" ] && [ ! -L "$f" ] && join "lib/$(basename "$f")" "$REL/lib/$(basename "$f")"; done

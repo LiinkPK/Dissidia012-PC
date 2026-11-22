@@ -126,6 +126,10 @@ if [ "${WITHOUT_EMENDATUS:-0}" != 1 ]; then
 else
   rm -f "$REL"/overlays/*ovl089DD4C0_battle_85688873* "$REL"/overlays/*ovl089DD4C0_menu_56F41D05* "$REL"/overlays/*ovl0A601000_suppreacc_* "$REL"/overlays/*ovl0ABBC700_plugin_* "$REL"/overlays/*ovl0BFE8000_block2_*
 fi
+# Every package ships the memory-expansion edition, with the Emendatus Mod or without it.
+mkdir -p "$REL/corpora"
+cp -a "$BUILD"/bin/corpora/*expanded* "$REL/corpora/" 2>/dev/null || true
+ls "$REL"/corpora/*expanded* >/dev/null 2>&1 || { echo "ERROR: no memory-expansion corpus in $BUILD/bin/corpora: every package ships the expansion edition"; exit 1; }
 # Battle, menu and extra code live in the overlays and the release has no interpreter: a package without them
 # crashes at the first battle ("no function at 0x089E...").
 [ "$(find "$REL/overlays" -type f -name '*.so' | wc -l)" -ge 4 ] || { echo "ERROR: fewer than 4 overlay libraries in $BUILD/bin/overlays (a build failure hidden by -k 0?)"; exit 1; }

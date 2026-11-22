@@ -136,4 +136,6 @@ APP_ID="$APP_ID" GAME_RES="$ROOT/packaging/android/res" GAME_REPO="$ROOT" FONT_D
 [ -f "$APK" ] || { echo "The APK was not made"; exit 1; }
 # The Emendatus Mod ships in every build: its code is in the APK, its 338 MB of data is downloaded in the app from the release.
 unzip -l "$APK" | grep -q "libcorpus_emendatus.so" || { echo "ERROR: the APK has no libcorpus_emendatus.so: the Emendatus Mod is missing"; exit 1; }
+# The memory expansion ships in every build too.
+unzip -l "$APK" | grep -q "libcorpus_expanded.so" || { echo "ERROR: the APK has no libcorpus_expanded.so: the memory expansion is missing"; exit 1; }
 echo "APK: $APK ($(( $(wc -c < "$APK") / 1048576 )) MB)"

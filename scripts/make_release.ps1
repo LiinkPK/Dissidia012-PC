@@ -94,7 +94,13 @@ if ($WithEmendatus -and (Test-Path $modsSrc)) {
 } elseif ($WithEmendatus) {
     throw "release\mods is missing: the Emendatus Mod ships in every package (use -WithoutEmendatus to leave it out on purpose)"
 }
-if (-not $WithEmendatus) { Remove-Item -Recurse -Force (Join-Path $stage "corpora") -ErrorAction SilentlyContinue }
+# Without the mod, corpora\ keeps only the memory expansion's corpus: every package ships the expansion edition (the mod's is the rest).
+if (-not $WithEmendatus) {
+    Get-ChildItem (Join-Path $stage "corpora") -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*expanded*" } | Remove-Item -Force
+}
+if (-not (Get-ChildItem (Join-Path $stage "corpora") -File -Filter "*expanded*" -ErrorAction SilentlyContinue)) {
+    throw "corpora\ has no memory-expansion corpus: every package ships the expansion edition"
+}
 # data\logs and data\screenshots are never packed, whichever way they got in.
 foreach ($folder in $localFolders) { Remove-Item -Recurse -Force (Join-Path $stage $folder) -ErrorAction SilentlyContinue }
 # Sweep: whatever Linux file got in by another way is removed before zipping, and so is anything of the game's own (prepared executables) or

@@ -88,6 +88,10 @@ mkdir -p "$APP/Frameworks" "$APP/overlays"
 cp "$EXE" "$APP/d012_native"
 # The overlays are loaded with dlopen at run time: iOS allows that for signed libraries inside the app.
 for f in "$B"/overlays/*; do [ -f "$f" ] && cp "$f" "$APP/overlays/"; done
+# The memory expansion ships in every build: its corpus is loaded the same way (corpora/ beside the executable).
+mkdir -p "$APP/corpora"
+for f in "$B"/corpora/*expanded*; do [ -f "$f" ] && cp "$f" "$APP/corpora/"; done
+ls "$APP"/corpora/*expanded* >/dev/null 2>&1 || { echo "The build has no memory-expansion corpus ($B/corpora)"; exit 1; }
 [ -d "$B/lib" ] && for f in "$B"/lib/*.dylib; do [ -f "$f" ] && cp -L "$f" "$APP/Frameworks/"; done
 cp -R "$IOS_MVK/MoltenVK.framework" "$APP/Frameworks/" 2>/dev/null || cp "$IOS_MVK"/*.dylib "$APP/Frameworks/" 2>/dev/null || true
 cat > "$APP/Info.plist" <<PLIST
