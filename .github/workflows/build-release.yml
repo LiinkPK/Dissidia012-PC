@@ -31,6 +31,8 @@ jobs:
   linux:
     needs: check
     runs-on: ubuntu-22.04
+    env:
+      D012_RELAY_KEY: ${{ secrets.RELAY_KEY }}  # signs the online connections; builds without it cannot reach the relay
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +76,8 @@ jobs:
     needs: check
     if: ${{ !inputs.skip_macos }}
     runs-on: macos-15
+    env:
+      D012_RELAY_KEY: ${{ secrets.RELAY_KEY }}  # signs the online connections; builds without it cannot reach the relay
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -138,6 +142,8 @@ jobs:
   android:
     needs: check
     runs-on: ubuntu-22.04
+    env:
+      D012_RELAY_KEY: ${{ secrets.RELAY_KEY }}  # signs the online connections; builds without it cannot reach the relay
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4

@@ -1,4 +1,4 @@
-From bbdcc32653ecd595c55ed0cbb79ce559d28e1234 Mon Sep 17 00:00:00 2001
+From 6a5f5e31e413b71ab615df561c50ede3b3042dad Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -11,7 +11,8 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  cmake/FFmpeg.cmake                            |   34 +-
  cmake/PortableKit.cmake                       |   16 +-
  docs/SOURCE_PROVENANCE.md                     |    1 +
- host/adhoc/client.cpp                         |   24 +-
+ host/adhoc/auth.hpp                           |  104 ++
+ host/adhoc/client.cpp                         |   27 +-
  host/adhoc/host.cpp                           |   66 +-
  host/adhoc/matching.cpp                       |  232 +++
  host/adhoc/matching.hpp                       |  167 ++
@@ -23,7 +24,8 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/adhoc/portmap_soap.cpp                   |  123 ++
  host/adhoc/portmap_stun.cpp                   |   95 ++
  host/adhoc/portmap_upnp.cpp                   |  112 ++
- host/adhoc/server.cpp                         |   62 +
+ host/adhoc/server.cpp                         |  106 +-
+ host/adhoc/server.hpp                         |    4 +
  host/adhoc/session.hpp                        |   31 +
  host/adhoc/sockets.hpp                        |    1 +
  host/adhoc/ws_bridge.cpp                      |  251 +++
@@ -76,7 +78,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/platform/android_jni.cpp                 |  174 ++
  host/platform/android_jni.hpp                 |   28 +
  host/profile.cpp                              |    8 +
- host/profile.hpp                              |   73 +
+ host/profile.hpp                              |   76 +
  host/save_data/savedata_store.cpp             |   26 +-
  host/settings/settings.cpp                    |  120 +-
  host/settings/settings.hpp                    |   28 +-
@@ -104,9 +106,10 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/LICENSE                  |   76 +
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
- tools/adhoc_relay_main.cpp                    |   48 +
- 99 files changed, 10713 insertions(+), 351 deletions(-)
+ tools/adhoc_relay_main.cpp                    |   62 +
+ 101 files changed, 10883 insertions(+), 353 deletions(-)
  create mode 100644 .d012_patched
+ create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
  create mode 100644 host/adhoc/matching.hpp
  create mode 100644 host/adhoc/matching_receive.cpp
@@ -296,19 +299,140 @@ index 5e8651a..e65ad9b 100644
  | [stb_truetype](https://github.com/nothings/stb) 1.26 | game text | MIT or public domain | Single header, `third_party/stb_truetype.h`, notice at its end |
  | [stb_image](https://github.com/nothings/stb) 2.30 and stb_image_write 1.16 | texture pack images (PNG only) | MIT or public domain | Single headers from commit `2c980bb`, `third_party/stb_image.h` and `stb_image_write.h`, notices at their ends |
  | [xxHash](https://github.com/Cyan4973/xxHash) 0.8.3 | texture pack keys | BSD-2-Clause | Unmodified `xxhash.h` of release v0.8.3 in `third_party/xxhash` with its `LICENSE` |
+diff --git a/host/adhoc/auth.hpp b/host/adhoc/auth.hpp
+new file mode 100644
+index 0000000..f53b171
+--- /dev/null
++++ b/host/adhoc/auth.hpp
+@@ -0,0 +1,104 @@
++#pragma once
++
++// The first 44 bytes a client sends on every connection to a server: "D012", the time in seconds (8 bytes, big endian) and
++// HMAC-SHA256 of that time under a key only official builds carry. A server started with keys closes any connection whose frame is
++// missing, wrong or older or newer than five minutes; a server without keys (the one a player hosts on a local network) takes the
++// frame off the stream and does not check it.
++#include "psprecomp/sha256.hpp"
++
++#include <algorithm>
++#include <array>
++#include <chrono>
++#include <cstddef>
++#include <cstdint>
++#include <span>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace portablekit::adhoc::auth {
++
++inline constexpr std::size_t kFrameSize = 4u + 8u + 32u;
++inline constexpr std::int64_t kWindowSeconds = 300;
++
++namespace detail {
++
++inline std::array<std::uint8_t, 32> digest(const std::string &bytes) {
++    const std::string hex = psprecomp::sha256_bytes(
++        std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()));
++    std::array<std::uint8_t, 32> out{};
++    const auto nibble = [](char c) { return static_cast<std::uint8_t>(c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10); };
++    for (std::size_t i = 0; i < 32u && 2u * i + 1u < hex.size(); ++i)
++        out[i] = static_cast<std::uint8_t>(nibble(hex[2u * i]) << 4 | nibble(hex[2u * i + 1u]));
++    return out;
++}
++
++inline std::string hmac(std::string_view key, const std::string &message) {
++    std::string block(64u, '\0');
++    if (key.size() > 64u) {
++        const auto hashed = digest(std::string(key));
++        block.replace(0, 32u, reinterpret_cast<const char *>(hashed.data()), 32u);
++    } else {
++        block.replace(0, key.size(), key);
++    }
++    std::string inner(64u, '\0'), outer(64u, '\0');
++    for (std::size_t i = 0; i < 64u; ++i) {
++        inner[i] = static_cast<char>(block[i] ^ 0x36);
++        outer[i] = static_cast<char>(block[i] ^ 0x5C);
++    }
++    const auto first = digest(inner + message);
++    outer.append(reinterpret_cast<const char *>(first.data()), 32u);
++    const auto second = digest(outer);
++    return std::string(reinterpret_cast<const char *>(second.data()), 32u);
++}
++
++inline std::string stamp(std::int64_t seconds) {
++    std::string out(8u, '\0');
++    for (int i = 0; i < 8; ++i) out[static_cast<std::size_t>(i)] = static_cast<char>((seconds >> (8 * (7 - i))) & 0xFF);
++    return out;
++}
++
++} // namespace detail
++
++inline std::int64_t unix_seconds() {
++    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
++}
++
++// What a client sends first. Empty when it has no key.
++inline std::string frame(std::string_view key, std::int64_t seconds = unix_seconds()) {
++    if (key.empty()) return {};
++    const std::string time = detail::stamp(seconds);
++    return "D012" + time + detail::hmac(key, "d012-relay" + time);
++}
++
++enum class Check { NeedMore, Absent, Valid, Invalid };
++
++// Looks at the start of what a connection has sent. Valid: `consumed` bytes are the frame, to be dropped. With no keys any
++// complete frame is Valid. Absent: the stream does not start with a frame.
++inline Check check(const std::string &in, const std::vector<std::string> &keys, std::size_t &consumed,
++                   std::int64_t seconds = unix_seconds()) {
++    consumed = 0;
++    static constexpr char kMagic[] = {'D', '0', '1', '2'};
++    const std::size_t seen = std::min<std::size_t>(in.size(), 4u);
++    if (in.empty()) return Check::NeedMore;
++    for (std::size_t i = 0; i < seen; ++i)
++        if (in[i] != kMagic[i]) return Check::Absent;
++    if (in.size() < kFrameSize) return Check::NeedMore;
++    consumed = kFrameSize;
++    if (keys.empty()) return Check::Valid;
++    std::int64_t time = 0;
++    for (std::size_t i = 0; i < 8u; ++i) time = time << 8 | static_cast<std::uint8_t>(in[4u + i]);
++    if (time < seconds - kWindowSeconds || time > seconds + kWindowSeconds) return Check::Invalid;
++    const std::string time_bytes = in.substr(4u, 8u);
++    const std::string tag = in.substr(12u, 32u);
++    for (const std::string &key : keys) {
++        if (key.empty()) continue;
++        const std::string wanted = detail::hmac(key, "d012-relay" + time_bytes);
++        unsigned diff = 0;  // constant time
++        for (std::size_t i = 0; i < 32u; ++i) diff |= static_cast<unsigned char>(wanted[i] ^ tag[i]);
++        if (diff == 0u) return Check::Valid;
++    }
++    return Check::Invalid;
++}
++
++} // namespace portablekit::adhoc::auth
 diff --git a/host/adhoc/client.cpp b/host/adhoc/client.cpp
-index 7a13ef5..43d4ede 100644
+index 7a13ef5..7bf1b18 100644
 --- a/host/adhoc/client.cpp
 +++ b/host/adhoc/client.cpp
-@@ -2,6 +2,7 @@
+@@ -1,7 +1,9 @@
+ #include "../profile.hpp"
  #include "adhoc/client.hpp"
++#include "adhoc/auth.hpp"
  
  #include "adhoc/sockets.hpp"
 +#include "adhoc/ws_bridge.hpp"
  
  #include <algorithm>
  #include <atomic>
-@@ -707,6 +708,9 @@ struct Client::Impl {
+@@ -220,6 +222,8 @@ struct Link {
+         tune_socket(socket);
+         started = Clock::now();
+         last_write = started;
++        // The signed first bytes a server with keys asks for (adhoc/auth.hpp); none when the build has no key.
++        if (const char *key = portablekit::game().adhoc_auth_key; key != nullptr) output = auth::frame(key);
+         if (::connect(socket, reinterpret_cast<const sockaddr *>(&address.storage), address.length) == 0) {
+             open = true;
+             return true;
+@@ -707,6 +711,9 @@ struct Client::Impl {
          for (auto it = datagrams.begin(); it != datagrams.end();) {
              DatagramSocket &socket = it->second;
              if (socket.closing) {
@@ -318,7 +442,7 @@ index 7a13ef5..43d4ede 100644
                  socket.link.close();
                  it = datagrams.erase(it);
                  continue;
-@@ -778,6 +782,9 @@ struct Client::Impl {
+@@ -778,6 +785,9 @@ struct Client::Impl {
              const int handle = it->first;
              StreamSocket &socket = it->second;
              if (socket.closing) {
@@ -328,7 +452,7 @@ index 7a13ef5..43d4ede 100644
                  socket.link.close();
                  it = streams.erase(it);
                  continue;
-@@ -1057,6 +1064,20 @@ struct Client::Impl {
+@@ -1057,6 +1067,20 @@ struct Client::Impl {
                  for (auto &[handle, socket] : streams) add(socket.link);
              }
              if (!to_resolve.empty()) {
@@ -349,7 +473,7 @@ index 7a13ef5..43d4ede 100644
                  std::string host;
                  std::uint16_t port = kAdhocctlPort;
                  split_server(to_resolve, host, port);
-@@ -1540,7 +1561,8 @@ std::size_t Client::ptp_send(int handle, const void *data, std::size_t size) {
+@@ -1540,7 +1564,8 @@ std::size_t Client::ptp_send(int handle, const void *data, std::size_t size) {
      StreamSocket &socket = found->second;
      if (socket.state != StreamState::Established || !socket.link.active()) return 0u;
      const std::size_t queued = socket.link.output.size();
@@ -1720,10 +1844,82 @@ index 0000000..0659fd1
 +
 +} // namespace portablekit::adhoc
 diff --git a/host/adhoc/server.cpp b/host/adhoc/server.cpp
-index d136927..65664cb 100644
+index d136927..f6de22c 100644
 --- a/host/adhoc/server.cpp
 +++ b/host/adhoc/server.cpp
-@@ -175,6 +175,14 @@ struct RelaySession {
+@@ -1,11 +1,13 @@
+ #include "adhoc/server.hpp"
+ 
++#include "adhoc/auth.hpp"
+ #include "adhoc/client.hpp"
+ #include "adhoc/sockets.hpp"
+ 
+ #include <algorithm>
+ #include <atomic>
+ #include <chrono>
++#include <cstdio>
+ #include <map>
+ #include <mutex>
+ #include <thread>
+@@ -109,6 +111,12 @@ void tune(Socket s) {
+     no_sigpipe(s);
+ }
+ 
++// The keys a connection's first bytes must be signed with (adhoc/auth.hpp); none: the server is open.
++std::vector<std::string> &auth_keys() {
++    static std::vector<std::string> keys;
++    return keys;
++}
++
+ // One accepted TCP connection.
+ struct Connection {
+     Socket socket{kNoSocket};
+@@ -120,6 +128,35 @@ struct Connection {
+     bool eof{};      // the peer closed its side; what it sent is still parsed
+     bool closing{};  // close once `out` is written
+     bool dead{};     // close now
++    bool gate_done{};  // the signed first bytes have been checked (or none are needed)
++
++    // The first bytes of a connection to a server with keys are a signed frame (adhoc/auth.hpp). Anything else closes it before
++    // a login or a relay hello is looked at. A server without keys only takes a frame off the stream.
++    void run_gate() {
++        const auto &keys = auth_keys();
++        std::size_t consumed = 0;
++        switch (auth::check(in, keys, consumed)) {
++        case auth::Check::NeedMore: return;
++        case auth::Check::Absent:
++            gate_done = true;
++            if (!keys.empty()) refuse("no key");
++            return;
++        case auth::Check::Valid:
++            in.erase(0, consumed);
++            gate_done = true;
++            return;
++        case auth::Check::Invalid:
++            gate_done = true;
++            refuse("wrong key or clock");
++            return;
++        }
++    }
++
++    void refuse(const char *why) {
++        dead = true;
++        std::printf("[relay] refused %s: %s\n", peer.host().c_str(), why);
++        std::fflush(stdout);
++    }
+ 
+     // Reads what is waiting, up to `limit` buffered bytes.
+     void read(std::size_t limit) {
+@@ -129,6 +166,8 @@ struct Connection {
+             if (count > 0) {
+                 in.append(buffer, static_cast<std::size_t>(count));
+                 last_seen = Clock::now();
++                if (!gate_done) run_gate();
++                if (dead) return;
+                 if (static_cast<std::size_t>(count) < sizeof(buffer)) return;
+                 continue;
+             }
+@@ -175,6 +214,14 @@ struct RelaySession {
      int partner{};                          // the paired stream connection, once paired
      bool announced{};                       // a connecting stream was reported to the listener
      Clock::time_point announced_at{};
@@ -1738,7 +1934,7 @@ index d136927..65664cb 100644
  };
  
  std::string group_key(const std::string &product, const std::string &group) { return product + '\n' + group; }
-@@ -203,6 +211,7 @@ struct Server::Impl {
+@@ -203,6 +250,7 @@ struct Server::Impl {
      std::uint64_t relayed_bytes{};
      std::uint64_t dropped{};
      Clock::time_point published{};
@@ -1746,7 +1942,7 @@ index d136927..65664cb 100644
  
      // adhocctl ---------------------------------------------------------------
  
-@@ -369,13 +378,28 @@ struct Server::Impl {
+@@ -369,13 +417,28 @@ struct Server::Impl {
                 first->product == second->product;
      }
  
@@ -1775,7 +1971,7 @@ index d136927..65664cb 100644
          ++relayed_packets;
          relayed_bytes += size;
      }
-@@ -396,6 +420,7 @@ struct Server::Impl {
+@@ -396,6 +459,7 @@ struct Server::Impl {
              if (in.size() - offset - relay::kPdpHeaderSize < size) break;
              const char *data = in.data() + offset + relay::kPdpHeaderSize;
              offset += relay::kPdpHeaderSize + size;
@@ -1783,7 +1979,7 @@ index d136927..65664cb 100644
              if (destination == kBroadcastMac) {
                  for (auto &[other_key, other] : sessions)
                      if (other_key != key && !other.link.dead && other.kind == RelayKind::Datagram &&
-@@ -426,6 +451,8 @@ struct Server::Impl {
+@@ -426,6 +490,8 @@ struct Server::Impl {
              if (in.size() - offset - relay::kPtpHeaderSize < size) break;
              partner.link.out.append(in, offset, relay::kPtpHeaderSize + size);
              offset += relay::kPtpHeaderSize + size;
@@ -1792,7 +1988,7 @@ index d136927..65664cb 100644
              ++relayed_packets;
              relayed_bytes += size;
          }
-@@ -614,6 +641,40 @@ struct Server::Impl {
+@@ -614,6 +680,40 @@ struct Server::Impl {
          }
      }
  
@@ -1833,7 +2029,18 @@ index d136927..65664cb 100644
      void publish(Clock::time_point now) {
          ServerStatus status;
          status.running = true;
-@@ -690,6 +751,7 @@ struct Server::Impl {
+@@ -681,15 +781,16 @@ struct Server::Impl {
+                 }
+             }
+             for (auto &[key, player] : players)
+-                if (!player.link.in.empty() && !player.link.dead) handle_adhocctl(player);
++                if (player.link.gate_done && !player.link.in.empty() && !player.link.dead) handle_adhocctl(player);
+             for (auto &[key, session] : sessions)
+-                if (!session.link.dead && (!session.link.in.empty() || session.kind == RelayKind::Pending))
++                if (session.link.gate_done && !session.link.dead && (!session.link.in.empty() || session.kind == RelayKind::Pending))
+                     handle_relay(key, session, now);
+             expire(now);
+             remove_closed();
              for (auto &[key, player] : players) player.link.write();
              for (auto &[key, session] : sessions) session.link.write();
              remove_closed();
@@ -1841,6 +2048,29 @@ index d136927..65664cb 100644
              if (now - published >= milliseconds(250)) {
                  published = now;
                  publish(now);
+@@ -720,6 +821,7 @@ Server::~Server() {
+ bool Server::start(const ServerConfig &config) {
+     stop();
+     Impl &s = *impl_;
++    auth_keys() = config.auth_keys;
+     std::string error;
+     const std::uint16_t relay_port = relay_port_for(config.adhocctl_port);
+     Socket ctl = open_listener(config.adhocctl_port, error);
+diff --git a/host/adhoc/server.hpp b/host/adhoc/server.hpp
+index ec12b54..6b2e2b0 100644
+--- a/host/adhoc/server.hpp
++++ b/host/adhoc/server.hpp
+@@ -43,6 +43,10 @@ struct ServerConfig {
+     // Written to the network log as it happens; to the console as well when
+     // set, as in the standalone server.
+     bool print_events{};
++    // Keys that sign the first bytes of every connection (adhoc/auth.hpp). Empty: no check, as for the server a player hosts on
++    // a local network. A relay on the internet sets them (the stand-alone one reads PORTABLEKIT_RELAY_KEYS), so only builds that carry
++    // one of them can connect.
++    std::vector<std::string> auth_keys;
+ };
+ 
+ struct ServerPlayer {
 diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
 index c41a0b1..cb9cc3a 100644
 --- a/host/adhoc/session.hpp
@@ -8043,7 +8273,7 @@ index 5a603c6..940f3f6 100644
  const ProfileVariant *active_variant() { return g_active_variant; }
  
 diff --git a/host/profile.hpp b/host/profile.hpp
-index ddcf7eb..5e3a6d4 100644
+index ddcf7eb..bdce838 100644
 --- a/host/profile.hpp
 +++ b/host/profile.hpp
 @@ -15,11 +15,13 @@
@@ -8098,7 +8328,7 @@ index ddcf7eb..5e3a6d4 100644
      // argv[0] the game is started with, e.g. "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN".
      const char *boot_path;
      // Addresses of the code overlay slots inside the load image's BSS, from
-@@ -212,6 +234,27 @@ struct GameProfile {
+@@ -212,6 +234,30 @@ struct GameProfile {
      // agree on it, so it is the original release's code even when the port's
      // disc id is a different one.
      const char *adhoc_product_code;
@@ -8108,6 +8338,9 @@ index ddcf7eb..5e3a6d4 100644
 +    // leaves hosts of the other edition out. Both unset: no editions.
 +    char adhoc_edition_mark = 0;
 +    bool (*adhoc_edition_active)() = nullptr;
++    // The key that signs the first bytes of every connection to an ad hoc server (adhoc/auth.hpp), so a relay that holds it only
++    // takes builds that carry it. Null or empty: the build sends nothing.
++    const char *adhoc_auth_key = nullptr;
 +    // Where the mod data actually is, as a UTF-8 path, for the Mods page's "Open the mods folder" button. A game that lets the player
 +    // choose where it goes (an Android download into the app's storage or an SD card) answers with that folder; empty, or unset: the
 +    // mods folder of the data folder.
@@ -8126,7 +8359,7 @@ index ddcf7eb..5e3a6d4 100644
  
      // --- Controls ----------------------------------------------------------
      // What the triggers may press instead of L and R, for the way this game is
-@@ -246,6 +289,30 @@ struct GameProfile {
+@@ -246,6 +292,30 @@ struct GameProfile {
      // Called once the executable is in memory and before it runs, for the
      // per-game patches that have no better home. Null means there are none.
      void (*patch_loaded_image)(psprecomp::Runtime &, const psprecomp::Elf32Image &) = nullptr;
@@ -8157,7 +8390,7 @@ index ddcf7eb..5e3a6d4 100644
  
      // --- The game's camera and view ----------------------------------------
      // Drives the game's own camera from what the player asks of it
-@@ -310,6 +377,12 @@ struct GameProfile {
+@@ -310,6 +380,12 @@ struct GameProfile {
  // null for the profile's own (and before it is known).
  void set_active_variant(const ProfileVariant *variant);
  [[nodiscard]] const ProfileVariant *active_variant();
@@ -14090,15 +14323,18 @@ index 0000000..e07f3c3
 +#endif
 diff --git a/tools/adhoc_relay_main.cpp b/tools/adhoc_relay_main.cpp
 new file mode 100644
-index 0000000..d2e1994
+index 0000000..a7aca7b
 --- /dev/null
 +++ b/tools/adhoc_relay_main.cpp
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,62 @@
 +// A stand-alone ad hoc relay for a server that stays up: the same server the game hosts from Network > Host a
 +// session (matchmaking on TCP <port>, relay on the next), with no game, no window and no data. Players point their
 +// game at this machine's address and nothing has to be forwarded on their side.
 +//
 +//     portablekit_adhoc_relay [port]        (default 27312; the relay uses port + 1)
++//
++// PORTABLEKIT_RELAY_KEYS (comma separated, the current key first, the previous one while players update) makes it take only
++// connections signed with one of them (host/adhoc/auth.hpp). Without it the relay is open to anyone.
 +//
 +// It writes its events to the console. Ctrl+C or SIGTERM stops it.
 +#include "adhoc/client.hpp"
@@ -14108,6 +14344,8 @@ index 0000000..d2e1994
 +#include <chrono>
 +#include <csignal>
 +#include <cstdlib>
++#include <sstream>
++#include <string>
 +#include <iostream>
 +#include <thread>
 +
@@ -14128,6 +14366,15 @@ index 0000000..d2e1994
 +        }
 +        config.adhocctl_port = static_cast<std::uint16_t>(port);
 +    }
++    if (const char *keys = std::getenv("PORTABLEKIT_RELAY_KEYS"); keys != nullptr && *keys != '\0') {
++        std::stringstream list(keys);
++        for (std::string key; std::getline(list, key, ',');)
++            if (!key.empty()) config.auth_keys.push_back(key);
++    }
++    std::cout << (config.auth_keys.empty() ? "WARNING: no PORTABLEKIT_RELAY_KEYS: this relay is open to anyone."
++                                           : "Only connections signed with one of the " + std::to_string(config.auth_keys.size()) +
++                                                 " key(s) are accepted.")
++              << std::endl;
 +    Server server;
 +    if (!server.start(config)) {
 +        std::cerr << "Cannot start the relay: " << server.status().error << "\n";

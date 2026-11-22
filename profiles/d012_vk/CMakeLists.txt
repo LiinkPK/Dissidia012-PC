@@ -33,6 +33,25 @@ add_subdirectory("${PORTABLEKIT_ROOT}" portablekit)
 # portablekit_add_game() reads <profile>/config/nids.csv for NIDs the framework does not name.
 configure_file("${D012_PORT_DIR}/config/nids.csv" "${D012_WORK_DIR}/config/nids.csv" COPYONLY)
 
+# The online relay's key (see adhoc/auth.hpp in PortableKit): taken from the D012_RELAY_KEY environment variable and written to a header in
+# the build folder, never to the repository or the compiler's command line. Without it the build cannot connect to the relay.
+set(_relay_key_header "${CMAKE_CURRENT_BINARY_DIR}/relay_key/d012_relay_key.hpp")
+set(_relay_key_text "")
+if(DEFINED ENV{D012_RELAY_KEY} AND NOT "$ENV{D012_RELAY_KEY}" STREQUAL "")
+    set(_relay_key_text "#define D012_RELAY_KEY \"$ENV{D012_RELAY_KEY}\"\n")
+    message(STATUS "Online relay key: set")
+else()
+    message(WARNING "D012_RELAY_KEY is not set: this build cannot connect to the online relay.")
+endif()
+# Only written when it changed, so a configure without a new key does not rebuild the profile.
+set(_relay_key_old "")
+if(EXISTS "${_relay_key_header}")
+    file(READ "${_relay_key_header}" _relay_key_old)
+endif()
+if(NOT _relay_key_old STREQUAL _relay_key_text)
+    file(WRITE "${_relay_key_header}" "${_relay_key_text}")
+endif()
+
 portablekit_add_game(d012_native
     PROFILE_DIR "${D012_WORK_DIR}"
     SOURCES "${D012_PROFILE_HOST}/d012_profile.cpp"
@@ -54,7 +73,7 @@ portablekit_add_game(d012_native
             "${D012_PORT_DIR}/host/d012_crash_report.cpp"
             "${D012_PORT_DIR}/host/d012_test_switches.cpp"
             "${D012_PORT_DIR}/host/d012_portable.cpp")
-target_include_directories(d012_native PRIVATE "${D012_PORT_DIR}/host" "${D012_PROFILE_HOST}")
+target_include_directories(d012_native PRIVATE "${D012_PORT_DIR}/host" "${D012_PROFILE_HOST}" "${CMAKE_CURRENT_BINARY_DIR}/relay_key")
 set(D012_PORTABLEKIT_DIR "${PORTABLEKIT_ROOT}")
 
 # Decompiled game functions (C), run as native overrides (third_party/dissidia012-pc/port/decomp/). C is enabled

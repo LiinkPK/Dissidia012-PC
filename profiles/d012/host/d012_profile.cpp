@@ -21,6 +21,15 @@
 #include "../../d012_vk/d012_discord.hpp"
 #include "../../d012_vk/d012_netplay_trace.hpp"
 
+// The key that signs every online connection (third_party PortableKit adhoc/auth.hpp). Official builds get it from the build's
+// D012_RELAY_KEY environment variable (CMake writes d012_relay_key.hpp); a build without it sends nothing and the relay refuses it.
+#if __has_include("d012_relay_key.hpp")
+#include "d012_relay_key.hpp"
+#endif
+#ifndef D012_RELAY_KEY
+#define D012_RELAY_KEY ""
+#endif
+
 #include <filesystem>
 #include <span>
 #include <string_view>
@@ -151,6 +160,7 @@ GameProfile build(const Release &r) {
         // memory expansion, which changes no gameplay) only plays the stock game: the product code carries the mark.
         .adhoc_edition_mark = 'E',
         .adhoc_edition_active = &::d012_emendatus_on,
+        .adhoc_auth_key = D012_RELAY_KEY,
         .mods_folder = &::d012_mods_folder,
         .android_shared_data_folder = "Dissidia012HD",
         .adhoc_relay_server = "104.238.174.65",  // plain TCP 27312/27313 (Vultr, London)

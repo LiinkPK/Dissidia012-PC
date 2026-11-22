@@ -17,6 +17,8 @@ permissions:
 jobs:
   android:
     runs-on: ubuntu-22.04
+    env:
+      D012_RELAY_KEY: ${{ secrets.RELAY_KEY }}  # signs the online connections; builds without it cannot reach the relay
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
