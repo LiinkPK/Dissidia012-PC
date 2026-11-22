@@ -18,11 +18,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "LiinkPK"
             VALUE "FileDescription", "Dissidia 012 Final Fantasy HD Remastered"
-            VALUE "FileVersion", "@D012_VERSION_DOT@"
+            VALUE "FileVersion", "@D012_VERSION_TEXT@"
             VALUE "InternalName", "Dissidia 012 Final Fantasy HD Remastered"
             VALUE "OriginalFilename", "d012_native.exe"
             VALUE "ProductName", "Dissidia 012 Final Fantasy HD Remastered"
-            VALUE "ProductVersion", "@D012_VERSION_DOT@"
+            VALUE "ProductVersion", "@D012_VERSION_TEXT@"
         END
     END
     BLOCK "VarFileInfo"

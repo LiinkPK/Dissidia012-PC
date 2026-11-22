@@ -1,4 +1,4 @@
-From 9b2ad540b2d4f1cb3ed52f8016b928438477383b Mon Sep 17 00:00:00 2001
+From 38521afc0091c15824fc9c9b253adf22177d6b22 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -82,14 +82,14 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/profile.cpp                              |    8 +
  host/profile.hpp                              |   84 +
  host/save_data/savedata_store.cpp             |   26 +-
- host/settings/settings.cpp                    |  120 +-
- host/settings/settings.hpp                    |   28 +-
+ host/settings/settings.cpp                    |  127 +-
+ host/settings/settings.hpp                    |   30 +-
  host/single_instance.hpp                      |  157 ++
  host/ui/file_browser.cpp                      |   28 +-
  host/ui/font_menu.cpp                         |  103 +-
  host/ui/layer.cpp                             |    7 +-
  host/ui/layer.hpp                             |    2 +-
- host/ui/menu.cpp                              | 1170 +++++++++++--
+ host/ui/menu.cpp                              | 1172 +++++++++++--
  host/ui/save_screen.cpp                       |   32 +-
  host/ui/setup_screens.cpp                     |   15 +-
  host/ui/texture_pack_screen.cpp               |   66 +-
@@ -110,7 +110,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 104 files changed, 10927 insertions(+), 362 deletions(-)
+ 104 files changed, 10937 insertions(+), 363 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -8565,7 +8565,7 @@ index f09c4fa..1856fde 100644
          auto plain = decrypt_data(*file, *mode, key);
          if (!plain) {
 diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
-index 54078af..e324658 100644
+index 54078af..0a66f0f 100644
 --- a/host/settings/settings.cpp
 +++ b/host/settings/settings.cpp
 @@ -4,6 +4,7 @@
@@ -8723,7 +8723,7 @@ index 54078af..e324658 100644
  }
  
  } // namespace
-@@ -519,6 +594,50 @@ Settings &current() {
+@@ -519,6 +594,57 @@ Settings &current() {
      return s.values;
  }
  
@@ -8736,7 +8736,8 @@ index 54078af..e324658 100644
 +Quality quality_of(const Settings &s) {
 +    if (s.internal_scale == 1u && !s.texture_pack && !s.hd_text) return Quality::Low;
 +    if (s.internal_scale == 2u && s.texture_pack && !s.hd_text) return Quality::Medium;
-+    if (s.internal_scale == 2u && s.texture_pack && s.hd_text) return Quality::High;
++    if (s.internal_scale == 4u && s.texture_pack && s.hd_text) return Quality::High;
++    if (s.internal_scale == 6u && s.texture_pack && s.hd_text) return Quality::Ultra;
 +    return Quality::Custom;
 +}
 +
@@ -8752,8 +8753,13 @@ index 54078af..e324658 100644
 +        s.texture_pack = true;
 +        s.hd_text = false;
 +        break;
-+    case Quality::High:
-+        s.internal_scale = 2u;
++    case Quality::High:  // 1920x1088
++        s.internal_scale = 4u;
++        s.texture_pack = true;
++        s.hd_text = true;
++        break;
++    case Quality::Ultra:  // 2880x1632
++        s.internal_scale = 6u;
 +        s.texture_pack = true;
 +        s.hd_text = true;
 +        break;
@@ -8766,6 +8772,7 @@ index 54078af..e324658 100644
 +    case Quality::Low: return "Low";
 +    case Quality::Medium: return "Medium";
 +    case Quality::High: return "High";
++    case Quality::Ultra: return "Ultra";
 +    case Quality::Custom: break;
 +    }
 +    return "Custom";
@@ -8774,7 +8781,7 @@ index 54078af..e324658 100644
  std::string game_default_name() {
      const char *name = game().default_player_name;
      return name != nullptr ? name : "";
-@@ -532,7 +651,6 @@ Settings defaults_for(Platform platform) {
+@@ -532,7 +658,6 @@ Settings defaults_for(Platform platform) {
      // The game's keyboard first; a phone then turns the mouse off either way.
      if (const auto keyboard = game().keyboard_defaults) keyboard(values.bindings, values.mouse);
      if (platform == Platform::Android) {
@@ -8783,10 +8790,15 @@ index 54078af..e324658 100644
          values.mouse = false;
      }
 diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
-index 9405fe7..f3fb98e 100644
+index 9405fe7..3b73946 100644
 --- a/host/settings/settings.hpp
 +++ b/host/settings/settings.hpp
-@@ -48,12 +48,13 @@ struct Settings {
+@@ -44,16 +44,17 @@ enum class FrameRate { Fps30, Fps45, Fps60, Fps90, Fps120, Display };
+ 
+ struct Settings {
+     // Video
+-    std::uint32_t internal_scale{2u};  // render resolution, multiples of 480x272 (272 lines each); 0: the window's
++    std::uint32_t internal_scale{4u};  // render resolution, multiples of 480x272 (272 lines each); 0: the window's
      std::uint32_t window_scale{2u};    // windowed size, multiples of 480x272
      bool fullscreen{};
      PresentMode present_mode{PresentMode::Fifo};
@@ -8853,7 +8865,7 @@ index 9405fe7..f3fb98e 100644
 +// Quality presets: the three options that cost the most on a slow machine, set together. Low draws at the PSP's own size with no HD
 +// textures and no HD text; Medium draws at twice that, still with neither; High is the default: twice the size with the HD texture pack
 +// and HD text. A set of options that matches none of them is Custom. Nothing else is changed.
-+enum class Quality { Low, Medium, High, Custom };
++enum class Quality { Low, Medium, High, Ultra, Custom };
 +[[nodiscard]] Quality quality_of(const Settings &s);
 +void apply_quality(Settings &s, Quality quality);
 +[[nodiscard]] const char *quality_name(Quality quality);
@@ -9278,7 +9290,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..1b0c771 100644
+index 1b830d9..1ad6745 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -9845,25 +9857,27 @@ index 1b830d9..1b0c771 100644
      was_editing_ = ImGui::IsAnyItemActive();
      return !close_;
  }
-@@ -231,6 +647,27 @@ void Menu::video() {
+@@ -231,6 +647,29 @@ void Menu::video() {
              settings::save();
          }
      }
 +    {
 +        // The three options that cost the most on a slow machine, set together (settings::Quality).
 +        RowOptions o;
-+        o.description = "Low: the PSP's own size, no HD textures, no HD text. Medium: twice that size, still without them. High: "
-+                        "twice the size with the HD textures and HD text. Changing any of those yourself shows Custom.";
++        o.description = "Low: the PSP's own size (480x272), no HD textures, no HD text. Medium: twice that size (960x544) with the HD "
++                        "textures. High: four times (1920x1088) with the HD textures and HD text. Ultra: six times (2880x1632). "
++                        "Changing any of those yourself shows Custom.";
 +        if (!settings::overridden_by("video.internal_scale").empty() || !settings::overridden_by("video.texture_pack").empty()) {
 +            o.disabled = true;
 +            o.note = "set by an environment variable";
 +        }
 +        const settings::Quality now = settings::quality_of(s);
 +        if (const int delta = choice_row("Quality", settings::quality_name(now), o)) {
-+            static const settings::Quality order[3] = {settings::Quality::Low, settings::Quality::Medium, settings::Quality::High};
-+            int index = delta > 0 ? 0 : 2;  // from Custom: the first on the way up, the last on the way down
-+            for (int i = 0; i < 3; ++i)
-+                if (order[i] == now) index = cycle(i, delta, 3);
++            static const settings::Quality order[4] = {settings::Quality::Low, settings::Quality::Medium, settings::Quality::High,
++                                                       settings::Quality::Ultra};
++            int index = delta > 0 ? 0 : 3;  // from Custom: the first on the way up, the last on the way down
++            for (int i = 0; i < 4; ++i)
++                if (order[i] == now) index = cycle(i, delta, 4);
 +            settings::apply_quality(s, order[index]);
 +            renderer().set_internal_scale(s.internal_scale);
 +            renderer().set_texture_pack(s.texture_pack);
@@ -9873,7 +9887,7 @@ index 1b830d9..1b0c771 100644
  #if !defined(__ANDROID__)
      // A phone is always full screen: no window to size.
      {
-@@ -258,6 +695,10 @@ void Menu::video() {
+@@ -258,6 +697,10 @@ void Menu::video() {
          }
      }
  #endif
@@ -9884,7 +9898,7 @@ index 1b830d9..1b0c771 100644
      {
          static const char *const kAspects[] = {"Original", "Stretch", "Fill"};
          // Fill is offered only to a game that can widen its own view.
-@@ -289,26 +730,6 @@ void Menu::video() {
+@@ -289,26 +732,6 @@ void Menu::video() {
          renderer().set_sharp_textures(s.sharp_textures);
          settings::save();
      }
@@ -9911,7 +9925,7 @@ index 1b830d9..1b0c771 100644
      }
      texture_pack_rows();
      section("Timing");
-@@ -378,7 +799,9 @@ void Menu::video() {
+@@ -378,7 +801,9 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -9922,7 +9936,7 @@ index 1b830d9..1b0c771 100644
          RowOptions o = options_for("video.frame_rate_auto",
                                     "On lowers the frame rate by itself when presenting that often would slow the "
                                     "game. Off keeps the chosen rate, and the game may then run below full speed.");
-@@ -389,13 +812,23 @@ void Menu::video() {
+@@ -389,13 +814,23 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -9952,7 +9966,7 @@ index 1b830d9..1b0c771 100644
          RowOptions o = options_for("video.fast_loading",
                                     "Lets the game run ahead of real time while it loads and is silent, so loads "
                                     "take as long as the computer needs. Never during play, sound, movies or "
-@@ -579,7 +1012,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
+@@ -579,7 +1014,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
  }
  
  // Host names: printable ASCII without spaces.
@@ -9960,7 +9974,7 @@ index 1b830d9..1b0c771 100644
  
  // What an address to join may hold: a host name or IPv4 address, a colon and
  // a port, or an IPv6 address in brackets.
-@@ -588,6 +1020,17 @@ bool address_character(char32_t c) {
+@@ -588,6 +1022,17 @@ bool address_character(char32_t c) {
             c == U':' || c == U'-' || c == U'[' || c == U']';
  }
  
@@ -9978,7 +9992,7 @@ index 1b830d9..1b0c771 100644
  // Only for a game that tilts (GameProfile::tilt).
  void Menu::tilt_controls() {
      const TiltControls *tilt = portablekit::game().tilt;
-@@ -724,6 +1167,12 @@ void Menu::controls() {
+@@ -724,6 +1169,12 @@ void Menu::controls() {
          s.confirm_south = !s.confirm_south;
          settings::save();
      }
@@ -9991,7 +10005,7 @@ index 1b830d9..1b0c771 100644
      int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
      if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
                     options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
-@@ -958,6 +1407,7 @@ void Menu::controls() {
+@@ -958,6 +1409,7 @@ void Menu::controls() {
              if (settings::overridden_by(key).empty()) value = fallback;
          };
          restore("input.confirm", s.confirm_south, d.confirm_south);
@@ -9999,7 +10013,7 @@ index 1b830d9..1b0c771 100644
          restore("input.dead_zone", s.dead_zone, d.dead_zone);
          restore("input.stick_square", s.stick_square, d.stick_square);
          restore("input.trigger", s.trigger, d.trigger);
-@@ -1065,7 +1515,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+@@ -1065,7 +1517,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -10008,7 +10022,7 @@ index 1b830d9..1b0c771 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1086,7 +1536,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1086,7 +1538,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -10017,7 +10031,7 @@ index 1b830d9..1b0c771 100644
      return "None";
  }
  
-@@ -1130,12 +1580,80 @@ void play_together() {
+@@ -1130,12 +1582,80 @@ void play_together() {
      static std::string copied;
      static std::string typed_address;
      section("Play together");
@@ -10100,7 +10114,7 @@ index 1b830d9..1b0c771 100644
          const std::vector<adhoc::LocalAddress> addresses = adhoc::local_addresses();
          if (addresses.empty()) info_row("Your addresses", "No network is connected");
          for (const adhoc::LocalAddress &address : addresses) {
-@@ -1150,6 +1668,23 @@ void play_together() {
+@@ -1150,6 +1670,23 @@ void play_together() {
                  copied = text;
              }
          }
@@ -10124,7 +10138,7 @@ index 1b830d9..1b0c771 100644
          if (!copied.empty()) info_row("Copied", copied);
          ImGui::PushID("hosted players");
          for (std::size_t i = 0; i < status.players.size(); ++i) {
-@@ -1172,7 +1707,7 @@ void play_together() {
+@@ -1172,7 +1709,7 @@ void play_together() {
          if (button_row("Host a session###hosting",
                         {false, {},
                          "Runs a server in this game for the others to join: no other program, no port forwarding "
@@ -10133,7 +10147,7 @@ index 1b830d9..1b0c771 100644
              adhoc_host_start();
          if (const std::string error = adhoc_host_error(); !error.empty()) info_row("Cannot host", error);
      }
-@@ -1181,7 +1716,13 @@ void play_together() {
+@@ -1181,7 +1718,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -10148,7 +10162,7 @@ index 1b830d9..1b0c771 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1191,10 +1732,13 @@ void play_together() {
+@@ -1191,10 +1734,13 @@ void play_together() {
          const std::string label = (joined(address) ? "Joined " : "Join ") + host.info.name + "   " + address + ", " +
                                    players_text(host.info.players) + "###found " + std::to_string(host.info.session);
          if (button_row(label.c_str(), {false, {}, "A session hosted on this network. Joining it takes you out of any "
@@ -10164,7 +10178,7 @@ index 1b830d9..1b0c771 100644
      if (text_row("join_address", "Address", typed_address, 100u, true, address_character,
                   {false, {},
                    "The host's address, for a VPN without broadcast such as Tailscale: the host's screen lists it. "
-@@ -1218,29 +1762,6 @@ void Menu::network() {
+@@ -1218,29 +1764,6 @@ void Menu::network() {
      adhoc::Client &client = adhoc::Client::get();
      const adhoc::Diagnostics d = client.diagnostics();
      play_together();
@@ -10194,7 +10208,7 @@ index 1b830d9..1b0c771 100644
      section("Status");
      info_row("Connection", connection_text(d));
      if (adhoc_hosting()) {
-@@ -1313,7 +1834,7 @@ void Menu::network() {
+@@ -1313,7 +1836,7 @@ void Menu::network() {
      if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
      if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                       "Drop the server connection and connect again at once. The group is joined "
@@ -10203,7 +10217,7 @@ index 1b830d9..1b0c771 100644
          client.reconnect_now();
      if (button_row("Disconnect", {!d.group && !d.joining, {},
                                    "Leave the group as if the other players were lost. The game shows its own "
-@@ -1322,19 +1843,95 @@ void Menu::network() {
+@@ -1322,19 +1845,95 @@ void Menu::network() {
          client.disconnect_now();
  
      ImGui::Dummy({0.0f, font_gap()});
@@ -10300,7 +10314,7 @@ index 1b830d9..1b0c771 100644
  void Menu::system() {
      if (save_screen(back_)) {
          if (take_restart_request()) {
-@@ -1360,14 +1957,6 @@ void Menu::system() {
+@@ -1360,14 +1959,6 @@ void Menu::system() {
          s.menu_pause = !s.menu_pause;
          settings::save();
      }
@@ -10315,7 +10329,7 @@ index 1b830d9..1b0c771 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
      // An Android app's data folder is out of the file manager's reach; its
      // log goes where the player picks instead, to send with a report.
-@@ -1375,18 +1964,21 @@ void Menu::system() {
+@@ -1375,18 +1966,21 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -10339,7 +10353,7 @@ index 1b830d9..1b0c771 100644
          if (std::filesystem::is_directory(storage / "logs", ec))
              std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
          const auto copied = android::pick_folder_and_copy(local);
-@@ -1396,24 +1988,91 @@ void Menu::system() {
+@@ -1396,24 +1990,91 @@ void Menu::system() {
                                                       : "Not saved: " + copied->error;
      }
      if (!saved_log_path().empty()) info_row("Log", saved_log_path());
@@ -10435,7 +10449,7 @@ index 1b830d9..1b0c771 100644
      if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
      info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
      info_row("Data folder", data_dir);
-@@ -1439,6 +2098,108 @@ bool Menu::confirm_dialog() {
+@@ -1439,6 +2100,108 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -10544,7 +10558,7 @@ index 1b830d9..1b0c771 100644
          const bool quit = confirm_ == Confirm::Quit;
          heading(quit ? "Quit the game?" : "Set up game data again?");
          paragraph(quit ? "Progress since your last save is lost."
-@@ -1447,8 +2208,17 @@ bool Menu::confirm_dialog() {
+@@ -1447,8 +2210,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -10564,7 +10578,7 @@ index 1b830d9..1b0c771 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -1466,6 +2236,77 @@ bool Menu::confirm_dialog() {
+@@ -1466,6 +2238,77 @@ bool Menu::confirm_dialog() {
      return keep_open;
  }
  
@@ -10642,7 +10656,7 @@ index 1b830d9..1b0c771 100644
  // Seconds the menu hint has left, or a negative number once it is gone.
  double hint_seconds_left() {
      static const Clock::time_point first_frame = Clock::now();
-@@ -1588,6 +2429,70 @@ void add_menu_rows(void (*rows)()) {
+@@ -1588,6 +2431,70 @@ void add_menu_rows(void (*rows)()) {
      if (rows != nullptr) port_rows().push_back(rows);
  }
  
@@ -10713,7 +10727,7 @@ index 1b830d9..1b0c771 100644
  void draw_over_game() {
      Layer &layer = Layer::get();
      if (!layer.attached()) return;
-@@ -1610,6 +2515,51 @@ void draw_over_game() {
+@@ -1610,6 +2517,51 @@ void draw_over_game() {
          layer.end_frame();
          return;
      }
@@ -10765,7 +10779,7 @@ index 1b830d9..1b0c771 100644
      const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
      const bool overlay = network_overlay();
      const bool touch = !menu && layer.renderer().touch_controls_visible();
-@@ -1639,7 +2589,7 @@ void draw_over_game() {
+@@ -1639,7 +2591,7 @@ void draw_over_game() {
  
  bool menu_pauses() {
      const settings::Settings &s = settings::current();
@@ -10774,7 +10788,7 @@ index 1b830d9..1b0c771 100644
  }
  
  void open_menu_over_game() {
-@@ -1650,6 +2600,9 @@ void open_menu_over_game() {
+@@ -1650,6 +2602,9 @@ void open_menu_over_game() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      menu.emplace(false);
@@ -10784,7 +10798,7 @@ index 1b830d9..1b0c771 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -1659,9 +2612,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+@@ -1659,9 +2614,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
  bool menu_requested() {
      Layer &layer = Layer::get();
      if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
@@ -10812,7 +10826,7 @@ index 1b830d9..1b0c771 100644
  }
  
  bool run_menu() {
-@@ -1670,6 +2639,9 @@ bool run_menu() {
+@@ -1670,6 +2641,9 @@ bool run_menu() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      Menu menu(true);
