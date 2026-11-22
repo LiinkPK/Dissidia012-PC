@@ -1,4 +1,4 @@
-From 6a5f5e31e413b71ab615df561c50ede3b3042dad Mon Sep 17 00:00:00 2001
+From fd972fc09b0ee4084c66502660a369da917cbb9f Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -12,7 +12,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  cmake/PortableKit.cmake                       |   16 +-
  docs/SOURCE_PROVENANCE.md                     |    1 +
  host/adhoc/auth.hpp                           |  104 ++
- host/adhoc/client.cpp                         |   27 +-
+ host/adhoc/client.cpp                         |   29 +-
  host/adhoc/host.cpp                           |   66 +-
  host/adhoc/matching.cpp                       |  232 +++
  host/adhoc/matching.hpp                       |  167 ++
@@ -107,7 +107,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 101 files changed, 10883 insertions(+), 353 deletions(-)
+ 101 files changed, 10884 insertions(+), 354 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -410,7 +410,7 @@ index 0000000..f53b171
 +
 +} // namespace portablekit::adhoc::auth
 diff --git a/host/adhoc/client.cpp b/host/adhoc/client.cpp
-index 7a13ef5..7bf1b18 100644
+index 7a13ef5..1fb695d 100644
 --- a/host/adhoc/client.cpp
 +++ b/host/adhoc/client.cpp
 @@ -1,7 +1,9 @@
@@ -432,6 +432,15 @@ index 7a13ef5..7bf1b18 100644
          if (::connect(socket, reinterpret_cast<const sockaddr *>(&address.storage), address.length) == 0) {
              open = true;
              return true;
+@@ -699,7 +703,7 @@ struct Client::Impl {
+ 
+     void start_relay(Link &link, const std::string &init, const std::string &what) {
+         if (!link.start(relay_address())) return;
+-        link.output = init;
++        link.output += init;  // after the signed first bytes Link::start put there
+         trace("relay > init " + what);
+     }
+ 
 @@ -707,6 +711,9 @@ struct Client::Impl {
          for (auto it = datagrams.begin(); it != datagrams.end();) {
              DatagramSocket &socket = it->second;
