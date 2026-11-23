@@ -421,7 +421,7 @@ bool enabled() { return options().enabled; }
 // True while a battle camera is stepping (not in the pause menu, the pre-battle screens or the results).
 bool battle_running() {
     const Pad &p = pad();
-    return p.reads - p.battle_read <= kLiveReads || p.reads - p.fed_read <= kLiveReads;
+    return p.reads - p.live_read <= kLiveReads || p.reads - p.fed_read <= kLiveReads;
 }
 
 void install(portablekit::HleRegistrar &hle) {
@@ -467,7 +467,7 @@ void install(portablekit::HleRegistrar &hle) {
         //   D-pad left        manual Summon          R1 + Circle
         // D-pad up and down no longer move the camera closer or away (the right stick does that), and D-pad left no longer
         // turns it (the right stick does that too); D-pad right still turns it.
-        const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
+        const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads;
         if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             static bool announced = false;
