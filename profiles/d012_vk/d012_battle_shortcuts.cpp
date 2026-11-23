@@ -43,13 +43,25 @@ constexpr std::uint32_t kSceCtrlReadBufferPositive = 0x1F803938u;
 constexpr std::uint32_t kBattleManager = 0x089D6A10u;  // *(u32*) is the battle object, 0 outside a battle
 constexpr std::uint32_t kBattleStage = 0x08B98854u;    // the stage's number during a battle, else 0xFFFFFFFF
 
+constexpr std::uint32_t kPadManager = 0x089D6008u;     // *(u32*) is the pad manager
+constexpr std::uint32_t kPadFlags = 0x264u;            // in the pad manager
+
 constexpr std::uint32_t kDpadUp = 0x0010u, kDpadDown = 0x0040u, kDpadLeft = 0x0080u;
 constexpr std::uint32_t kL1 = 0x0100u, kR1 = 0x0200u;
 constexpr std::uint32_t kTriangle = 0x1000u, kCircle = 0x2000u, kCross = 0x4000u, kSquare = 0x8000u;
 
 bool in_battle(Runtime &rt) {
-    return rt.memory().load32(kBattleManager) != 0u && rt.memory().load32(kBattleStage) != 0xFFFFFFFFu &&
-           d012::camera::battle_running();
+    if (rt.memory().load32(kBattleManager) == 0u || rt.memory().load32(kBattleStage) == 0xFFFFFFFFu) return false;
+    // The game mutes its pad (bit 1) or plays a replay (bit 0) outside the fight: its menus, the fanfare and the results.
+    const std::uint32_t pads = rt.memory().load32(kPadManager);
+    const std::uint32_t flags = pads != 0u ? rt.memory().load32(pads + kPadFlags) : 0xFFFFFFFFu;
+    static std::uint32_t last_flags = 0xFFFFFFFEu;
+    if (flags != last_flags) {
+        last_flags = flags;
+        std::printf("[shortcuts] battle pad flags 0x%X (camera running %d)\n", flags, int(d012::camera::battle_running()));
+        std::fflush(stdout);
+    }
+    return pads != 0u && (flags & 3u) == 0u;
 }
 
 void on_pad(Runtime &rt, const AllegrexContext &ctx) {
