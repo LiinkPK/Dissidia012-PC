@@ -177,7 +177,11 @@ bool camera_stick(Guest *g, gaddr camera, float &turn, float &closer) {
             announced = true;
             std::cout << "[camera] a battle camera is running: the battle shortcuts (D-pad, L2, R2, L3) apply" << std::endl;
         }
-        pad().battle_read = pad().reads;
+        // Only while the game takes input (muted on the post-battle fanfare and results, and in a replay).
+        const gaddr pads = g_ld32(g, G_PAD_MANAGER);
+        if (pads != 0 && (g_ld32(g, pads + PAD_FLAGS) & (PAD_FLAG_REPLAY | PAD_FLAG_MUTED)) == 0 &&
+            g_ld32(g, camera + CAM_PAD) == pads + PAD_LOGICAL0)
+            pad().battle_read = pad().reads;
     }
     bool fed = false;
     const int player = local_camera(g, camera, &fed);
@@ -421,7 +425,7 @@ bool enabled() { return options().enabled; }
 // True while a battle camera is stepping (not in the pause menu, the pre-battle screens or the results).
 bool battle_running() {
     const Pad &p = pad();
-    return p.reads - p.live_read <= kLiveReads || p.reads - p.fed_read <= kLiveReads;
+    return p.reads - p.live_read <= kLiveReads || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
 }
 
 void install(portablekit::HleRegistrar &hle) {
@@ -467,7 +471,7 @@ void install(portablekit::HleRegistrar &hle) {
         //   D-pad left        manual Summon          R1 + Circle
         // D-pad up and down no longer move the camera closer or away (the right stick does that), and D-pad left no longer
         // turns it (the right stick does that too); D-pad right still turns it.
-        const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads;
+        const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
         if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             static bool announced = false;
