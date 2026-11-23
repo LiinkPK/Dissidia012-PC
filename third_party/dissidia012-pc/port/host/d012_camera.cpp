@@ -179,9 +179,17 @@ bool camera_stick(Guest *g, gaddr camera, float &turn, float &closer) {
         }
         // Only while the game takes input (muted on the post-battle fanfare and results, and in a replay).
         const gaddr pads = g_ld32(g, G_PAD_MANAGER);
-        if (pads != 0 && (g_ld32(g, pads + PAD_FLAGS) & (PAD_FLAG_REPLAY | PAD_FLAG_MUTED)) == 0 &&
-            g_ld32(g, camera + CAM_PAD) == pads + PAD_LOGICAL0)
-            pad().battle_read = pad().reads;
+        const std::uint32_t pad_flags = pads != 0 ? g_ld32(g, pads + PAD_FLAGS) : 0xFFFFFFFFu;
+        const bool listens = pads != 0 && g_ld32(g, camera + CAM_PAD) == pads + PAD_LOGICAL0;
+        const bool taking_input = pads != 0 && (pad_flags & (PAD_FLAG_REPLAY | PAD_FLAG_MUTED)) == 0 && listens;
+        static int last_state = -1;
+        if (last_state != static_cast<int>(taking_input)) {
+            last_state = static_cast<int>(taking_input);
+            std::cout << "[camera] battle camera, input " << (taking_input ? "taken" : "not taken") << " (pad flags 0x" << std::hex
+                      << pad_flags << std::dec << ", listens " << listens << ", manual " << int(g_ld8(g, camera + CAM_MANUAL)) << ")"
+                      << std::endl;
+        }
+        if (taking_input) pad().battle_read = pad().reads;
     }
     bool fed = false;
     const int player = local_camera(g, camera, &fed);
