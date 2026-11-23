@@ -28,6 +28,10 @@
 #include <cstdint>
 #include <cstdio>
 
+namespace d012::camera {
+bool battle_running();
+}
+
 namespace d012_battle_shortcuts {
 namespace {
 
@@ -44,7 +48,8 @@ constexpr std::uint32_t kL1 = 0x0100u, kR1 = 0x0200u;
 constexpr std::uint32_t kTriangle = 0x1000u, kCircle = 0x2000u, kCross = 0x4000u, kSquare = 0x8000u;
 
 bool in_battle(Runtime &rt) {
-    return rt.memory().load32(kBattleManager) != 0u && rt.memory().load32(kBattleStage) != 0xFFFFFFFFu;
+    return rt.memory().load32(kBattleManager) != 0u && rt.memory().load32(kBattleStage) != 0xFFFFFFFFu &&
+           d012::camera::battle_running();
 }
 
 void on_pad(Runtime &rt, const AllegrexContext &ctx) {

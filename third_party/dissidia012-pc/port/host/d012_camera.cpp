@@ -418,6 +418,12 @@ struct Install {
 
 bool enabled() { return options().enabled; }
 
+// True while a battle camera is stepping (not in the pause menu, the pre-battle screens or the results).
+bool battle_running() {
+    const Pad &p = pad();
+    return p.reads - p.battle_read <= kLiveReads || p.reads - p.fed_read <= kLiveReads;
+}
+
 void install(portablekit::HleRegistrar &hle) {
     static bool installed = false;
     if (installed || !enabled()) return;
