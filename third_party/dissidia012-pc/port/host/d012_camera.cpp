@@ -171,7 +171,14 @@ int local_camera(Guest *g, gaddr camera, bool *fed_externally = nullptr) {
 // closer > 0 what D-pad up does, after the player's two direction options.
 bool camera_stick(Guest *g, gaddr camera, float &turn, float &closer) {
     // A battle camera is running, in automatic camera mode too (CAM_MANUAL 0 is the game's own camera option): the shortcuts apply.
-    if (g_ld32s(g, camera + CAM_STEP_SOURCE) == 0) pad().battle_read = pad().reads;
+    if (g_ld32s(g, camera + CAM_STEP_SOURCE) == 0) {
+        static bool announced = false;
+        if (!announced) {
+            announced = true;
+            std::cout << "[camera] a battle camera is running: the battle shortcuts (D-pad, L2, R2, L3) apply" << std::endl;
+        }
+        pad().battle_read = pad().reads;
+    }
     bool fed = false;
     const int player = local_camera(g, camera, &fed);
     if (player < 0) {
@@ -457,6 +464,11 @@ void install(portablekit::HleRegistrar &hle) {
         const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
         if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
+            static bool announced = false;
+            if (!announced && (extra != 0u || (rt.memory().load32(buffer + 4u) & (kDpadUp | kDpadDown | kDpadLeft)) != 0u)) {
+                announced = true;
+                std::cout << "[camera] battle shortcut pressed (extra buttons 0x" << std::hex << extra << std::dec << ")" << std::endl;
+            }
             std::uint32_t add = 0u;
             if ((extra & ext::kExtraL3) != 0u) add |= kR1 | kSquare;
             if ((extra & ext::kExtraL2) != 0u) add |= kR1 | kCross;

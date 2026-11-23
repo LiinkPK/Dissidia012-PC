@@ -1,4 +1,4 @@
-From 66d389dd58f2de9da9d6252ef9d2a337f31a4201 Mon Sep 17 00:00:00 2001
+From 33e5eeab1e83ac4c08ea80d9d946fb631db46463 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -47,7 +47,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/gpu/texture_pack.hpp                     |   61 +-
  host/gpu/texture_pack_import.cpp              |   61 +-
  host/gpu/texture_pack_import.hpp              |    4 +
- host/gpu/vulkan_renderer.cpp                  | 1459 +++++++++++++++-
+ host/gpu/vulkan_renderer.cpp                  | 1475 +++++++++++++++-
  host/gpu/vulkan_renderer.hpp                  |   35 +
  host/hle/hle_adhoc.cpp                        |  121 +-
  host/hle/hle_adhoc_matching.cpp               |  124 ++
@@ -60,8 +60,8 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/hle/hle_savedata.cpp                     |    8 +-
  host/hle/hle_system.cpp                       |    1 +
  host/hle/hle_utility.cpp                      |    4 +
- host/input/touch_controls.cpp                 |   38 +-
- host/input/touch_controls.hpp                 |   18 +-
+ host/input/touch_controls.cpp                 |   59 +-
+ host/input/touch_controls.hpp                 |   25 +-
  host/install/executable_preparation.cpp       |    4 +-
  host/install/installer.cpp                    |   37 +-
  host/install/installer_dialogs.cpp            |    4 +
@@ -96,7 +96,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/ui/save_screen.hpp                       |    3 +
  host/ui/setup_screens.cpp                     |   15 +-
  host/ui/texture_pack_screen.cpp               |   66 +-
- host/ui/touch_overlay.cpp                     |   20 +-
+ host/ui/touch_overlay.cpp                     |   35 +-
  host/ui/ui.hpp                                |   17 +-
  host/ui/updater.cpp                           |  966 +++++++++++
  host/ui/updater.hpp                           |   57 +
@@ -113,7 +113,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 107 files changed, 11074 insertions(+), 372 deletions(-)
+ 107 files changed, 11121 insertions(+), 384 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -4238,7 +4238,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..6eba95c 100644
+index e4d7e11..50f645a 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -4499,15 +4499,15 @@ index e4d7e11..6eba95c 100644
          std::unique_lock<std::mutex> guard(lock_);
          for (;;) {
              wake_.wait(guard, [this] { return stopping_ || !queue_.empty(); });
-@@ -934,7 +1078,58 @@ struct VulkanRenderer::Impl {
+@@ -934,8 +1078,59 @@ struct VulkanRenderer::Impl {
          // How far down a 512-tall texture has been drawn, which decides how
          // much of it the pack's hash covers; see texture_pack.hpp.
          std::uint16_t max_seen_v{};
 +        // Hash of the texture's bytes, the same on every run (addresses are
 +        // not); how kHudTextures names the interface's pieces.
 +        std::uint32_t content_hash{};
-+    };
-+
+     };
+ 
 +    std::uint64_t hud_frame{};
 +    bool saw_3d{};  // a 3D draw has been made in the frame so far
 +    // g_d012_defer_3d: the 3D draws into the shown picture are kept, with copies of the guest data they point at, and drawn at the
@@ -4517,7 +4517,7 @@ index e4d7e11..6eba95c 100644
 +        std::vector<std::uint8_t> raw;
 +        std::array<float, 96> bones{};
 +        bool has_bones{};
-     };
++    };
 +    std::vector<DeferredDraw> deferred;
 +    const GuestMemory *deferred_memory{};
 +    bool replaying{};
@@ -4555,9 +4555,10 @@ index e4d7e11..6eba95c 100644
 +    bool in_layout_span{};
 +    std::uint32_t span_kind{};
 +    std::uint32_t span_id{};
- 
++
      RendererConfig config;
      SDL_Window *window{};
+     VkInstance instance{};
 @@ -1213,6 +1408,9 @@ struct VulkanRenderer::Impl {
      input::touch::Controls touch;
      bool touch_visible{};
@@ -5252,7 +5253,7 @@ index e4d7e11..6eba95c 100644
          return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
                                   impl_->scripted_keys[static_cast<std::size_t>(position)]);
      });
-@@ -6955,6 +7636,13 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6955,12 +7636,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
      // So do the on-screen controls.
      if (impl_->touch_visible) {
          pad.buttons |= impl_->touch.buttons();
@@ -5266,7 +5267,29 @@ index e4d7e11..6eba95c 100644
          // The on-screen stick moves in a circle too.
          const input::touch::Point touched = impl_->touch.stick();
          input::stick::Vector stick{touched.x, touched.y};
-@@ -7312,7 +8000,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+         if (player.stick_square) stick = input::stick::to_square(stick);
+         analog_x += input::stick::nub_offset(stick.x);
+         analog_y += input::stick::nub_offset(stick.y);
++        // The on-screen right stick turns the camera, as a controller's right stick does (the same two modes).
++        const input::touch::Point right = impl_->touch.right_stick();
++        if (right.x != 0.0f || right.y != 0.0f) {
++            const PadTuning right_tuning = pad_tuning();
++            const float rx = right_tuning.invert_x ? -right.x : right.x;
++            const float ry = right_tuning.invert_y ? -right.y : right.y;
++            if (player.right_stick == settings::RightStick::Camera) {
++                pad.right_x = static_cast<std::uint8_t>(std::clamp(0x80 + static_cast<int>(rx * 127.0f), 0, 255));
++                pad.right_y = static_cast<std::uint8_t>(std::clamp(0x80 + static_cast<int>(ry * 127.0f), 0, 255));
++            } else if (player.right_stick == settings::RightStick::DPad) {
++                if (rx < -0.5f) pad.buttons |= 0x0080u;
++                if (rx > 0.5f) pad.buttons |= 0x0020u;
++                if (ry < -0.5f) pad.buttons |= 0x0010u;
++                if (ry > 0.5f) pad.buttons |= 0x0040u;
++            }
++        }
+     }
+ 
+     pad.analog_x = static_cast<std::uint8_t>(std::clamp(0x80 + analog_x, 0, 255));
+@@ -7312,7 +8016,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
      const Impl::Guard guard(*impl_);
      scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
      if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
@@ -5279,7 +5302,7 @@ index e4d7e11..6eba95c 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7322,7 +8014,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+@@ -7322,7 +8030,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
  #if defined(__ANDROID__)
      fullscreen = true;
  #endif
@@ -5289,7 +5312,7 @@ index e4d7e11..6eba95c 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7813,6 +8506,13 @@ void VulkanRenderer::begin_display_list() {
+@@ -7813,6 +8522,13 @@ void VulkanRenderer::begin_display_list() {
      if (!impl_) return;
      const Impl::Guard guard(*impl_);
      ++impl_->display_lists;
@@ -5303,7 +5326,7 @@ index e4d7e11..6eba95c 100644
      impl_->list_texture_keys.clear();
      impl_->last_texture = nullptr;
  }
-@@ -7820,10 +8520,77 @@ void VulkanRenderer::begin_display_list() {
+@@ -7820,10 +8536,77 @@ void VulkanRenderer::begin_display_list() {
  void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
      Impl &impl = *impl_;
      if (!impl.ready) return;
@@ -5381,7 +5404,7 @@ index e4d7e11..6eba95c 100644
  }
  
  void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
-@@ -7832,6 +8599,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7832,6 +8615,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      const Impl::Guard guard(impl);
      const perf::SplitScope split(perf::Split::Draw);
      if (!impl.recording) begin_frame();
@@ -5411,7 +5434,7 @@ index e4d7e11..6eba95c 100644
      // Presents between flips fall due while the game draws, too: a busy
      // frame spends most of its time in here.
      if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
-@@ -7937,10 +8727,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7937,10 +8743,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
      // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
      // texture state it samples, to find the tiles a 2D screen is built from.
@@ -5433,7 +5456,7 @@ index e4d7e11..6eba95c 100644
  
      // Transformed triangles, strips and fans go straight into the vertex
      // buffer: each decoded vertex once, converted as it is written, and a
-@@ -8110,6 +8909,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8110,6 +8925,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
                                     static_cast<float>(call.texture.height));
          }
@@ -6052,7 +6075,7 @@ index e4d7e11..6eba95c 100644
      }
  
      if (trace && impl.draws < 400u) {
-@@ -9520,7 +10931,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+@@ -9520,7 +10947,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
  bool VulkanRenderer::Impl::interpolation_wanted() const {
      // Emulated time running ahead of real time already presents faster than
      // the game's own rate; the keyboard's held frame is shown as it is.
@@ -6909,7 +6932,7 @@ index 59780e2..9515514 100644
          msg_set_answer(question ? msg::kPressedNo : msg::kPressedYes, "MSGDIALOG_INSTANT");
          return;
 diff --git a/host/input/touch_controls.cpp b/host/input/touch_controls.cpp
-index 12d1a1c..b17df01 100644
+index 12d1a1c..4767f29 100644
 --- a/host/input/touch_controls.cpp
 +++ b/host/input/touch_controls.cpp
 @@ -26,7 +26,7 @@ bool Circle::contains(Point p, float slack) const {
@@ -6921,7 +6944,7 @@ index 12d1a1c..b17df01 100644
      Layout layout;
      layout.width = width;
      layout.height = height;
-@@ -48,11 +48,30 @@ Layout make_layout(float width, float height, Insets insets, float size, bool dp
+@@ -48,11 +48,23 @@ Layout make_layout(float width, float height, Insets insets, float size, bool dp
      const float shoulder = face * 1.05f;
      c[static_cast<std::size_t>(Control::L)] = {{left + shoulder * 1.6f, top + shoulder * 1.4f}, shoulder};
      c[static_cast<std::size_t>(Control::R)] = {{right - shoulder * 1.6f, top + shoulder * 1.4f}, shoulder};
@@ -6933,26 +6956,19 @@ index 12d1a1c..b17df01 100644
      c[static_cast<std::size_t>(Control::Select)] = {{middle - small * 3.0f, top + small * 1.6f}, small};
      c[static_cast<std::size_t>(Control::Menu)] = {{middle, top + small * 1.6f}, small};
      c[static_cast<std::size_t>(Control::Start)] = {{middle + small * 3.0f, top + small * 1.6f}, small};
-+    // The profile's combo buttons: three to a row, two rows, the last column next to the square.
++    // The profile's combo buttons: a column on the right edge, above the triangle, the first one nearest to it.
 +    layout.combo_count = std::min(combos, kMaxCombos);
 +    const float combo_radius = face * 0.95f;
 +    const float combo_step = combo_radius * 2.25f;
-+    const float combo_right = diamond.x - spread - face - combo_radius * 1.3f;
-+    // Up to three go in one row, level with the face buttons; more make a second row.
-+    const bool two_rows = layout.combo_count > 3u;
-+    const std::size_t first_row = two_rows ? 3u : layout.combo_count;
-+    for (std::size_t i = 0; i < layout.combo_count; ++i) {
-+        const std::size_t in_row = i < first_row ? i : i - first_row;
-+        const std::size_t row_size = i < first_row ? first_row : layout.combo_count - first_row;
-+        const float column = static_cast<float>(row_size - 1u - in_row);  // 0 is the one next to the square
-+        const float row = !two_rows ? 0.0f : (i < first_row ? -1.0f : 1.0f);
++    const Circle &triangle = c[static_cast<std::size_t>(Control::Triangle)];
++    const float combo_x = right - combo_radius * 1.1f;
++    for (std::size_t i = 0; i < layout.combo_count; ++i)
 +        c[static_cast<std::size_t>(Control::Combo0) + i] = {
-+            {combo_right - column * combo_step, diamond.y + row * combo_radius * 1.2f}, combo_radius};
-+    }
++            {combo_x, triangle.centre.y - face - combo_radius * 1.5f - static_cast<float>(i) * combo_step}, combo_radius};
      // The D-pad: at the left edge, half way down, clear of L above it.
      const float reach = face * 2.3f;
      layout.dpad_shown = dpad;
-@@ -93,7 +112,7 @@ std::optional<Control> Controls::control_at(Point at, bool face_only) const {
+@@ -93,7 +105,7 @@ std::optional<Control> Controls::control_at(Point at, bool face_only) const {
      float best_distance = 0.0f;
      for (std::size_t i = 0; i <= last; ++i) {
          const Circle &circle = layout_.controls[i];
@@ -6961,7 +6977,57 @@ index 12d1a1c..b17df01 100644
          const float distance = std::hypot(at.x - circle.centre.x, at.y - circle.centre.y) / circle.radius;
          if (!best || distance < best_distance) {
              best = static_cast<Control>(i);
-@@ -195,12 +214,25 @@ std::uint16_t Controls::buttons() const {
+@@ -129,8 +141,9 @@ void Controls::finger_down(std::uint64_t id, Point at) {
+     } else if (at.x < layout_.stick_split && !stick_.active) {
+         slot->role = Role::Stick;
+         stick_ = {true, at, at};
+-    } else if (at.x >= layout_.stick_split) {
+-        slot->role = Role::Camera;
++    } else if (at.x >= layout_.stick_split && !right_stick_.active) {
++        slot->role = Role::RightStick;
++        right_stick_ = {true, at, at};
+     }
+ }
+ 
+@@ -167,10 +180,19 @@ void Controls::finger_move(std::uint64_t id, Point at) {
+         }
+         break;
+     }
+-    case Role::Camera:
+-        camera_drag_.x += at.x - finger->last.x;
+-        camera_drag_.y += at.y - finger->last.y;
++    case Role::RightStick: {
++        right_stick_.thumb = at;
++        // Like the left stick: beyond its reach it follows the thumb.
++        const float dx = at.x - right_stick_.origin.x;
++        const float dy = at.y - right_stick_.origin.y;
++        const float length = std::hypot(dx, dy);
++        if (length > layout_.stick_radius && length > 0.0f) {
++            const float excess = (length - layout_.stick_radius) / length;
++            right_stick_.origin.x += dx * excess;
++            right_stick_.origin.y += dy * excess;
++        }
+         break;
++    }
+     case Role::DPad:  // the direction follows the finger; see buttons()
+     case Role::None: break;
+     }
+@@ -181,12 +203,14 @@ void Controls::finger_up(std::uint64_t id) {
+     Finger *finger = find(id);
+     if (finger == nullptr) return;
+     if (finger->role == Role::Stick) stick_ = {};
++    if (finger->role == Role::RightStick) right_stick_ = {};
+     *finger = Finger{};
+ }
+ 
+ void Controls::release_all() {
+     fingers_ = {};
+     stick_ = {};
++    right_stick_ = {};
+     camera_drag_ = {};
+     menu_tapped_ = false;
+ }
+@@ -195,12 +219,25 @@ std::uint16_t Controls::buttons() const {
      std::uint16_t buttons = 0u;
      for (const Finger &finger : fingers_) {
          if (!finger.used) continue;
@@ -6988,8 +7054,21 @@ index 12d1a1c..b17df01 100644
  std::uint16_t Controls::dpad_held_by(const Finger &finger) const {
      return dpad_buttons({finger.last.x - layout_.dpad.centre.x, finger.last.y - layout_.dpad.centre.y},
                          layout_.dpad.radius);
+@@ -231,6 +268,12 @@ Point Controls::stick() const {
+                             layout_.stick_radius);
+ }
+ 
++Point Controls::right_stick() const {
++    if (!right_stick_.active) return {};
++    return stick_deflection({right_stick_.thumb.x - right_stick_.origin.x, right_stick_.thumb.y - right_stick_.origin.y},
++                            layout_.stick_radius);
++}
++
+ Point Controls::take_camera_drag() {
+     const Point drag = camera_drag_;
+     camera_drag_ = {};
 diff --git a/host/input/touch_controls.hpp b/host/input/touch_controls.hpp
-index 293be14..933e7f5 100644
+index 293be14..f5d875e 100644
 --- a/host/input/touch_controls.hpp
 +++ b/host/input/touch_controls.hpp
 @@ -21,7 +21,12 @@
@@ -7026,7 +7105,7 @@ index 293be14..933e7f5 100644
  
  // The PSP D-pad bits (up 0x10, right 0x20, down 0x40, left 0x80) for a finger
  // at `offset` from the D-pad's centre: one direction within 22.5 degrees of
-@@ -87,6 +98,8 @@ public:
+@@ -87,9 +98,15 @@ public:
  
      // PSP buttons held now.
      [[nodiscard]] std::uint16_t buttons() const;
@@ -7035,7 +7114,23 @@ index 293be14..933e7f5 100644
      // The stick, each axis -1..1, right and down positive.
      [[nodiscard]] Point stick() const;
      [[nodiscard]] const Stick &stick_state() const { return stick_; }
-@@ -113,6 +126,7 @@ private:
++    // The right stick, floating like the left: it appears where a thumb lands on an empty place of the right half. Each axis -1..1,
++    // right and down positive. It turns the camera.
++    [[nodiscard]] Point right_stick() const;
++    [[nodiscard]] const Stick &right_stick_state() const { return right_stick_; }
+     // Camera drag since the last take, in pixels.
+     [[nodiscard]] Point take_camera_drag();
+     // The menu button was tapped since the last take.
+@@ -100,7 +117,7 @@ public:
+     [[nodiscard]] bool any_finger() const;
+ 
+ private:
+-    enum class Role : std::uint8_t { None, Stick, Control, Camera, DPad };
++    enum class Role : std::uint8_t { None, Stick, Control, RightStick, DPad };
+     struct Finger {
+         std::uint64_t id{};
+         bool used{};
+@@ -113,10 +130,12 @@ private:
      [[nodiscard]] std::optional<Control> control_at(Point at, bool face_only) const;
      Finger *find(std::uint64_t id);
      [[nodiscard]] std::uint16_t dpad_held_by(const Finger &finger) const;
@@ -7043,6 +7138,11 @@ index 293be14..933e7f5 100644
  
      Layout layout_{};
      std::array<Finger, kFingers> fingers_{};
+     Stick stick_{};
++    Stick right_stick_{};
+     Point camera_drag_{};
+     bool menu_tapped_{};
+ };
 diff --git a/host/install/executable_preparation.cpp b/host/install/executable_preparation.cpp
 index d06b605..fd24685 100644
 --- a/host/install/executable_preparation.cpp
@@ -11317,7 +11417,7 @@ index bdbe823..5866ef9 100644
      if (!settings.texture_pack_folder.empty() &&
          button_row("Stop using the pack folder",
 diff --git a/host/ui/touch_overlay.cpp b/host/ui/touch_overlay.cpp
-index 4c0ca74..d3d70e6 100644
+index 4c0ca74..1f1952e 100644
 --- a/host/ui/touch_overlay.cpp
 +++ b/host/ui/touch_overlay.cpp
 @@ -43,6 +43,8 @@ const char *label(Control control) {
@@ -11362,6 +11462,31 @@ index 4c0ca74..d3d70e6 100644
              const ImVec2 extent = font->CalcTextSizeA(size, 1e9f, 0.0f, text);
              list->AddText(font, size, {c.x - extent.x * 0.5f, c.y - extent.y * 0.5f}, ink, text);
          } else {
+@@ -113,15 +129,18 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
+             list->AddTriangleFilled(tip, side1, side2, colour(255, 255, 255, base * (on ? 1.0f : 0.8f)));
+         }
+     }
+-    // The floating stick while the thumb is down: its reach and the knob.
+-    const input::touch::Stick &stick = controls.stick_state();
+-    if (stick.active) {
+-        const ImVec2 origin{stick.origin.x, stick.origin.y};
++    // The floating sticks while a thumb is down: the reach and the knob. The left one moves the character, the right one turns the camera.
++    const struct {
++        const input::touch::Stick &stick;
++        input::touch::Point push;
++    } sticks[] = {{controls.stick_state(), controls.stick()}, {controls.right_stick_state(), controls.right_stick()}};
++    for (const auto &item : sticks) {
++        if (!item.stick.active) continue;
++        const ImVec2 origin{item.stick.origin.x, item.stick.origin.y};
+         list->AddCircleFilled(origin, layout.stick_radius, colour(0, 0, 0, base * 0.3f));
+         list->AddCircle(origin, layout.stick_radius, colour(255, 255, 255, base * 0.7f), 0,
+                         std::max(1.5f, layout.stick_radius * 0.04f));
+-        const input::touch::Point push = controls.stick();
+-        const ImVec2 knob{origin.x + push.x * layout.stick_radius, origin.y + push.y * layout.stick_radius};
++        const ImVec2 knob{origin.x + item.push.x * layout.stick_radius, origin.y + item.push.y * layout.stick_radius};
+         list->AddCircleFilled(knob, layout.stick_radius * 0.45f, colour(255, 255, 255, base * 0.6f));
+     }
+ }
 diff --git a/host/ui/ui.hpp b/host/ui/ui.hpp
 index 20ce284..804e31d 100644
 --- a/host/ui/ui.hpp
