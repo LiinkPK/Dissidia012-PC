@@ -20,16 +20,19 @@
 
 #include "d012_hle.hpp"
 #include "d012_icon.hpp"
-#include "../../d012_vk/d012_battle_shortcuts.hpp"
 #include "../../d012_vk/d012_boot_skip.hpp"
 #include "../../d012_vk/d012_ability_trace.hpp"
 #include "../../d012_vk/d012_discord.hpp"
 #include "../../d012_vk/d012_netplay_trace.hpp"
+#include "../../d012_vk/d012_battle_shortcuts.hpp"
 
 // The one battle move on a touch screen that has no button on a controller: EX Mode, R + square (a controller's L3). Dodge and dash are
 // L2 and R2, and the assists and the summon are the D-pad in battle (d012_camera.cpp), as on a controller.
 constexpr portablekit::GameProfile::TouchCombo kTouchCombos[] = {
-    {"EX Mode", 0x0200u | 0x8000u},
+    {"EX Mode", 0x0200u | 0x8000u},   // R + square
+    {"Summon", 0x0200u | 0x2000u},     // R + circle
+    {"BRV Assist", 0x0100u | 0x2000u}, // L + circle
+    {"HP Assist", 0x0100u | 0x8000u},  // L + square
 };
 
 // The downloaded 100% saves equip two Cloud abilities (low ids 0x13 and 0x14) that have no row in the game's ability table (Cloud's end
@@ -112,7 +115,7 @@ void register_hle(HleRegistrar &hle) {
     d012_ability_trace::install(hle);
     d012_netplay_trace::install(hle);
     d012_boot_skip::install(hle);
-    d012_battle_shortcuts::install(hle);
+    d012_battle_shortcuts::install(hle);  // the battle state in the log; the pad is not changed
 }
 
 // One overlay window. The game loads OVL_MENU_APP.ELF, OVL_BATTLE_APP.ELF or OVL_EXTRA_APP.ELF there; each is

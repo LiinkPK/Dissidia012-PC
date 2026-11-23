@@ -1,4 +1,4 @@
-From b77c9ac0d934f45b967c4d1165a70b99cd054918 Mon Sep 17 00:00:00 2001
+From fc41f337bdce23d4531b82947c4299e72f072a87 Mon Sep 17 00:00:00 2001
 From: d012 setup <setup@localhost>
 Date: Sun, 22 Nov 2026 15:23:23 +0100
 Subject: [PATCH] Dissidia 012 port changes to PortableKit
@@ -47,7 +47,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/gpu/texture_pack.hpp                     |   61 +-
  host/gpu/texture_pack_import.cpp              |   61 +-
  host/gpu/texture_pack_import.hpp              |    4 +
- host/gpu/vulkan_renderer.cpp                  | 1489 +++++++++++++++-
+ host/gpu/vulkan_renderer.cpp                  | 1475 +++++++++++++++-
  host/gpu/vulkan_renderer.hpp                  |   35 +
  host/hle/hle_adhoc.cpp                        |  121 +-
  host/hle/hle_adhoc_matching.cpp               |  124 ++
@@ -60,9 +60,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/hle/hle_savedata.cpp                     |    8 +-
  host/hle/hle_system.cpp                       |    1 +
  host/hle/hle_utility.cpp                      |    4 +
- host/input/bindings.cpp                       |   12 +-
- host/input/bindings.hpp                       |    5 +
- host/input/touch_controls.cpp                 |   59 +-
+ host/input/touch_controls.cpp                 |   60 +-
  host/input/touch_controls.hpp                 |   25 +-
  host/install/executable_preparation.cpp       |    4 +-
  host/install/installer.cpp                    |   37 +-
@@ -92,7 +90,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  host/ui/font_menu.cpp                         |  103 +-
  host/ui/layer.cpp                             |    7 +-
  host/ui/layer.hpp                             |    2 +-
- host/ui/menu.cpp                              | 1223 ++++++++++++--
+ host/ui/menu.cpp                              | 1195 +++++++++++--
  host/ui/save_list_dialog.cpp                  |   55 +
  host/ui/save_screen.cpp                       |   33 +-
  host/ui/save_screen.hpp                       |    3 +
@@ -115,7 +113,7 @@ the online relay and rooms, the fixed settings, Game speed, the boot skip's fast
  third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
  third_party/bc7enc16/bc7enc16.h               |   77 +
  tools/adhoc_relay_main.cpp                    |   62 +
- 109 files changed, 11179 insertions(+), 385 deletions(-)
+ 107 files changed, 11122 insertions(+), 384 deletions(-)
  create mode 100644 .d012_patched
  create mode 100644 host/adhoc/auth.hpp
  create mode 100644 host/adhoc/matching.cpp
@@ -4240,7 +4238,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..b329ceb 100644
+index e4d7e11..50f645a 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -5161,7 +5159,7 @@ index e4d7e11..b329ceb 100644
          impl_->handle_touch(event);
          if (event.type == SDL_EVENT_MOUSE_MOTION && impl_->mouse_captured && event.motion.which != SDL_TOUCH_MOUSEID &&
              (!impl_->scripted_input || event.motion.which == kScriptedMouse)) {
-@@ -6880,9 +7484,96 @@ bool VulkanRenderer::pump_events() {
+@@ -6880,9 +7484,82 @@ bool VulkanRenderer::pump_events() {
          if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
              impl_->mouse_buttons &= ~(1u << event.button.button);
          if (impl_->event_hook && impl_->event_hook(event)) continue;
@@ -5210,24 +5208,10 @@ index e4d7e11..b329ceb 100644
 +#endif
          if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
              impl_->overlay_visible = !impl_->overlay_visible;
-+        // Speed control (Controls menu): one remappable key each for Normal, 2x, 4x and 8x (numpad 0-3 by default; none when
-+        // cleared). Not online (the speed is locked there) and not while a text field is being typed in.
-+        const bool key_press = event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat;
-+        const bool mouse_press = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-+        if ((key_press || mouse_press) && !SDL_TextInputActive(impl_->window) && !adhoc_online_mode()) {
-+            const input::Binding pressed = key_press ? input::key(static_cast<std::uint16_t>(event.key.scancode))
-+                                                     : input::mouse_button(event.button.button);
-+            const auto &bound = settings::current().bindings;
-+            const auto is_bound = [&](input::Action action) {
-+                for (const input::Binding b : bound[static_cast<std::size_t>(action)])
-+                    if (b != input::kNone && b == pressed) return true;
-+                return false;
-+            };
-+            const std::uint32_t wanted = is_bound(input::Action::SpeedNormal) ? 1u
-+                                         : is_bound(input::Action::Speed2x)   ? 2u
-+                                         : is_bound(input::Action::Speed4x)   ? 4u
-+                                         : is_bound(input::Action::Speed8x)   ? 8u
-+                                                                              : 0u;
++        // Numpad 1, 2 and 3: Game speed 2x, 4x and 8x; numpad 0 goes back to Normal (the same key again does nothing). Not online (the speed is locked there)
++        // and not while a text field is being typed in.
++        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && !SDL_TextInputActive(impl_->window) && !adhoc_online_mode()) {
++            const std::uint32_t wanted = event.key.key == SDLK_KP_0 ? 1u : event.key.key == SDLK_KP_1 ? 2u : event.key.key == SDLK_KP_2 ? 4u : event.key.key == SDLK_KP_3 ? 8u : 0u;
 +            if (wanted != 0u) {
 +                settings::Settings &s = settings::current();
 +                s.unthrottled = false;
@@ -5258,7 +5242,7 @@ index e4d7e11..b329ceb 100644
      // Only sample while the window has focus: a key still down when focus is
      // lost stays down in SDL's snapshot, which the guest sees as a held
      // direction it can never release.
-@@ -6919,6 +7610,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6919,6 +7596,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
          if (const int button = input::mouse_button_of(binding))
              return impl_->mouse_captured && (impl_->mouse_buttons & (1u << button)) != 0u;
          const int position = input::key_position(binding);
@@ -5269,7 +5253,7 @@ index e4d7e11..b329ceb 100644
          return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
                                   impl_->scripted_keys[static_cast<std::size_t>(position)]);
      });
-@@ -6955,12 +7650,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6955,12 +7636,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
      // So do the on-screen controls.
      if (impl_->touch_visible) {
          pad.buttons |= impl_->touch.buttons();
@@ -5305,7 +5289,7 @@ index e4d7e11..b329ceb 100644
      }
  
      pad.analog_x = static_cast<std::uint8_t>(std::clamp(0x80 + analog_x, 0, 255));
-@@ -7312,7 +8030,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+@@ -7312,7 +8016,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
      const Impl::Guard guard(*impl_);
      scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
      if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
@@ -5318,7 +5302,7 @@ index e4d7e11..b329ceb 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7322,7 +8044,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+@@ -7322,7 +8030,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
  #if defined(__ANDROID__)
      fullscreen = true;
  #endif
@@ -5328,7 +5312,7 @@ index e4d7e11..b329ceb 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7813,6 +8536,13 @@ void VulkanRenderer::begin_display_list() {
+@@ -7813,6 +8522,13 @@ void VulkanRenderer::begin_display_list() {
      if (!impl_) return;
      const Impl::Guard guard(*impl_);
      ++impl_->display_lists;
@@ -5342,7 +5326,7 @@ index e4d7e11..b329ceb 100644
      impl_->list_texture_keys.clear();
      impl_->last_texture = nullptr;
  }
-@@ -7820,10 +8550,77 @@ void VulkanRenderer::begin_display_list() {
+@@ -7820,10 +8536,77 @@ void VulkanRenderer::begin_display_list() {
  void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
      Impl &impl = *impl_;
      if (!impl.ready) return;
@@ -5420,7 +5404,7 @@ index e4d7e11..b329ceb 100644
  }
  
  void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
-@@ -7832,6 +8629,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7832,6 +8615,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      const Impl::Guard guard(impl);
      const perf::SplitScope split(perf::Split::Draw);
      if (!impl.recording) begin_frame();
@@ -5450,7 +5434,7 @@ index e4d7e11..b329ceb 100644
      // Presents between flips fall due while the game draws, too: a busy
      // frame spends most of its time in here.
      if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
-@@ -7937,10 +8757,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7937,10 +8743,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
      // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
      // texture state it samples, to find the tiles a 2D screen is built from.
@@ -5472,7 +5456,7 @@ index e4d7e11..b329ceb 100644
  
      // Transformed triangles, strips and fans go straight into the vertex
      // buffer: each decoded vertex once, converted as it is written, and a
-@@ -8110,6 +8939,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8110,6 +8925,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
                                     static_cast<float>(call.texture.height));
          }
@@ -6091,7 +6075,7 @@ index e4d7e11..b329ceb 100644
      }
  
      if (trace && impl.draws < 400u) {
-@@ -9520,7 +10961,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+@@ -9520,7 +10947,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
  bool VulkanRenderer::Impl::interpolation_wanted() const {
      // Emulated time running ahead of real time already presents faster than
      // the game's own rate; the keyboard's held frame is shown as it is.
@@ -6947,73 +6931,8 @@ index 59780e2..9515514 100644
      if (msgdialog_instant()) {
          msg_set_answer(question ? msg::kPressedNo : msg::kPressedYes, "MSGDIALOG_INSTANT");
          return;
-diff --git a/host/input/bindings.cpp b/host/input/bindings.cpp
-index 91cd8d8..e105f52 100644
---- a/host/input/bindings.cpp
-+++ b/host/input/bindings.cpp
-@@ -15,6 +15,7 @@ constexpr std::uint16_t A = 4, D = 7, E = 8, F = 9, I = 12, J = 13, K = 14, L =
- constexpr std::uint16_t X = 27, Z = 29;
- constexpr std::uint16_t One = 30, Three = 32;
- constexpr std::uint16_t Return = 40, Backspace = 42, Tab = 43, Space = 44;
-+constexpr std::uint16_t Keypad1 = 89, Keypad2 = 90, Keypad3 = 91, Keypad0 = 98;
- constexpr std::uint16_t Right = 79, Left = 80, Down = 81, Up = 82;
- constexpr std::uint16_t LeftShift = 225, RightShift = 229;
- } // namespace hid
-@@ -57,12 +58,13 @@ constexpr ActionInfo kInfo[kActions] = {
-     {"camera_down", "Camera down"}, {"camera_right", "Camera right"}, {"jump", "Jump (L and R together)"},
-     {"l2", "L2"},                  {"r2", "R2"},                   {"l3", "L3 (left stick click)"},
-     {"r3", "R3 (right stick click)"},
-+    {"speed_normal", "Normal speed"}, {"speed_2x", "2x speed"}, {"speed_4x", "4x speed"}, {"speed_8x", "8x speed"},
- };
- 
- // SceCtrlButtons for the actions that are buttons.
- constexpr std::uint32_t kButtonBits[kActions] = {
-     0u, 0u, 0u, 0u, 0x1000u, 0x2000u, 0x4000u, 0x8000u, 0x0100u, 0x0200u, 0x0008u, 0x0001u,
--    0x0010u, 0x0080u, 0x0040u, 0x0020u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
-+    0x0010u, 0x0080u, 0x0040u, 0x0020u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
- };
- static_assert(sizeof kButtonBits / sizeof kButtonBits[0] == kActions);
- static_assert(sizeof kInfo / sizeof kInfo[0] == kActions);
-@@ -99,6 +101,10 @@ Bindings make_default() {
-     // A port that reads L2 and R2: the number keys above L (Q) and □ (E).
-     set(Action::L2, key(hid::One));
-     set(Action::R2, key(hid::Three));
-+    set(Action::SpeedNormal, key(hid::Keypad0));
-+    set(Action::Speed2x, key(hid::Keypad1));
-+    set(Action::Speed4x, key(hid::Keypad2));
-+    set(Action::Speed8x, key(hid::Keypad3));
-     return b;
- }
- 
-@@ -125,6 +131,10 @@ Bindings make_classic() {
-     set(Action::Right, key(hid::Right));
-     set(Action::L2, key(hid::One));
-     set(Action::R2, key(hid::Three));
-+    set(Action::SpeedNormal, key(hid::Keypad0));
-+    set(Action::Speed2x, key(hid::Keypad1));
-+    set(Action::Speed4x, key(hid::Keypad2));
-+    set(Action::Speed8x, key(hid::Keypad3));
-     return b;
- }
- 
-diff --git a/host/input/bindings.hpp b/host/input/bindings.hpp
-index 1588863..dc5e299 100644
---- a/host/input/bindings.hpp
-+++ b/host/input/bindings.hpp
-@@ -47,6 +47,11 @@ enum class Action : std::uint8_t {
-     R2,
-     L3,
-     R3,
-+    // Speed control: set the Game speed to Normal, 2x, 4x or 8x. They press no PSP button; the renderer reads them.
-+    SpeedNormal,
-+    Speed2x,
-+    Speed4x,
-+    Speed8x,
-     Count
- };
- inline constexpr std::size_t kActions = static_cast<std::size_t>(Action::Count);
 diff --git a/host/input/touch_controls.cpp b/host/input/touch_controls.cpp
-index 12d1a1c..4767f29 100644
+index 12d1a1c..75b9ec0 100644
 --- a/host/input/touch_controls.cpp
 +++ b/host/input/touch_controls.cpp
 @@ -26,7 +26,7 @@ bool Circle::contains(Point p, float slack) const {
@@ -7025,7 +6944,7 @@ index 12d1a1c..4767f29 100644
      Layout layout;
      layout.width = width;
      layout.height = height;
-@@ -48,11 +48,23 @@ Layout make_layout(float width, float height, Insets insets, float size, bool dp
+@@ -48,11 +48,26 @@ Layout make_layout(float width, float height, Insets insets, float size, bool dp
      const float shoulder = face * 1.05f;
      c[static_cast<std::size_t>(Control::L)] = {{left + shoulder * 1.6f, top + shoulder * 1.4f}, shoulder};
      c[static_cast<std::size_t>(Control::R)] = {{right - shoulder * 1.6f, top + shoulder * 1.4f}, shoulder};
@@ -7043,13 +6962,16 @@ index 12d1a1c..4767f29 100644
 +    const float combo_step = combo_radius * 2.25f;
 +    const Circle &triangle = c[static_cast<std::size_t>(Control::Triangle)];
 +    const float combo_x = right - combo_radius * 1.1f;
++    // Two to a row, the first at the right and the second to its left; the next pair is on top of them.
 +    for (std::size_t i = 0; i < layout.combo_count; ++i)
 +        c[static_cast<std::size_t>(Control::Combo0) + i] = {
-+            {combo_x, triangle.centre.y - face - combo_radius * 1.5f - static_cast<float>(i) * combo_step}, combo_radius};
++            {combo_x - static_cast<float>(i % 2) * combo_step,
++             triangle.centre.y - face - combo_radius * 1.5f - static_cast<float>(i / 2) * combo_step},
++            combo_radius};
      // The D-pad: at the left edge, half way down, clear of L above it.
      const float reach = face * 2.3f;
      layout.dpad_shown = dpad;
-@@ -93,7 +105,7 @@ std::optional<Control> Controls::control_at(Point at, bool face_only) const {
+@@ -93,7 +108,7 @@ std::optional<Control> Controls::control_at(Point at, bool face_only) const {
      float best_distance = 0.0f;
      for (std::size_t i = 0; i <= last; ++i) {
          const Circle &circle = layout_.controls[i];
@@ -7058,15 +6980,12 @@ index 12d1a1c..4767f29 100644
          const float distance = std::hypot(at.x - circle.centre.x, at.y - circle.centre.y) / circle.radius;
          if (!best || distance < best_distance) {
              best = static_cast<Control>(i);
-@@ -129,8 +141,9 @@ void Controls::finger_down(std::uint64_t id, Point at) {
+@@ -129,8 +144,6 @@ void Controls::finger_down(std::uint64_t id, Point at) {
      } else if (at.x < layout_.stick_split && !stick_.active) {
          slot->role = Role::Stick;
          stick_ = {true, at, at};
 -    } else if (at.x >= layout_.stick_split) {
 -        slot->role = Role::Camera;
-+    } else if (at.x >= layout_.stick_split && !right_stick_.active) {
-+        slot->role = Role::RightStick;
-+        right_stick_ = {true, at, at};
      }
  }
  
@@ -7108,7 +7027,7 @@ index 12d1a1c..4767f29 100644
      camera_drag_ = {};
      menu_tapped_ = false;
  }
-@@ -195,12 +219,25 @@ std::uint16_t Controls::buttons() const {
+@@ -195,12 +219,26 @@ std::uint16_t Controls::buttons() const {
      std::uint16_t buttons = 0u;
      for (const Finger &finger : fingers_) {
          if (!finger.used) continue;
@@ -7121,12 +7040,13 @@ index 12d1a1c..4767f29 100644
  
 +std::uint32_t Controls::extra_buttons() const {
 +    std::uint32_t extra = 0u;
-+    if (held(Control::L2)) extra |= 1u << 0u;
-+    if (held(Control::R2)) extra |= 1u << 1u;
-+    return extra;
++    return extra;  // the on-screen L2 and R2 press their buttons themselves (mask_of)
 +}
 +
 +std::uint16_t Controls::mask_of(Control control) const {
++    // The on-screen L2 is a dodge (R + cross) and R2 a dash (R + triangle): the moves that take two PSP buttons.
++    if (control == Control::L2) return 0x0200u | 0x4000u;
++    if (control == Control::R2) return 0x0200u | 0x1000u;
 +    if (control < Control::Combo0) return psp_button(control);
 +    const std::size_t index = static_cast<std::size_t>(control) - static_cast<std::size_t>(Control::Combo0);
 +    return index < layout_.combo_count ? layout_.combo_buttons[index] : 0u;
@@ -7135,7 +7055,7 @@ index 12d1a1c..4767f29 100644
  std::uint16_t Controls::dpad_held_by(const Finger &finger) const {
      return dpad_buttons({finger.last.x - layout_.dpad.centre.x, finger.last.y - layout_.dpad.centre.y},
                          layout_.dpad.radius);
-@@ -231,6 +268,12 @@ Point Controls::stick() const {
+@@ -231,6 +269,12 @@ Point Controls::stick() const {
                              layout_.stick_radius);
  }
  
@@ -9566,7 +9486,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..ba0339e 100644
+index 1b830d9..2eae38d 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -9623,19 +9543,7 @@ index 1b830d9..ba0339e 100644
  #include <optional>
  #include <string>
  #include <utility>
-@@ -60,6 +75,11 @@
- namespace portablekit::ui {
- namespace {
- 
-+bool is_speed_action(input::Action action) {
-+    return action == input::Action::SpeedNormal || action == input::Action::Speed2x ||
-+           action == input::Action::Speed4x || action == input::Action::Speed8x;
-+}
-+
- using Clock = std::chrono::steady_clock;
- 
- // Seconds the "how to open the menu" hint stays up at start, until the menu
-@@ -96,34 +116,386 @@ std::vector<void (*)()> &port_rows() {
+@@ -96,34 +111,386 @@ std::vector<void (*)()> &port_rows() {
      return list;
  }
  
@@ -9930,7 +9838,7 @@ index 1b830d9..ba0339e 100644
 +        }
 +    }
 +}
-+
+ 
 +// Reads the file again when it is new or has changed on disk.
 +#if defined(PORTABLEKIT_ANDROID_APP)
 +// The APK carries no memory stick folder, so the cheat file is fetched, once per run, from the profile's address when it is missing or
@@ -9955,7 +9863,7 @@ index 1b830d9..ba0339e 100644
 +    }).detach();
 +}
 +#endif
- 
++
 +void load_cheats() {
 +    CheatFile &f = cheat_file();
 +    std::error_code ec;
@@ -10035,7 +9943,7 @@ index 1b830d9..ba0339e 100644
  
      void video();
      void audio();
-@@ -131,7 +503,10 @@ private:
+@@ -131,7 +498,10 @@ private:
      void tilt_controls();
      void network();
      void system();
@@ -10046,7 +9954,7 @@ index 1b830d9..ba0339e 100644
  
      gpu::VulkanRenderer &renderer() { return Layer::get().renderer(); }
  
-@@ -144,7 +519,9 @@ private:
+@@ -144,7 +514,9 @@ private:
      bool back_{};  // the back button was pressed this frame
      Confirm confirm_{Confirm::None};
      bool confirm_opened_{};  // the confirmation was on screen last frame
@@ -10056,7 +9964,7 @@ index 1b830d9..ba0339e 100644
  };
  
  bool Menu::frame() {
-@@ -161,16 +538,53 @@ bool Menu::frame() {
+@@ -161,16 +533,53 @@ bool Menu::frame() {
      // The pad's back button closes the menu too, once nothing is being edited.
      const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
      const bool pad_back = ImGui::IsKeyPressed(cancel, false);
@@ -10114,7 +10022,7 @@ index 1b830d9..ba0339e 100644
      first_frame_ = false;
      begin_content();
      if (switched) {
-@@ -182,10 +596,12 @@ bool Menu::frame() {
+@@ -182,10 +591,12 @@ bool Menu::frame() {
      case 1: audio(); break;
      case 2: controls(); break;
      case 3: network(); break;
@@ -10128,7 +10036,7 @@ index 1b830d9..ba0339e 100644
          hints({{Control::Confirm, "Select"}, {Control::Back, "Back"}, {Control::Tabs, "Section"},
                 {Control::Menu, "Resume"}});
      else
-@@ -198,11 +614,16 @@ bool Menu::frame() {
+@@ -198,11 +609,16 @@ bool Menu::frame() {
  
      if (confirm_ != Confirm::None) {
          if ((back || pad_back) && confirm_opened_) confirm_ = Confirm::None;
@@ -10145,7 +10053,7 @@ index 1b830d9..ba0339e 100644
      was_editing_ = ImGui::IsAnyItemActive();
      return !close_;
  }
-@@ -231,6 +652,29 @@ void Menu::video() {
+@@ -231,6 +647,29 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -10175,7 +10083,7 @@ index 1b830d9..ba0339e 100644
  #if !defined(__ANDROID__)
      // A phone is always full screen: no window to size.
      {
-@@ -258,6 +702,10 @@ void Menu::video() {
+@@ -258,6 +697,10 @@ void Menu::video() {
          }
      }
  #endif
@@ -10186,7 +10094,7 @@ index 1b830d9..ba0339e 100644
      {
          static const char *const kAspects[] = {"Original", "Stretch", "Fill"};
          // Fill is offered only to a game that can widen its own view.
-@@ -289,26 +737,6 @@ void Menu::video() {
+@@ -289,26 +732,6 @@ void Menu::video() {
          renderer().set_sharp_textures(s.sharp_textures);
          settings::save();
      }
@@ -10213,7 +10121,7 @@ index 1b830d9..ba0339e 100644
      }
      texture_pack_rows();
      section("Timing");
-@@ -378,7 +806,9 @@ void Menu::video() {
+@@ -378,7 +801,9 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -10224,7 +10132,7 @@ index 1b830d9..ba0339e 100644
          RowOptions o = options_for("video.frame_rate_auto",
                                     "On lowers the frame rate by itself when presenting that often would slow the "
                                     "game. Off keeps the chosen rate, and the game may then run below full speed.");
-@@ -389,13 +819,23 @@ void Menu::video() {
+@@ -389,13 +814,23 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -10254,7 +10162,7 @@ index 1b830d9..ba0339e 100644
          RowOptions o = options_for("video.fast_loading",
                                     "Lets the game run ahead of real time while it loads and is silent, so loads "
                                     "take as long as the computer needs. Never during play, sound, movies or "
-@@ -579,7 +1019,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
+@@ -579,7 +1014,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
  }
  
  // Host names: printable ASCII without spaces.
@@ -10262,7 +10170,7 @@ index 1b830d9..ba0339e 100644
  
  // What an address to join may hold: a host name or IPv4 address, a colon and
  // a port, or an IPv6 address in brackets.
-@@ -588,6 +1027,17 @@ bool address_character(char32_t c) {
+@@ -588,6 +1022,17 @@ bool address_character(char32_t c) {
             c == U':' || c == U'-' || c == U'[' || c == U']';
  }
  
@@ -10280,7 +10188,7 @@ index 1b830d9..ba0339e 100644
  // Only for a game that tilts (GameProfile::tilt).
  void Menu::tilt_controls() {
      const TiltControls *tilt = portablekit::game().tilt;
-@@ -724,6 +1174,12 @@ void Menu::controls() {
+@@ -724,6 +1169,12 @@ void Menu::controls() {
          s.confirm_south = !s.confirm_south;
          settings::save();
      }
@@ -10293,63 +10201,15 @@ index 1b830d9..ba0339e 100644
      int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
      if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
                     options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
-@@ -915,8 +1371,14 @@ void Menu::controls() {
-     if (binding_) {
-         if (const auto pressed = layer.take_captured_binding()) {
-             if (*pressed != input::kNone) {
-+                // A speed has exactly one key: the new one replaces the old, never joins it.
-+                if (is_speed_action(*binding_)) s.bindings[static_cast<std::size_t>(*binding_)] = {};
-                 input::assign(s.bindings, *binding_, *pressed);
-                 settings::save();
-+            } else if (is_speed_action(*binding_)) {
-+                // Esc on a speed key removes it, so that speed has no key.
-+                s.bindings[static_cast<std::size_t>(*binding_)] = {};
-+                settings::save();
-             }
-             binding_.reset();
-         } else if (!layer.capturing_binding()) {
-@@ -925,6 +1387,7 @@ void Menu::controls() {
-     }
-     for (std::size_t i = 0; i < input::kActions; ++i) {
-         const auto action = static_cast<input::Action>(i);
-+        if (is_speed_action(action)) continue;  // listed under "Speed control" below
-         if (action == input::Action::Jump && portablekit::game().tilt == nullptr) continue;
-         // The extra buttons only for a port that reads them.
-         if (const std::uint32_t extra = input::extra_bit(action);
-@@ -958,8 +1421,10 @@ void Menu::controls() {
+@@ -958,6 +1409,7 @@ void Menu::controls() {
              if (settings::overridden_by(key).empty()) value = fallback;
          };
          restore("input.confirm", s.confirm_south, d.confirm_south);
 +        restore("input.swap_shoulders", s.swap_shoulders, d.swap_shoulders);
          restore("input.dead_zone", s.dead_zone, d.dead_zone);
          restore("input.stick_square", s.stick_square, d.stick_square);
-+
          restore("input.trigger", s.trigger, d.trigger);
-         restore("input.trigger_profile", s.trigger_profile, d.trigger_profile);
-         restore("input.right_stick", s.right_stick, d.right_stick);
-@@ -991,6 +1456,21 @@ void Menu::controls() {
-         settings::save();
-     }
- 
-+    section("Speed control");
-+    for (const input::Action action : {input::Action::SpeedNormal, input::Action::Speed2x, input::Action::Speed4x,
-+                                       input::Action::Speed8x}) {
-+        std::string value = input::format(s.bindings[static_cast<std::size_t>(action)]);
-+        if (binding_ == action) value = "Press a key or a mouse button";
-+        else if (value.empty()) value = "None";
-+        const RowOptions o{false, {},
-+                           "Press a key or a mouse button to set it; Esc removes it, so this speed has no key. "
-+                           "A key taken from another control leaves that one. Not used online."};
-+        if (value_row(input::info(action).label, value, o) && !binding_) {
-+            binding_ = action;
-+            layer.begin_binding_capture();
-+        }
-+    }
-+
-     section("Touch screen");
-     {
-         RowOptions o = options_for("input.touch_controls",
-@@ -1065,7 +1545,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+@@ -1065,7 +1517,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -10358,7 +10218,7 @@ index 1b830d9..ba0339e 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1086,7 +1566,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1086,7 +1538,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -10367,7 +10227,7 @@ index 1b830d9..ba0339e 100644
      return "None";
  }
  
-@@ -1129,13 +1609,89 @@ void play_together() {
+@@ -1129,13 +1581,89 @@ void play_together() {
      settings::Settings &s = settings::current();
      static std::string copied;
      static std::string typed_address;
@@ -10460,7 +10320,7 @@ index 1b830d9..ba0339e 100644
          const std::vector<adhoc::LocalAddress> addresses = adhoc::local_addresses();
          if (addresses.empty()) info_row("Your addresses", "No network is connected");
          for (const adhoc::LocalAddress &address : addresses) {
-@@ -1150,6 +1706,23 @@ void play_together() {
+@@ -1150,6 +1678,23 @@ void play_together() {
                  copied = text;
              }
          }
@@ -10484,7 +10344,7 @@ index 1b830d9..ba0339e 100644
          if (!copied.empty()) info_row("Copied", copied);
          ImGui::PushID("hosted players");
          for (std::size_t i = 0; i < status.players.size(); ++i) {
-@@ -1172,7 +1745,7 @@ void play_together() {
+@@ -1172,7 +1717,7 @@ void play_together() {
          if (button_row("Host a session###hosting",
                         {false, {},
                          "Runs a server in this game for the others to join: no other program, no port forwarding "
@@ -10493,7 +10353,7 @@ index 1b830d9..ba0339e 100644
              adhoc_host_start();
          if (const std::string error = adhoc_host_error(); !error.empty()) info_row("Cannot host", error);
      }
-@@ -1181,7 +1754,13 @@ void play_together() {
+@@ -1181,7 +1726,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -10508,7 +10368,7 @@ index 1b830d9..ba0339e 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1191,10 +1770,13 @@ void play_together() {
+@@ -1191,10 +1742,13 @@ void play_together() {
          const std::string label = (joined(address) ? "Joined " : "Join ") + host.info.name + "   " + address + ", " +
                                    players_text(host.info.players) + "###found " + std::to_string(host.info.session);
          if (button_row(label.c_str(), {false, {}, "A session hosted on this network. Joining it takes you out of any "
@@ -10524,7 +10384,7 @@ index 1b830d9..ba0339e 100644
      if (text_row("join_address", "Address", typed_address, 100u, true, address_character,
                   {false, {},
                    "The host's address, for a VPN without broadcast such as Tailscale: the host's screen lists it. "
-@@ -1218,29 +1800,6 @@ void Menu::network() {
+@@ -1218,29 +1772,6 @@ void Menu::network() {
      adhoc::Client &client = adhoc::Client::get();
      const adhoc::Diagnostics d = client.diagnostics();
      play_together();
@@ -10554,7 +10414,7 @@ index 1b830d9..ba0339e 100644
      section("Status");
      info_row("Connection", connection_text(d));
      if (adhoc_hosting()) {
-@@ -1313,7 +1872,7 @@ void Menu::network() {
+@@ -1313,7 +1844,7 @@ void Menu::network() {
      if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
      if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                       "Drop the server connection and connect again at once. The group is joined "
@@ -10563,7 +10423,7 @@ index 1b830d9..ba0339e 100644
          client.reconnect_now();
      if (button_row("Disconnect", {!d.group && !d.joining, {},
                                    "Leave the group as if the other players were lost. The game shows its own "
-@@ -1322,28 +1881,105 @@ void Menu::network() {
+@@ -1322,28 +1853,105 @@ void Menu::network() {
          client.disconnect_now();
  
      ImGui::Dummy({0.0f, font_gap()});
@@ -10676,7 +10536,7 @@ index 1b830d9..ba0339e 100644
      std::string data_dir;
      try {
          data_dir = install::path_to_utf8(install::user_data_directory());
-@@ -1360,14 +1996,6 @@ void Menu::system() {
+@@ -1360,14 +1968,6 @@ void Menu::system() {
          s.menu_pause = !s.menu_pause;
          settings::save();
      }
@@ -10691,7 +10551,7 @@ index 1b830d9..ba0339e 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
      // An Android app's data folder is out of the file manager's reach; its
      // log goes where the player picks instead, to send with a report.
-@@ -1375,18 +2003,21 @@ void Menu::system() {
+@@ -1375,18 +1975,21 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -10715,7 +10575,7 @@ index 1b830d9..ba0339e 100644
          if (std::filesystem::is_directory(storage / "logs", ec))
              std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
          const auto copied = android::pick_folder_and_copy(local);
-@@ -1396,24 +2027,91 @@ void Menu::system() {
+@@ -1396,24 +1999,91 @@ void Menu::system() {
                                                       : "Not saved: " + copied->error;
      }
      if (!saved_log_path().empty()) info_row("Log", saved_log_path());
@@ -10811,7 +10671,7 @@ index 1b830d9..ba0339e 100644
      if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
      info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
      info_row("Data folder", data_dir);
-@@ -1439,6 +2137,108 @@ bool Menu::confirm_dialog() {
+@@ -1439,6 +2109,108 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -10920,7 +10780,7 @@ index 1b830d9..ba0339e 100644
          const bool quit = confirm_ == Confirm::Quit;
          heading(quit ? "Quit the game?" : "Set up game data again?");
          paragraph(quit ? "Progress since your last save is lost."
-@@ -1447,8 +2247,17 @@ bool Menu::confirm_dialog() {
+@@ -1447,8 +2219,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -10940,7 +10800,7 @@ index 1b830d9..ba0339e 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -1466,6 +2275,77 @@ bool Menu::confirm_dialog() {
+@@ -1466,6 +2247,77 @@ bool Menu::confirm_dialog() {
      return keep_open;
  }
  
@@ -11018,7 +10878,7 @@ index 1b830d9..ba0339e 100644
  // Seconds the menu hint has left, or a negative number once it is gone.
  double hint_seconds_left() {
      static const Clock::time_point first_frame = Clock::now();
-@@ -1588,6 +2468,70 @@ void add_menu_rows(void (*rows)()) {
+@@ -1588,6 +2440,70 @@ void add_menu_rows(void (*rows)()) {
      if (rows != nullptr) port_rows().push_back(rows);
  }
  
@@ -11089,7 +10949,7 @@ index 1b830d9..ba0339e 100644
  void draw_over_game() {
      Layer &layer = Layer::get();
      if (!layer.attached()) return;
-@@ -1610,6 +2554,51 @@ void draw_over_game() {
+@@ -1610,6 +2526,51 @@ void draw_over_game() {
          layer.end_frame();
          return;
      }
@@ -11141,7 +11001,7 @@ index 1b830d9..ba0339e 100644
      const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
      const bool overlay = network_overlay();
      const bool touch = !menu && layer.renderer().touch_controls_visible();
-@@ -1639,7 +2628,7 @@ void draw_over_game() {
+@@ -1639,7 +2600,7 @@ void draw_over_game() {
  
  bool menu_pauses() {
      const settings::Settings &s = settings::current();
@@ -11150,7 +11010,7 @@ index 1b830d9..ba0339e 100644
  }
  
  void open_menu_over_game() {
-@@ -1650,6 +2639,9 @@ void open_menu_over_game() {
+@@ -1650,6 +2611,9 @@ void open_menu_over_game() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      menu.emplace(false);
@@ -11160,7 +11020,7 @@ index 1b830d9..ba0339e 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -1659,9 +2651,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+@@ -1659,9 +2623,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
  bool menu_requested() {
      Layer &layer = Layer::get();
      if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
@@ -11188,7 +11048,7 @@ index 1b830d9..ba0339e 100644
  }
  
  bool run_menu() {
-@@ -1670,6 +2678,9 @@ bool run_menu() {
+@@ -1670,6 +2650,9 @@ bool run_menu() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      Menu menu(true);
