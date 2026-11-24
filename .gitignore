@@ -91,3 +91,4 @@ crash_report.txt
 /scripts/setup_relay_server.sh
 relay-src.tar.gz
 /scripts/make_data_pack.ps1
+/scripts/make_release.ps1
