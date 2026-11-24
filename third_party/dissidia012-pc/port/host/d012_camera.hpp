@@ -16,6 +16,11 @@ namespace d012::camera {
 // Whether the player is in a battle and their EX gauge is full (the pad read keeps it up to date): the on-screen EX Mode button is
 // shown, and glows, only then. False outside a battle.
 [[nodiscard]] bool ex_ready();
+// The same for the other on-screen moves: BRV Assist (the assist gauge has a bar), HP Assist (it is full) and the Summon (ready, not
+// yet used). False outside a battle.
+[[nodiscard]] bool brv_assist_ready();
+[[nodiscard]] bool hp_assist_ready();
+[[nodiscard]] bool summon_ready();
 // The pad-read wrapper that keeps the right stick and gives R3 its meaning.
 // The camera's two overrides go in from this file's static initialiser.
 void install(portablekit::HleRegistrar &hle);

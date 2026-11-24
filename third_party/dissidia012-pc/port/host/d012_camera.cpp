@@ -83,6 +83,9 @@ struct Options {
     bool shortcuts = true;
     // L3 (EX Mode) does nothing until the player's EX gauge is full; D012_NO_L3_GAUGE=1 presses it whatever the gauge reads.
     bool l3_needs_gauge = true;
+    // The D-pad's assist and summon shortcuts do nothing until the move is ready (the assist gauge has the bar it costs, the summon
+    // is ready); D012_NO_DPAD_GATES=1 presses them whatever the gauges read.
+    bool dpad_gates = true;
     // The plugin's: each axis's dead zone, the response rescaled to start
     // from 0 at its edge. On top of PortableKit's radial dead zone for the
     // stick (the menu's Dead zone), as the plugin's was on top of PPSSPP's.
@@ -108,6 +111,7 @@ const Options &options() {
         v.enabled = !flag("D012_NO_RIGHT_STICK_CAMERA");
         v.shortcuts = !flag("D012_NO_BATTLE_SHORTCUTS");
         v.l3_needs_gauge = !flag("D012_NO_L3_GAUGE");
+        v.dpad_gates = !flag("D012_NO_DPAD_GATES");
         v.dead_zone = number("D012_CAMERA_DEAD_ZONE", v.dead_zone, 0.0f, 0.9f);
         v.sensitivity = number("D012_CAMERA_SENSITIVITY", v.sensitivity, 0.05f, 4.0f);
         v.invert_x = flag("D012_CAMERA_INVERT_X");
@@ -456,6 +460,40 @@ int ex_gauge_state(psprecomp::Runtime &rt) {
 
 // Written by the pad read, read by the interface thread (the on-screen EX button).
 std::atomic<bool> g_ex_full{false};
+std::atomic<bool> g_assist_bar{false}, g_assist_full{false}, g_summon_ready{false};
+
+// What the D-pad shortcuts wait for, read from the player's fighter in a battle (measured with D012_TRACE_GAUGES):
+//   the assist gauge: the float at +0x1C of the status block, 0 to 10000; a bar is 5000 and two bars (full) 10000;
+//   the summon: the status block's word at +0x28 is 1 once the summon is ready, and the battle manager's word at +0x2C is 2 while a
+//   summon is out (1 otherwise).
+// `valid` is false when the chain does not read as a fighter's (no battle yet): then nothing is held back.
+struct BattleGauges {
+    bool valid = false;
+    float assist = 0.0f;
+    std::uint32_t summon_flag = 0u;
+    std::uint32_t summon_out = 0u;
+};
+
+BattleGauges read_battle_gauges(psprecomp::Runtime &rt) {
+    const auto ram = [](std::uint32_t address) {
+        const std::uint32_t a = address & 0x1FFFFFFFu;
+        return a >= 0x08800000u && a < 0x0A000000u - 4u;
+    };
+    BattleGauges out;
+    const std::uint32_t manager = rt.memory().load32(0x089D6A10u);
+    if (!ram(manager)) return out;
+    const std::uint32_t fighter = rt.memory().load32(manager + 0x38u);
+    if (!ram(fighter)) return out;
+    const std::uint32_t status = rt.memory().load32(fighter + 0x52Cu);
+    if (!ram(status)) return out;
+    const std::uint32_t bits = rt.memory().load32(status + 0x1Cu);
+    std::memcpy(&out.assist, &bits, sizeof(out.assist));
+    if (!std::isfinite(out.assist) || out.assist < 0.0f || out.assist > 10000.0f) return out;
+    out.summon_flag = rt.memory().load32(status + 0x28u);
+    out.summon_out = rt.memory().load32(manager + 0x2Cu);
+    out.valid = true;
+    return out;
+}
 
 // D012_TRACE_GAUGES=1: log only. The first 64 bytes of the player's status block (the EX gauge is the float at +0x18) printed each
 // time a word of them changes, to find the assist gauge and the other values the D-pad shortcuts would wait for: play a battle,
@@ -463,7 +501,7 @@ std::atomic<bool> g_ex_full{false};
 void trace_gauges(psprecomp::Runtime &rt) {
     static const bool on = flag("D012_TRACE_GAUGES");
     if (!on) return;
-    static std::uint32_t last[16] = {};
+    static std::uint32_t last[64] = {};
     static int lines = 0;
     const auto ram = [](std::uint32_t address) {
         const std::uint32_t a = address & 0x1FFFFFFFu;
@@ -475,7 +513,87 @@ void trace_gauges(psprecomp::Runtime &rt) {
     if (!ram(fighter)) return;
     const std::uint32_t status = rt.memory().load32(fighter + 0x52Cu);
     if (!ram(status)) return;
-    for (std::uint32_t i = 0; i < 16u; ++i) {
+    // D012_TRACE_GAUGES=2: the first 256 bytes, without the three gauges that change all the time (+0x14, the EX gauge +0x18, the
+    // assist gauge +0x1C), to see the other flags (the summon's) on their own.
+    static const bool quiet = [] {
+        const char *text = std::getenv("D012_TRACE_GAUGES");
+        return text != nullptr && text[0] == '2';
+    }();
+    // D012_TRACE_GAUGES=3: the status block (256 bytes), the fighter object (1536 bytes) and the battle manager (512 bytes), each word
+    // printed when it changes, but a word that has changed 12 times is muted (positions and timers), so a flag that flips once stands out.
+    static const bool wide = [] {
+        const char *text = std::getenv("D012_TRACE_GAUGES");
+        return text != nullptr && text[0] == '3';
+    }();
+    // D012_TRACE_GAUGES=4: no changes, a snapshot. Once, 5 seconds after the battle's data appears, the same three regions printed as they
+    // are, to compare two battles that differ in one thing (a manual summon against an automatic one): the words that differ are the setting.
+    static const bool snapshot = [] {
+        const char *text = std::getenv("D012_TRACE_GAUGES");
+        return text != nullptr && text[0] == '4';
+    }();
+    if (snapshot) {
+        static std::uint32_t first_read = 0u;
+        static bool taken = false;
+        if (taken) return;
+        if (first_read == 0u) first_read = pad().reads;
+        if (pad().reads - first_read < 300u) return;
+        taken = true;
+        const struct {
+            const char *name;
+            std::uint32_t base, words;
+        } regions[3] = {{"status", status, 64u}, {"fighter", fighter, 384u}, {"manager", manager, 128u}};
+        for (const auto &r : regions)
+            for (std::uint32_t i = 0; i < r.words; i += 8u) {
+                std::printf("[snapshot] %s +0x%03X:", r.name, i * 4u);
+                for (std::uint32_t k = 0; k < 8u && i + k < r.words; ++k) std::printf(" %08X", rt.memory().load32(r.base + (i + k) * 4u));
+                std::printf("\n");
+            }
+        std::fflush(stdout);
+        return;
+    }
+    if (wide) {
+        struct Region {
+            const char *name;
+            std::uint32_t base, words;
+            std::vector<std::uint32_t> last;
+            std::vector<std::uint8_t> changes;
+            bool primed = false;
+            std::uint32_t where = 0u;
+        };
+        static Region regions[3] = {{"status", 0u, 64u}, {"fighter", 0u, 384u}, {"manager", 0u, 128u}};
+        regions[0].base = status;
+        regions[1].base = fighter;
+        regions[2].base = manager;
+        for (Region &r : regions) {
+            if (r.where != r.base) {  // another object: start again without printing what it already holds
+                r.where = r.base;
+                r.primed = false;
+            }
+            r.last.resize(r.words);
+            r.changes.resize(r.words);
+            for (std::uint32_t i = 0; i < r.words; ++i) {
+                const std::uint32_t word = rt.memory().load32(r.base + i * 4u);
+                if (!r.primed) {
+                    r.last[i] = word;
+                    continue;
+                }
+                if (word == r.last[i] || r.changes[i] >= 12u) continue;
+                float before = 0.0f, after = 0.0f;
+                std::memcpy(&before, &r.last[i], 4u);
+                std::memcpy(&after, &word, 4u);
+                if (++lines <= 900)
+                    std::printf("[gauges] pad read %u: %s +0x%03X: %08X -> %08X (as float %g -> %g)%s\n", pad().reads, r.name, i * 4u,
+                                r.last[i], word, before, after, ++r.changes[i] >= 12u ? "  [muted from here on]" : "");
+                r.last[i] = word;
+            }
+            r.primed = true;
+        }
+        std::fflush(stdout);
+        return;
+    }
+    for (std::uint32_t i = 0; i < 64u; ++i) {
+        if (quiet && i >= 5u && i <= 7u) continue;
+        if (!quiet && i >= 16u) break;
         const std::uint32_t word = rt.memory().load32(status + i * 4u);
         if (word == last[i]) continue;
         float before = 0.0f, after = 0.0f;
@@ -493,6 +611,9 @@ void trace_gauges(psprecomp::Runtime &rt) {
 
 bool enabled() { return options().enabled; }
 bool ex_ready() { return g_ex_full.load(std::memory_order_relaxed); }
+bool brv_assist_ready() { return g_assist_bar.load(std::memory_order_relaxed); }
+bool hp_assist_ready() { return g_assist_full.load(std::memory_order_relaxed); }
+bool summon_ready() { return g_summon_ready.load(std::memory_order_relaxed); }
 
 // True while a battle camera is stepping (not in the pause menu, the pre-battle screens or the results).
 bool battle_running() {
@@ -548,6 +669,25 @@ void install(portablekit::HleRegistrar &hle) {
         // leaves L3 alone, so a wrong address never takes it away, but it hides the on-screen button, which only belongs in a battle.
         const int ex_state = ex_gauge_state(rt);
         g_ex_full.store(shortcut_live && ex_state == 1, std::memory_order_relaxed);
+        // The other gauges, on every read too: the D-pad shortcuts and the on-screen buttons of the moves wait for them.
+        const BattleGauges gauges = read_battle_gauges(rt);
+        // The status word that says "summon ready" is not cleared when the summon is used (measured: it stays 1 after Ifrit), so the use is
+        // remembered here: a summon that comes out right after this shortcut was pressed is this player's, and the stone stays used
+        // until the word drops to 0 or the battle ends. The manager's "a summon is out" word is shared with the CPU, which is why it
+        // alone does not mark the player's use.
+        static bool summon_used = false;
+        static std::uint32_t left_pressed_read = 0u;
+        static bool left_pressed_once = false;
+        if (!gauges.valid || gauges.summon_flag == 0u) {
+            summon_used = false;
+            left_pressed_once = false;
+        } else if (gauges.summon_out == 2u && left_pressed_once && p.reads - left_pressed_read <= 180u) {
+            summon_used = true;
+        }
+        const bool summon_ready_now = gauges.valid && gauges.summon_flag == 1u && gauges.summon_out != 2u && !summon_used;
+        g_assist_bar.store(shortcut_live && gauges.valid && gauges.assist >= 4999.0f, std::memory_order_relaxed);
+        g_assist_full.store(shortcut_live && gauges.valid && gauges.assist >= 9999.0f, std::memory_order_relaxed);
+        g_summon_ready.store(shortcut_live && summon_ready_now, std::memory_order_relaxed);
         if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             static bool announced = false;
@@ -560,6 +700,10 @@ void install(portablekit::HleRegistrar &hle) {
             if ((extra & ext::kExtraL2) != 0u) add |= kR1 | kCross;
             if ((extra & ext::kExtraR2) != 0u) add |= kR1 | kTriangle;
             trace_gauges(rt);
+            const bool gates = options().dpad_gates && gauges.valid;
+            const bool assist_up = !gates || gauges.assist >= 4999.0f;       // one bar or more
+            const bool assist_down = !gates || gauges.assist >= 9999.0f;     // completely full
+            const bool summon_left = !gates || summon_ready_now;
             bool speed_held = false;
             for (std::uint32_t i = 0; i < count; ++i) {
                 const std::uint32_t at = buffer + i * 16u + 4u;
@@ -569,9 +713,17 @@ void install(portablekit::HleRegistrar &hle) {
                     speed_held = true;
                     buttons &= ~kDpadRight;
                 }
-                if ((buttons & kDpadUp) != 0u) buttons = (buttons & ~kDpadUp) | kL1 | kCircle;
-                if ((buttons & kDpadDown) != 0u) buttons = (buttons & ~kDpadDown) | kL1 | kSquare;
-                if ((buttons & kDpadLeft) != 0u) buttons = (buttons & ~kDpadLeft) | kR1 | kCircle;
+                // Each of the three does its move only when the move is ready; otherwise the press is dropped, so the fighter does not
+                // attack with the circle or the square the shortcut would have pressed.
+                if ((buttons & kDpadUp) != 0u) buttons = (buttons & ~kDpadUp) | (assist_up ? (kL1 | kCircle) : 0u);
+                if ((buttons & kDpadDown) != 0u) buttons = (buttons & ~kDpadDown) | (assist_down ? (kL1 | kSquare) : 0u);
+                if ((buttons & kDpadLeft) != 0u) {
+                    buttons = (buttons & ~kDpadLeft) | (summon_left ? (kR1 | kCircle) : 0u);
+                    if (summon_left) {
+                        left_pressed_once = true;
+                        left_pressed_read = p.reads;
+                    }
+                }
                 rt.memory().store32(at, buttons | add);
             }
             ext::hold_game_speed(speed_held ? kHeldSpeed : 1.0);

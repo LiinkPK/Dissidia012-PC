@@ -4352,7 +4352,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..8fb3daf 100644
+index e4d7e11..10b0089 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -4971,7 +4971,7 @@ index e4d7e11..8fb3daf 100644
              }
          }
          return texture;
-@@ -5117,16 +5447,346 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+@@ -5117,16 +5447,365 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
      texture.max_seen_v = max_seen_v;
      // The pack's hash reads the whole texture, so it is taken here, once per
      // upload, and never on the per-draw path above.
@@ -5311,6 +5311,25 @@ index e4d7e11..8fb3daf 100644
  VkDescriptorSet VulkanRenderer::Impl::texture_descriptor(const GuestMemory &memory, const DrawCall &call) {
      const perf::SplitScope split(perf::Split::Texture);
      Texture &texture = texture_for(memory, call);
++    // <prefix>_TRACE_DRAW_TEXTURE=<part of an image's name>: log only. Each draw that uses that pack image prints where it is drawn (its
++    // vertices' screen positions) and which part of the texture it samples (their texture coordinates), to find which part of a HUD
++    // texture a draw shows and on which side of the screen.
++    static const char *const watched = portablekit::env("TRACE_DRAW_TEXTURE");
++    if (watched != nullptr && *watched != '\0' && texture.replacement &&
++        texture.replacement->name.find(watched) != std::string::npos) {
++        static int lines = 0;
++        if (++lines <= 600) {
++            std::printf("[drawtex] frame %llu %s: %zu vertices, primitive %d, through %d, texture %ux%u at 0x%X:", static_cast<unsigned long long>(frames),
++                        texture.replacement->name.c_str(), call.vertices.size(), static_cast<int>(call.primitive), call.through ? 1 : 0,
++                        static_cast<unsigned>(call.texture.width), static_cast<unsigned>(call.texture.height),
++                        static_cast<unsigned>(call.texture.address & 0x0FFFFFFFu));
++            for (std::size_t i = 0; i < call.vertices.size() && i < 8u; ++i)
++                std::printf(" (%g,%g | %g,%g)", call.vertices[i].position[0], call.vertices[i].position[1], call.vertices[i].texcoord[0],
++                            call.vertices[i].texcoord[1]);
++            std::printf("\n");
++            std::fflush(stdout);
++        }
++    }
 +    if (call.through && call.texture.format == TextureFormat::Clut4) {
 +        const VkDescriptorSet sharp = text_line_descriptor(memory, call, texture);
 +        trace_text_draw(frames, call, sharp != VK_NULL_HANDLE);
@@ -5319,7 +5338,7 @@ index e4d7e11..8fb3daf 100644
      if (texture.replacement && pack) {
          // Until the image is decoded and on the GPU, the original is drawn.
          if (const VkDescriptorSet replaced = replacements.descriptor(*texture.replacement, *pack, frames)) {
-@@ -5179,6 +5839,17 @@ void VulkanRenderer::Impl::apply_texture_pack() {
+@@ -5179,6 +5858,17 @@ void VulkanRenderer::Impl::apply_texture_pack() {
          std::cout << "[texpack] " << error << "\n";
          return;
      }
@@ -5337,7 +5356,7 @@ index e4d7e11..8fb3daf 100644
      pack_status = std::to_string(pack->entry_count()) + " textures";
      std::cout << "[texpack] " << pack->entry_count() << " textures from " << folder.string() << "\n";
  }
-@@ -6636,6 +7307,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
+@@ -6636,6 +7326,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
          keys.push_back(key_from(words));
      }
      prewarm->thread = std::thread([this, keys = std::move(keys)] {
@@ -5345,7 +5364,7 @@ index e4d7e11..8fb3daf 100644
          const auto start = std::chrono::steady_clock::now();
          std::uint32_t made = 0u;
          for (const PipelineKey &key : keys) {
-@@ -6849,7 +7521,7 @@ bool VulkanRenderer::pump_events() {
+@@ -6849,7 +7540,7 @@ bool VulkanRenderer::pump_events() {
          // every other event while the on-screen keyboard is up.
          if (event.type == SDL_EVENT_GAMEPAD_ADDED) impl_->open_gamepad(event.gdevice.which);
          if (event.type == SDL_EVENT_GAMEPAD_REMOVED) impl_->close_gamepad(event.gdevice.which);
@@ -5354,7 +5373,7 @@ index e4d7e11..8fb3daf 100644
          // reserved for the in-game menu.
          if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) impl_->update_display_info();
          if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) impl_->swapchain_dirty = true;
-@@ -6866,7 +7538,14 @@ bool VulkanRenderer::pump_events() {
+@@ -6866,7 +7557,14 @@ bool VulkanRenderer::pump_events() {
          if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) ||
              ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
               event.button.which != SDL_TOUCH_MOUSEID))
@@ -5369,7 +5388,7 @@ index e4d7e11..8fb3daf 100644
          impl_->handle_touch(event);
          if (event.type == SDL_EVENT_MOUSE_MOTION && impl_->mouse_captured && event.motion.which != SDL_TOUCH_MOUSEID &&
              (!impl_->scripted_input || event.motion.which == kScriptedMouse)) {
-@@ -6880,9 +7559,96 @@ bool VulkanRenderer::pump_events() {
+@@ -6880,9 +7578,96 @@ bool VulkanRenderer::pump_events() {
          if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
              impl_->mouse_buttons &= ~(1u << event.button.button);
          if (impl_->event_hook && impl_->event_hook(event)) continue;
@@ -5466,7 +5485,7 @@ index e4d7e11..8fb3daf 100644
      // Only sample while the window has focus: a key still down when focus is
      // lost stays down in SDL's snapshot, which the guest sees as a held
      // direction it can never release.
-@@ -6919,6 +7685,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6919,6 +7704,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
          if (const int button = input::mouse_button_of(binding))
              return impl_->mouse_captured && (impl_->mouse_buttons & (1u << button)) != 0u;
          const int position = input::key_position(binding);
@@ -5477,7 +5496,7 @@ index e4d7e11..8fb3daf 100644
          return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
                                   impl_->scripted_keys[static_cast<std::size_t>(position)]);
      });
-@@ -6955,12 +7725,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6955,12 +7744,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
      // So do the on-screen controls.
      if (impl_->touch_visible) {
          pad.buttons |= impl_->touch.buttons();
@@ -5513,7 +5532,7 @@ index e4d7e11..8fb3daf 100644
      }
  
      pad.analog_x = static_cast<std::uint8_t>(std::clamp(0x80 + analog_x, 0, 255));
-@@ -7312,7 +8105,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+@@ -7312,7 +8124,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
      const Impl::Guard guard(*impl_);
      scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
      if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
@@ -5526,7 +5545,7 @@ index e4d7e11..8fb3daf 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7322,7 +8119,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+@@ -7322,7 +8138,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
  #if defined(__ANDROID__)
      fullscreen = true;
  #endif
@@ -5536,7 +5555,7 @@ index e4d7e11..8fb3daf 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7813,6 +8611,13 @@ void VulkanRenderer::begin_display_list() {
+@@ -7813,6 +8630,13 @@ void VulkanRenderer::begin_display_list() {
      if (!impl_) return;
      const Impl::Guard guard(*impl_);
      ++impl_->display_lists;
@@ -5550,7 +5569,7 @@ index e4d7e11..8fb3daf 100644
      impl_->list_texture_keys.clear();
      impl_->last_texture = nullptr;
  }
-@@ -7820,10 +8625,77 @@ void VulkanRenderer::begin_display_list() {
+@@ -7820,10 +8644,77 @@ void VulkanRenderer::begin_display_list() {
  void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
      Impl &impl = *impl_;
      if (!impl.ready) return;
@@ -5628,7 +5647,7 @@ index e4d7e11..8fb3daf 100644
  }
  
  void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
-@@ -7832,6 +8704,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7832,6 +8723,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      const Impl::Guard guard(impl);
      const perf::SplitScope split(perf::Split::Draw);
      if (!impl.recording) begin_frame();
@@ -5658,7 +5677,7 @@ index e4d7e11..8fb3daf 100644
      // Presents between flips fall due while the game draws, too: a busy
      // frame spends most of its time in here.
      if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
-@@ -7937,10 +8832,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7937,10 +8851,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
      // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
      // texture state it samples, to find the tiles a 2D screen is built from.
@@ -5680,7 +5699,7 @@ index e4d7e11..8fb3daf 100644
  
      // Transformed triangles, strips and fans go straight into the vertex
      // buffer: each decoded vertex once, converted as it is written, and a
-@@ -8110,6 +9014,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8110,6 +9033,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
                                     static_cast<float>(call.texture.height));
          }
@@ -6299,7 +6318,7 @@ index e4d7e11..8fb3daf 100644
      }
  
      if (trace && impl.draws < 400u) {
-@@ -9520,7 +11036,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+@@ -9520,7 +11055,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
  bool VulkanRenderer::Impl::interpolation_wanted() const {
      // Emulated time running ahead of real time already presents faster than
      // the game's own rate; the keyboard's held frame is shown as it is.
@@ -6308,6 +6327,15 @@ index e4d7e11..8fb3daf 100644
             governor.rate() > pacing::game_rate() + 0.5;
  }
  
+@@ -10703,6 +12238,8 @@ bool VulkanRenderer::present(std::uint32_t display_address,
+     Impl &impl = *impl_;
+     if (!impl.ready) return false;
+     const Impl::Guard guard(impl);
++    // Lower when behind is the player's choice, but it is on while playing online, so online players never disagree on it.
++    impl.governor.set_automatic(settings::current().frame_rate_auto || adhoc_online_mode());
+     census::note_frame(display_address);
+     if (!impl.recording) begin_frame();
+     impl.end_pass();
 diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
 index 9b08d55..f3ccbf2 100644
 --- a/host/gpu/vulkan_renderer.hpp
@@ -9277,7 +9305,7 @@ index f09c4fa..1856fde 100644
          auto plain = decrypt_data(*file, *mode, key);
          if (!plain) {
 diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
-index 54078af..4b7eeb2 100644
+index 54078af..bb6e292 100644
 --- a/host/settings/settings.cpp
 +++ b/host/settings/settings.cpp
 @@ -4,6 +4,7 @@
@@ -9381,7 +9409,7 @@ index 54078af..4b7eeb2 100644
  };
  
  State &state() {
-@@ -468,12 +516,25 @@ State &state() {
+@@ -468,12 +516,24 @@ State &state() {
      return value;
  }
  
@@ -9391,10 +9419,9 @@ index 54078af..4b7eeb2 100644
 +    values.sharp_screen = false;
 +    values.sharp_textures = false;
 +    values.menu_pause_multiplayer = false;
-+    // Lower when behind and Fast loading are always on, for everyone, so online players never disagree on them.
++    // Lower when behind and Fast loading are the player's to set again (they default to on). Online they are applied as on whatever they
++    // are set to (vulkan_renderer.cpp, kernel/fast_loading.cpp), so online players never disagree on them.
 +    values.unthrottled = false;  // no Unlimited: Game speed is Normal, 2x, 4x or 8x
-+    values.frame_rate_auto = true;
-+    values.fast_loading = true;
 +}
 +
  void load(State &s) {
@@ -9407,7 +9434,7 @@ index 54078af..4b7eeb2 100644
      } catch (const std::exception &e) {
          std::cerr << "[settings] cannot read settings.ini: " << e.what() << "\n";
      }
-@@ -486,6 +547,20 @@ void load(State &s) {
+@@ -486,6 +546,20 @@ void load(State &s) {
          field.parse_variable(s.values, text);
          s.overrides[field.key] = env_name(field.variable);
      }
@@ -9428,7 +9455,7 @@ index 54078af..4b7eeb2 100644
      // Bindings settings.ini did not hold are defaults, which must not take a
      // key it gave another control.
      std::array<bool, input::kActions> saved{};
-@@ -509,6 +584,7 @@ void load(State &s) {
+@@ -509,6 +583,7 @@ void load(State &s) {
          s.values.name_entry = NameEntry::Fixed;
          s.overrides["input.name_entry"] = env_name("OSK_TEXT");
      }
@@ -9436,7 +9463,7 @@ index 54078af..4b7eeb2 100644
  }
  
  } // namespace
-@@ -519,6 +595,57 @@ Settings &current() {
+@@ -519,6 +594,57 @@ Settings &current() {
      return s.values;
  }
  
@@ -9494,7 +9521,7 @@ index 54078af..4b7eeb2 100644
  std::string game_default_name() {
      const char *name = game().default_player_name;
      return name != nullptr ? name : "";
-@@ -532,7 +659,6 @@ Settings defaults_for(Platform platform) {
+@@ -532,7 +658,6 @@ Settings defaults_for(Platform platform) {
      // The game's keyboard first; a phone then turns the mouse off either way.
      if (const auto keyboard = game().keyboard_defaults) keyboard(values.bindings, values.mouse);
      if (platform == Platform::Android) {
@@ -10006,7 +10033,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..f26be35 100644
+index 1b830d9..7c176ed 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -10187,7 +10214,7 @@ index 1b830d9..f26be35 100644
 +    static std::map<std::size_t, CheatStat> stats;
 +    return stats;
 +}
-+
+ 
 +// One cheat's codes against the guest's memory, as PPSSPP's CWCheatEngine
 +// runs them (Core/CwCheat.cpp), less the joker, vibration and shader codes.
 +void run_cheat(psprecomp::GuestMemory &m, const std::vector<CheatLine> &lines) {
@@ -10370,7 +10397,7 @@ index 1b830d9..f26be35 100644
 +        }
 +    }
 +}
- 
++
 +// Reads the file again when it is new or has changed on disk.
 +#if defined(PORTABLEKIT_ANDROID_APP)
 +// The APK carries no memory stick folder, so the cheat file is fetched, once per run, from the profile's address when it is missing or
@@ -10653,18 +10680,27 @@ index 1b830d9..f26be35 100644
      }
      texture_pack_rows();
      section("Timing");
-@@ -378,7 +806,9 @@ void Menu::video() {
+@@ -378,24 +806,41 @@ void Menu::video() {
              settings::save();
          }
      }
 -    {
-+    // Lower when behind and Fast loading are fixed (On: see settings.cpp enforce_fixed_settings). Their rows are kept, hidden.
-+    constexpr bool kShowFixedRows = false;
++    // Lower when behind and Fast loading are the player's again. While playing online both are on whatever they are set to, so online
++    // players never disagree on them (the renderer and fast_loading.cpp apply that), and the rows say so.
++    constexpr bool kShowFixedRows = true;
 +    if (kShowFixedRows) {
          RowOptions o = options_for("video.frame_rate_auto",
                                     "On lowers the frame rate by itself when presenting that often would slow the "
                                     "game. Off keeps the chosen rate, and the game may then run below full speed.");
-@@ -389,13 +819,23 @@ void Menu::video() {
+         if (s.unthrottled || s.frame_rate == settings::FrameRate::Fps30) o.disabled = true;
+-        if (choice_row("Lower when behind", s.frame_rate_auto ? "On" : "Off", o)) {
++        if (adhoc_online_mode()) {
++            o.disabled = true;
++            o.note = "On while you play online";
++        }
++        if (choice_row("Lower when behind", (s.frame_rate_auto || adhoc_online_mode()) ? "On" : "Off", o)) {
+             s.frame_rate_auto = !s.frame_rate_auto;
+             renderer().set_frame_rate_auto(s.frame_rate_auto);
              settings::save();
          }
      }
@@ -10694,7 +10730,18 @@ index 1b830d9..f26be35 100644
          RowOptions o = options_for("video.fast_loading",
                                     "Lets the game run ahead of real time while it loads and is silent, so loads "
                                     "take as long as the computer needs. Never during play, sound, movies or "
-@@ -579,7 +1019,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
+@@ -404,6 +849,10 @@ void Menu::video() {
+             o.disabled = true;
+             o.note = "Game speed is Unlimited";
+         }
++        if (adhoc_online_mode()) {
++            o.disabled = true;
++            o.note = "Off while you play online";
++        }
+         if (toggle_row("Fast loading", s.fast_loading, o)) {
+             s.fast_loading = !s.fast_loading;
+             settings::save();
+@@ -579,7 +1028,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
  }
  
  // Host names: printable ASCII without spaces.
@@ -10702,7 +10749,7 @@ index 1b830d9..f26be35 100644
  
  // What an address to join may hold: a host name or IPv4 address, a colon and
  // a port, or an IPv6 address in brackets.
-@@ -588,6 +1027,17 @@ bool address_character(char32_t c) {
+@@ -588,6 +1036,17 @@ bool address_character(char32_t c) {
             c == U':' || c == U'-' || c == U'[' || c == U']';
  }
  
@@ -10720,7 +10767,7 @@ index 1b830d9..f26be35 100644
  // Only for a game that tilts (GameProfile::tilt).
  void Menu::tilt_controls() {
      const TiltControls *tilt = portablekit::game().tilt;
-@@ -724,6 +1174,19 @@ void Menu::controls() {
+@@ -724,6 +1183,19 @@ void Menu::controls() {
          s.confirm_south = !s.confirm_south;
          settings::save();
      }
@@ -10740,7 +10787,7 @@ index 1b830d9..f26be35 100644
      int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
      if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
                     options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
-@@ -915,8 +1378,14 @@ void Menu::controls() {
+@@ -915,8 +1387,14 @@ void Menu::controls() {
      if (binding_) {
          if (const auto pressed = layer.take_captured_binding()) {
              if (*pressed != input::kNone) {
@@ -10755,7 +10802,7 @@ index 1b830d9..f26be35 100644
              }
              binding_.reset();
          } else if (!layer.capturing_binding()) {
-@@ -925,6 +1394,7 @@ void Menu::controls() {
+@@ -925,6 +1403,7 @@ void Menu::controls() {
      }
      for (std::size_t i = 0; i < input::kActions; ++i) {
          const auto action = static_cast<input::Action>(i);
@@ -10763,7 +10810,7 @@ index 1b830d9..f26be35 100644
          if (action == input::Action::Jump && portablekit::game().tilt == nullptr) continue;
          // The extra buttons only for a port that reads them.
          if (const std::uint32_t extra = input::extra_bit(action);
-@@ -958,8 +1428,11 @@ void Menu::controls() {
+@@ -958,8 +1437,11 @@ void Menu::controls() {
              if (settings::overridden_by(key).empty()) value = fallback;
          };
          restore("input.confirm", s.confirm_south, d.confirm_south);
@@ -10775,7 +10822,7 @@ index 1b830d9..f26be35 100644
          restore("input.trigger", s.trigger, d.trigger);
          restore("input.trigger_profile", s.trigger_profile, d.trigger_profile);
          restore("input.right_stick", s.right_stick, d.right_stick);
-@@ -991,6 +1464,21 @@ void Menu::controls() {
+@@ -991,6 +1473,21 @@ void Menu::controls() {
          settings::save();
      }
  
@@ -10797,7 +10844,7 @@ index 1b830d9..f26be35 100644
      section("Touch screen");
      {
          RowOptions o = options_for("input.touch_controls",
-@@ -1065,7 +1553,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+@@ -1065,7 +1562,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -10806,7 +10853,7 @@ index 1b830d9..f26be35 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1086,7 +1574,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1086,7 +1583,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -10815,7 +10862,7 @@ index 1b830d9..f26be35 100644
      return "None";
  }
  
-@@ -1129,13 +1617,89 @@ void play_together() {
+@@ -1129,13 +1626,89 @@ void play_together() {
      settings::Settings &s = settings::current();
      static std::string copied;
      static std::string typed_address;
@@ -10908,7 +10955,7 @@ index 1b830d9..f26be35 100644
          const std::vector<adhoc::LocalAddress> addresses = adhoc::local_addresses();
          if (addresses.empty()) info_row("Your addresses", "No network is connected");
          for (const adhoc::LocalAddress &address : addresses) {
-@@ -1150,6 +1714,23 @@ void play_together() {
+@@ -1150,6 +1723,23 @@ void play_together() {
                  copied = text;
              }
          }
@@ -10932,7 +10979,7 @@ index 1b830d9..f26be35 100644
          if (!copied.empty()) info_row("Copied", copied);
          ImGui::PushID("hosted players");
          for (std::size_t i = 0; i < status.players.size(); ++i) {
-@@ -1172,7 +1753,7 @@ void play_together() {
+@@ -1172,7 +1762,7 @@ void play_together() {
          if (button_row("Host a session###hosting",
                         {false, {},
                          "Runs a server in this game for the others to join: no other program, no port forwarding "
@@ -10941,7 +10988,7 @@ index 1b830d9..f26be35 100644
              adhoc_host_start();
          if (const std::string error = adhoc_host_error(); !error.empty()) info_row("Cannot host", error);
      }
-@@ -1181,7 +1762,13 @@ void play_together() {
+@@ -1181,7 +1771,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -10956,7 +11003,7 @@ index 1b830d9..f26be35 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1191,10 +1778,13 @@ void play_together() {
+@@ -1191,10 +1787,13 @@ void play_together() {
          const std::string label = (joined(address) ? "Joined " : "Join ") + host.info.name + "   " + address + ", " +
                                    players_text(host.info.players) + "###found " + std::to_string(host.info.session);
          if (button_row(label.c_str(), {false, {}, "A session hosted on this network. Joining it takes you out of any "
@@ -10972,7 +11019,7 @@ index 1b830d9..f26be35 100644
      if (text_row("join_address", "Address", typed_address, 100u, true, address_character,
                   {false, {},
                    "The host's address, for a VPN without broadcast such as Tailscale: the host's screen lists it. "
-@@ -1218,29 +1808,6 @@ void Menu::network() {
+@@ -1218,29 +1817,6 @@ void Menu::network() {
      adhoc::Client &client = adhoc::Client::get();
      const adhoc::Diagnostics d = client.diagnostics();
      play_together();
@@ -11002,7 +11049,7 @@ index 1b830d9..f26be35 100644
      section("Status");
      info_row("Connection", connection_text(d));
      if (adhoc_hosting()) {
-@@ -1313,7 +1880,7 @@ void Menu::network() {
+@@ -1313,7 +1889,7 @@ void Menu::network() {
      if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
      if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                       "Drop the server connection and connect again at once. The group is joined "
@@ -11011,7 +11058,7 @@ index 1b830d9..f26be35 100644
          client.reconnect_now();
      if (button_row("Disconnect", {!d.group && !d.joining, {},
                                    "Leave the group as if the other players were lost. The game shows its own "
-@@ -1322,28 +1889,105 @@ void Menu::network() {
+@@ -1322,28 +1898,105 @@ void Menu::network() {
          client.disconnect_now();
  
      ImGui::Dummy({0.0f, font_gap()});
@@ -11069,7 +11116,7 @@ index 1b830d9..f26be35 100644
 +        if (toggle_row(title.c_str(), line[2] == '1', {online, {}, online ? "Off while you play online." : ""})) {
 +            line[2] = line[2] == '1' ? '0' : '1';
 +            save_cheats();
-         }
++        }
 +        ImGui::PopID();
 +    }
 +    // What each enabled cheat did on its last run, all together after the codes, and only when asked for.
@@ -11096,7 +11143,7 @@ index 1b830d9..f26be35 100644
 +                if (found->second.changed != 0u) note += ", " + std::to_string(found->second.changed) + " changed by the game";
 +            }
 +            info_row(title.c_str(), note);
-+        }
+         }
 +        if (!any) info_row("Status", "No cheat is on");
 +    }
 +}
@@ -11124,7 +11171,7 @@ index 1b830d9..f26be35 100644
      std::string data_dir;
      try {
          data_dir = install::path_to_utf8(install::user_data_directory());
-@@ -1360,14 +2004,6 @@ void Menu::system() {
+@@ -1360,14 +2013,6 @@ void Menu::system() {
          s.menu_pause = !s.menu_pause;
          settings::save();
      }
@@ -11139,7 +11186,7 @@ index 1b830d9..f26be35 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
      // An Android app's data folder is out of the file manager's reach; its
      // log goes where the player picks instead, to send with a report.
-@@ -1375,18 +2011,21 @@ void Menu::system() {
+@@ -1375,18 +2020,21 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -11163,7 +11210,7 @@ index 1b830d9..f26be35 100644
          if (std::filesystem::is_directory(storage / "logs", ec))
              std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
          const auto copied = android::pick_folder_and_copy(local);
-@@ -1396,24 +2035,91 @@ void Menu::system() {
+@@ -1396,24 +2044,91 @@ void Menu::system() {
                                                       : "Not saved: " + copied->error;
      }
      if (!saved_log_path().empty()) info_row("Log", saved_log_path());
@@ -11259,7 +11306,7 @@ index 1b830d9..f26be35 100644
      if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
      info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
      info_row("Data folder", data_dir);
-@@ -1439,6 +2145,108 @@ bool Menu::confirm_dialog() {
+@@ -1439,6 +2154,108 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -11368,7 +11415,7 @@ index 1b830d9..f26be35 100644
          const bool quit = confirm_ == Confirm::Quit;
          heading(quit ? "Quit the game?" : "Set up game data again?");
          paragraph(quit ? "Progress since your last save is lost."
-@@ -1447,8 +2255,17 @@ bool Menu::confirm_dialog() {
+@@ -1447,8 +2264,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -11388,7 +11435,7 @@ index 1b830d9..f26be35 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -1466,6 +2283,77 @@ bool Menu::confirm_dialog() {
+@@ -1466,6 +2292,77 @@ bool Menu::confirm_dialog() {
      return keep_open;
  }
  
@@ -11466,7 +11513,7 @@ index 1b830d9..f26be35 100644
  // Seconds the menu hint has left, or a negative number once it is gone.
  double hint_seconds_left() {
      static const Clock::time_point first_frame = Clock::now();
-@@ -1588,6 +2476,84 @@ void add_menu_rows(void (*rows)()) {
+@@ -1588,6 +2485,89 @@ void add_menu_rows(void (*rows)()) {
      if (rows != nullptr) port_rows().push_back(rows);
  }
  
@@ -11484,17 +11531,22 @@ index 1b830d9..f26be35 100644
 +    const std::lock_guard<std::mutex> lock(cheat_mutex());
 +    load_cheats();
 +    const CheatFile &f = cheat_file();
-+    // Once, what the cheats file held when the game first reached this point: where it is, how many cheats and how many are on.
-+    if (!told_file) {
++    // What the cheats file holds, printed the first time and again each time the number switched on changes: where the file is, how many
++    // cheats it has and how many are on, so the log shows when a cheat switched on in the menu reaches the game.
++    static std::size_t last_on = static_cast<std::size_t>(-1);
++    std::size_t on = 0u;
++    for (const std::size_t head : f.heads) on += f.lines[head][2] == '1' ? 1u : 0u;
++    if (!told_file || on != last_on) {
 +        told_file = true;
-+        std::size_t on = 0u;
-+        for (const std::size_t head : f.heads) on += f.lines[head][2] == '1' ? 1u : 0u;
++        last_on = on;
 +        std::fprintf(stderr, "[cheats] %s: %zu cheats, %zu switched on\n", f.path.string().c_str(), f.heads.size(), on);
 +    }
 +    for (std::size_t i = 0; i < f.heads.size(); ++i)
 +        if (f.lines[f.heads[i]][2] == '1') {
 +            static std::map<std::size_t, unsigned> runs;
-+            cheat_logging = cheat_log() != nullptr && ++runs[i] <= 60u;
++            // The run is counted whether or not the log is on: the summary printed at the second run (below) needs the count.
++            ++runs[i];
++            cheat_logging = cheat_log() != nullptr && runs[i] <= 60u;
 +            if (cheat_logging) std::fprintf(cheat_log(), "cheat %zu \"%s\" run %u\n", i, f.lines[f.heads[i]].c_str() + 3, runs[i]);
 +            cheat_stat = CheatStat{};
 +            run_cheat(runtime.memory(), f.codes[i]);
@@ -11551,7 +11603,7 @@ index 1b830d9..f26be35 100644
  void draw_over_game() {
      Layer &layer = Layer::get();
      if (!layer.attached()) return;
-@@ -1610,6 +2576,51 @@ void draw_over_game() {
+@@ -1610,6 +2590,51 @@ void draw_over_game() {
          layer.end_frame();
          return;
      }
@@ -11603,7 +11655,7 @@ index 1b830d9..f26be35 100644
      const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
      const bool overlay = network_overlay();
      const bool touch = !menu && layer.renderer().touch_controls_visible();
-@@ -1639,7 +2650,7 @@ void draw_over_game() {
+@@ -1639,7 +2664,7 @@ void draw_over_game() {
  
  bool menu_pauses() {
      const settings::Settings &s = settings::current();
@@ -11612,7 +11664,7 @@ index 1b830d9..f26be35 100644
  }
  
  void open_menu_over_game() {
-@@ -1650,6 +2661,9 @@ void open_menu_over_game() {
+@@ -1650,6 +2675,9 @@ void open_menu_over_game() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      menu.emplace(false);
@@ -11622,7 +11674,7 @@ index 1b830d9..f26be35 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -1659,9 +2673,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+@@ -1659,9 +2687,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
  bool menu_requested() {
      Layer &layer = Layer::get();
      if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
@@ -11650,7 +11702,7 @@ index 1b830d9..f26be35 100644
  }
  
  bool run_menu() {
-@@ -1670,6 +2700,9 @@ bool run_menu() {
+@@ -1670,6 +2714,9 @@ bool run_menu() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      Menu menu(true);

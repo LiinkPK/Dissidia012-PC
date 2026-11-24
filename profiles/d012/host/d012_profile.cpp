@@ -29,12 +29,13 @@
 #include "d012_camera.hpp"
 
 // The battle moves on a touch screen that have no button on a controller. Dodge and dash are L2 and R2. EX Mode (R + square, a
-// controller's L3) is there only while the player's EX gauge is full, and glows (d012_camera.cpp), so it cannot be pressed by accident.
+// controller's L3), the two assists and the Summon are there only while the move is ready, and glow (d012_camera.cpp), so they cannot be
+// pressed by accident.
 constexpr portablekit::GameProfile::TouchCombo kTouchCombos[] = {
     {"EX Mode", 0x0200u | 0x8000u, &d012::camera::ex_ready},  // R + square
-    {"Summon", 0x0200u | 0x2000u},     // R + circle
-    {"BRV Assist", 0x0100u | 0x2000u}, // L + circle
-    {"HP Assist", 0x0100u | 0x8000u},  // L + square
+    {"Summon", 0x0200u | 0x2000u, &d012::camera::summon_ready},          // R + circle
+    {"BRV Assist", 0x0100u | 0x2000u, &d012::camera::brv_assist_ready},  // L + circle
+    {"HP Assist", 0x0100u | 0x8000u, &d012::camera::hp_assist_ready},    // L + square
 };
 
 // The downloaded 100% saves equip two Cloud abilities (low ids 0x13 and 0x14) that have no row in the game's ability table (Cloud's end
