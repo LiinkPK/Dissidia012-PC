@@ -351,10 +351,10 @@ index 7a13ef5..1fb695d 100644
      const char *bytes = static_cast<const char *>(data);
      for (std::size_t done = 0; done < count;) {
 diff --git a/host/adhoc/host.cpp b/host/adhoc/host.cpp
-index 5edd4b4..758485c 100644
+index 5edd4b4..54aa6f7 100644
 --- a/host/adhoc/host.cpp
 +++ b/host/adhoc/host.cpp
-@@ -4,12 +4,14 @@
+@@ -4,12 +4,15 @@
  #include "../profile.hpp"
  #include "adhoc/client.hpp"
  #include "adhoc/discovery.hpp"
@@ -364,12 +364,13 @@ index 5edd4b4..758485c 100644
  #include "settings/settings.hpp"
  
  #include <algorithm>
++#include <atomic>
  #include <mutex>
 +#include <random>
  
  namespace portablekit {
  namespace {
-@@ -69,7 +71,7 @@ bool adhoc_host_start() {
+@@ -69,7 +72,7 @@ bool adhoc_host_start() {
          adhoc::Discovery::get().start_announcing(config.adhocctl_port, [server] {
              adhoc::Announcement info;
              info.name = adhoc_player_name();
@@ -378,7 +379,7 @@ index 5edd4b4..758485c 100644
              info.players = static_cast<unsigned>(server->status().players.size());
              return info;
          });
-@@ -81,6 +83,10 @@ bool adhoc_host_start() {
+@@ -81,6 +84,10 @@ bool adhoc_host_start() {
      }
      adhoc::Client::log("[adhoc] hosting a session", true);
      adhoc_apply_settings(true);
@@ -389,7 +390,7 @@ index 5edd4b4..758485c 100644
      return true;
  }
  
-@@ -93,6 +99,7 @@ void adhoc_host_stop() {
+@@ -93,6 +100,7 @@ void adhoc_host_stop() {
          state.server.stop();
          state.port = 0u;
      }
@@ -397,7 +398,7 @@ index 5edd4b4..758485c 100644
      adhoc::Client::log("[adhoc] stopped hosting", true);
      adhoc_apply_settings(true);
  }
-@@ -119,6 +126,63 @@ void adhoc_shutdown() noexcept {
+@@ -119,6 +127,67 @@ void adhoc_shutdown() noexcept {
      adhoc::Client::get().shutdown();
  }
  
@@ -443,8 +444,12 @@ index 5edd4b4..758485c 100644
 +
 +bool adhoc_online_mode() { return adhoc_session_active() || adhoc_relay_selected(); }
 +
++static std::atomic<double> g_held_speed{1.0};
++void adhoc_hold_game_speed(double factor) { g_held_speed.store(factor > 1.0 ? factor : 1.0, std::memory_order_relaxed); }
++
 +double adhoc_game_speed() {
 +    if (adhoc_online_mode()) return 1.0;
++    if (const double held = g_held_speed.load(std::memory_order_relaxed); held > 1.0) return held;
 +    // The setting is the step the player picked and the menu shows (2x, 4x, 8x). The factor it runs at is 2.5, 6.3 or 16: from Normal
 +    // (1) each step is about 2.5 times the one before, because speed is felt as a ratio, so every step up feels the same. The pacing
 +    // keeps these exactly (measured at 14).
@@ -1939,10 +1944,10 @@ index ec12b54..6b2e2b0 100644
  
  struct ServerPlayer {
 diff --git a/host/adhoc/session.hpp b/host/adhoc/session.hpp
-index c41a0b1..cb9cc3a 100644
+index c41a0b1..f473c3c 100644
 --- a/host/adhoc/session.hpp
 +++ b/host/adhoc/session.hpp
-@@ -17,6 +17,37 @@ void adhoc_apply_settings(bool switch_now = false);
+@@ -17,6 +17,39 @@ void adhoc_apply_settings(bool switch_now = false);
  // True while the game is in an ad hoc group or joining one, or hosting:
  // pausing it then would stop it answering the other players.
  [[nodiscard]] bool adhoc_session_active();
@@ -1975,6 +1980,8 @@ index c41a0b1..cb9cc3a 100644
 +[[nodiscard]] bool adhoc_unthrottled();
 +// The factor Game speed runs at now: 1, 2.5, 6.3 or 16 for the steps the menu calls Normal, 2x, 4x and 8x; always 1 while the game is online.
 +[[nodiscard]] double adhoc_game_speed();
++// A speed a port asks for while it holds a button (hle_extension::hold_game_speed); 1 ends it.
++void adhoc_hold_game_speed(double factor);
 +// True when a host's or player's product code is of the edition this instance runs.
 +[[nodiscard]] bool adhoc_same_edition(const std::string &product);
  
@@ -3351,10 +3358,10 @@ index 71dcf2b..dc9a464 100644
  
 diff --git a/host/gpu/texture_bundle.hpp b/host/gpu/texture_bundle.hpp
 new file mode 100644
-index 0000000..0fbccbd
+index 0000000..40524b1
 --- /dev/null
 +++ b/host/gpu/texture_bundle.hpp
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,145 @@
 +#pragma once
 +
 +#include "host_inflate.hpp"
@@ -3378,6 +3385,8 @@ index 0000000..0fbccbd
 +//   blob: a zlib stream of the BC7 levels, level 0 first, tightly packed (texture_cache.hpp)
 +//         or, when levels is 0, the image's PNG file as it is (compressed_size == raw_size): big static images, which
 +//         BC7's 4x4 blocks would show in
++//         or, when levels is 0xFFFFFFFF, a file of the pack's own kept as it is (the entry "@stamp": the stamp table,
++//         kernel/texture_stamp.hpp), not an image
 +//
 +// It is made by the converter (outside this repository) from the pack's PNGs.
 +namespace portablekit::gpu {
@@ -3428,7 +3437,7 @@ index 0000000..0fbccbd
 +        const auto found = entries_.find(lower(name));
 +        if (found == entries_.end()) return false;
 +        const Entry &entry = found->second;
-+        if (entry.levels == 0u) return false;
++        if (entry.levels == 0u || entry.levels == kBlob) return false;
 +        std::ifstream in(file_, std::ios::binary);
 +        if (!in) return false;
 +        std::vector<std::uint8_t> packed(entry.compressed);
@@ -3450,11 +3459,24 @@ index 0000000..0fbccbd
 +        return total == out.data.size();
 +    }
 +
++    // A blob entry (not an image), as it is. Safe from several threads.
++    bool read_blob(const std::string &name, std::vector<std::uint8_t> &out) const {
++        const auto found = entries_.find(lower(name));
++        if (found == entries_.end() || found->second.levels != kBlob) return false;
++        std::ifstream in(file_, std::ios::binary);
++        if (!in) return false;
++        out.resize(found->second.compressed);
++        in.seekg(static_cast<std::streamoff>(found->second.offset));
++        in.read(reinterpret_cast<char *>(out.data()), static_cast<std::streamsize>(out.size()));
++        return static_cast<std::uint64_t>(in.gcount()) == out.size();
++    }
++
 +    // An entry kept as a PNG file (lossless).
 +    [[nodiscard]] bool is_png(const std::string &name) const {
 +        const auto found = entries_.find(lower(name));
 +        return found != entries_.end() && found->second.levels == 0u;
 +    }
++    static constexpr std::uint32_t kBlob = 0xFFFFFFFFu;
 +    bool read_png(const std::string &name, std::vector<std::uint8_t> &out) const {
 +        const auto found = entries_.find(lower(name));
 +        if (found == entries_.end() || found->second.levels != 0u) return false;
@@ -3784,7 +3806,7 @@ index 131a4db..81335ad 100644
  // decoded on another thread while the game goes on changing memory.
  struct TextureSnapshot {
 diff --git a/host/gpu/texture_pack.cpp b/host/gpu/texture_pack.cpp
-index 28628eb..0d2e933 100644
+index 28628eb..af67be4 100644
 --- a/host/gpu/texture_pack.cpp
 +++ b/host/gpu/texture_pack.cpp
 @@ -1,5 +1,7 @@
@@ -3927,7 +3949,35 @@ index 28628eb..0d2e933 100644
      const auto entry = lookup(entries_, key);
      const bool found = entry != entries_.end() && !entry->second.empty();
      if (texture_pack_trace()) {
-@@ -548,9 +642,20 @@ void TexturePack::request(Replacement &replacement) {
+@@ -538,6 +632,27 @@ std::shared_ptr<Replacement> TexturePack::find(const GuestMemory &memory, const
+     return file->second;
+ }
+ 
++std::shared_ptr<Replacement> TexturePack::find_named(const std::string &name, const TextureState &texture) {
++    const std::uint64_t range_key = static_cast<std::uint64_t>(texture.address & 0x0FFFFFF0u) << 32u |
++                                    static_cast<std::uint64_t>(texture.width) << 16u | texture.height;
++    if (options_.hash_ranges.find(range_key) != options_.hash_ranges.end()) return nullptr;
++    const auto existing = files_.find(name);
++    if (existing != files_.end()) return existing->second;
++    std::error_code ec;
++    if (!bundle_.contains(name) && !std::filesystem::exists(directory_ / std::filesystem::path(name), ec)) return nullptr;
++    auto replacement = std::make_shared<Replacement>();
++    replacement->name = name;
++    replacement->file = directory_ / std::filesystem::path(name);
++    replacement->texture_width = texture.width;
++    replacement->texture_height = texture.height;
++    replacement->covered_width = texture.width;
++    replacement->covered_height = texture.height;
++    const auto filter = filters_.find(TexturePackKey{});
++    if (filter != filters_.end()) replacement->filter = filter->second;
++    files_.emplace(name, replacement);
++    return replacement;
++}
++
+ void TexturePack::request(Replacement &replacement) {
+     if (replacement.state.load(std::memory_order_acquire) != Replacement::State::Unloaded) return;
+     replacement.state.store(Replacement::State::Queued, std::memory_order_release);
+@@ -548,9 +663,20 @@ void TexturePack::request(Replacement &replacement) {
      wake_.notify_one();
  }
  
@@ -3949,7 +3999,7 @@ index 28628eb..0d2e933 100644
      replacement.state.store(Replacement::State::Resident, std::memory_order_release);
      {
          std::lock_guard lock(mutex_);
-@@ -576,6 +681,7 @@ std::filesystem::path TexturePack::resolve(const std::string &name) {
+@@ -576,6 +702,7 @@ std::filesystem::path TexturePack::resolve(const std::string &name) {
  }
  
  void TexturePack::loader_main() {
@@ -3957,7 +4007,7 @@ index 28628eb..0d2e933 100644
      for (;;) {
          Replacement *replacement = nullptr;
          {
-@@ -588,12 +694,78 @@ void TexturePack::loader_main() {
+@@ -588,12 +715,78 @@ void TexturePack::loader_main() {
              replacement = queue_.front();
              queue_.pop_front();
          }
@@ -4039,7 +4089,7 @@ index 28628eb..0d2e933 100644
      if (bytes.empty()) {
          std::filesystem::path folded;
          {
-@@ -635,6 +807,14 @@ void TexturePack::decode(Replacement &replacement) {
+@@ -635,6 +828,14 @@ void TexturePack::decode(Replacement &replacement) {
  
      replacement.width = full_width;
      replacement.height = full_height;
@@ -4055,7 +4105,7 @@ index 28628eb..0d2e933 100644
          std::lock_guard lock(mutex_);
          decoded_bytes_ += pixels.size();
 diff --git a/host/gpu/texture_pack.hpp b/host/gpu/texture_pack.hpp
-index 4d4c222..d1fd2d3 100644
+index 4d4c222..c2fdfa1 100644
 --- a/host/gpu/texture_pack.hpp
 +++ b/host/gpu/texture_pack.hpp
 @@ -1,8 +1,10 @@
@@ -4124,7 +4174,20 @@ index 4d4c222..d1fd2d3 100644
  
  // What [options] says, plus the parts of the other sections that change a
  // texture's key.
-@@ -148,10 +186,21 @@ public:
+@@ -145,13 +183,34 @@ public:
+     std::shared_ptr<Replacement> find(const GuestMemory &memory, const TextureState &texture,
+                                       std::uint16_t max_seen_v);
+ 
++    // The replacement a stamp names (kernel/texture_stamp.hpp): the image `name` of the pack, found without hashing the texture. Null
++    // when the pack has no such image, or when the texture is one a [hashranges] entry covers only in part (the hash path pads those).
++    std::shared_ptr<Replacement> find_named(const std::string &name, const TextureState &texture);
++    // A blob stored in hd.bundle (the stamp table, "@stamp"); empty when there is none.
++    [[nodiscard]] std::vector<std::uint8_t> bundle_blob(const std::string &name) const {
++        std::vector<std::uint8_t> out;
++        if (!bundle_.read_blob(name, out)) out.clear();
++        return out;
++    }
++
      // Starts decoding an Unloaded replacement on a loader thread. Only the
      // renderer's thread calls this and consumed().
      void request(Replacement &replacement);
@@ -4146,7 +4209,7 @@ index 4d4c222..d1fd2d3 100644
      [[nodiscard]] const std::filesystem::path &directory() const noexcept { return directory_; }
      [[nodiscard]] const TexturePackOptions &options() const noexcept { return options_; }
      [[nodiscard]] std::size_t entry_count() const noexcept { return entries_.size(); }
-@@ -173,10 +222,24 @@ private:
+@@ -173,10 +232,24 @@ private:
      template <typename Map>
      [[nodiscard]] typename Map::const_iterator lookup(const Map &map, const TexturePackKey &key) const;
      [[nodiscard]] std::filesystem::path resolve(const std::string &name);
@@ -4172,7 +4235,7 @@ index 4d4c222..d1fd2d3 100644
      TexturePackOptions options_;
      std::vector<std::string> games_;  // [games]
      // Key -> file name relative to the pack; an empty name means "keep the
-@@ -195,6 +258,7 @@ private:
+@@ -195,6 +268,7 @@ private:
      std::mutex mutex_;
      std::condition_variable wake_;
      std::condition_variable room_;
@@ -4289,7 +4352,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..1eded22 100644
+index e4d7e11..8fb3daf 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -4302,7 +4365,7 @@ index e4d7e11..1eded22 100644
  
  #include "frame_interpolation.hpp"
  #include "ge_census.hpp"
-@@ -11,18 +13,27 @@
+@@ -11,18 +13,28 @@
  #include "replacement_textures.hpp"
  #include "texture_decode.hpp"
  #include "triangle_indices.hpp"
@@ -4312,6 +4375,7 @@ index e4d7e11..1eded22 100644
  
  #include "install/user_data.hpp"
 +#include "kernel/read_sources.hpp"
++#include "kernel/texture_stamp.hpp"
  
  #include "perf/frame_stats.hpp"
  #include "perf/perf_overlay.hpp"
@@ -4330,7 +4394,7 @@ index e4d7e11..1eded22 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
  #include "platform/android_jni.hpp"
  #endif
-@@ -47,6 +58,7 @@
+@@ -47,6 +59,7 @@
  #include <cstdio>
  #include <cstdlib>
  #include <cstring>
@@ -4338,7 +4402,7 @@ index e4d7e11..1eded22 100644
  #include <filesystem>
  #include <fstream>
  #include <iomanip>
-@@ -55,13 +67,59 @@
+@@ -55,13 +68,59 @@
  #include <map>
  #include <memory>
  #include <string>
@@ -4398,7 +4462,7 @@ index e4d7e11..1eded22 100644
  
  namespace {
  // How many renderer calls the calling thread is inside (VulkanRenderer::Impl::
-@@ -73,7 +131,8 @@ std::atomic<VulkanRenderer *> g_presenting{};
+@@ -73,7 +132,8 @@ std::atomic<VulkanRenderer *> g_presenting{};
  } // namespace
  
  std::string default_window_title() {
@@ -4408,7 +4472,7 @@ index e4d7e11..1eded22 100644
      if (*kBuildLabel != '\0') title += std::string(" (") + kBuildLabel + ")";
      return title;
  }
-@@ -94,6 +153,22 @@ constexpr std::uint32_t kSettleFrames = 12u;
+@@ -94,6 +154,22 @@ constexpr std::uint32_t kSettleFrames = 12u;
  // a fade, a backdrop or a copy of the picture, which spreads with the 3D view
  // instead of keeping the interface's proportions.
  constexpr float kScreenWideDraw = 470.0f;
@@ -4431,7 +4495,7 @@ index e4d7e11..1eded22 100644
  // Room for one frame's vertices. With frame interpolation a frame cannot reuse
  // its region part way through, so all of it must fit: measured at 16.1 MiB in
  // the busiest areas found (Flooded Forest area 3, Tundra area 2), where 16 MiB
-@@ -689,6 +764,61 @@ bool write_bmp(const std::string &path, const std::uint8_t *pixels, std::uint32_
+@@ -689,6 +765,61 @@ bool write_bmp(const std::string &path, const std::uint8_t *pixels, std::uint32_
      return static_cast<bool>(out);
  }
  
@@ -4493,7 +4557,7 @@ index e4d7e11..1eded22 100644
  struct PadTuning {
      float dead_zone{0.15f};
      bool stick_square{true};
-@@ -699,6 +829,7 @@ struct PadTuning {
+@@ -699,6 +830,7 @@ struct PadTuning {
      bool invert_x{};
      bool invert_y{};
      bool confirm_south{};
@@ -4501,7 +4565,7 @@ index e4d7e11..1eded22 100644
      settings::JumpButton jump{settings::JumpButton::Off};
      bool trace{false};
  };
-@@ -724,6 +855,7 @@ PadTuning pad_tuning() {
+@@ -724,6 +856,7 @@ PadTuning pad_tuning() {
      value.invert_y = player.invert_camera_y;
      // Which face button presses the game's confirm button; see read_gamepad.
      value.confirm_south = player.confirm_south;
@@ -4509,7 +4573,17 @@ index e4d7e11..1eded22 100644
      value.jump = player.jump_button;
      value.trace = trace;
      return value;
-@@ -761,8 +893,13 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
+@@ -753,7 +886,8 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
+         if (SDL_GetGamepadButton(device, button)) buttons |= bit;
+     };
+     // The stick clicks are extra buttons: a PSP has neither.
+-    if (jump != SDL_GAMEPAD_BUTTON_LEFT_STICK && SDL_GetGamepadButton(device, SDL_GAMEPAD_BUTTON_LEFT_STICK))
++    if (jump != SDL_GAMEPAD_BUTTON_LEFT_STICK && !settings::current().disable_l3 &&
++        SDL_GetGamepadButton(device, SDL_GAMEPAD_BUTTON_LEFT_STICK))
+         pad.extra |= input::kExtraL3;
+     if (SDL_GetGamepadButton(device, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) pad.extra |= input::kExtraR3;
+     if (jump != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetGamepadButton(device, jump)) buttons |= tilt->left | tilt->right;
+@@ -761,8 +895,13 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
      held(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, 0x0020u);
      held(SDL_GAMEPAD_BUTTON_DPAD_DOWN, 0x0040u);
      held(SDL_GAMEPAD_BUTTON_DPAD_LEFT, 0x0080u);
@@ -4525,7 +4599,7 @@ index e4d7e11..1eded22 100644
      held(SDL_GAMEPAD_BUTTON_START, 0x0008u);
      held(SDL_GAMEPAD_BUTTON_BACK, 0x0001u);
      held(SDL_GAMEPAD_BUTTON_NORTH, 0x1000u);
-@@ -795,11 +932,18 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
+@@ -795,11 +934,18 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
      // gets the triggers as those instead, unless the player chose a profile.
      const std::uint32_t extras = portablekit::active_extra_buttons();
      const bool profiled = tuning.triggers != 0u && tuning.triggers <= profiles.size();
@@ -4546,7 +4620,7 @@ index e4d7e11..1eded22 100644
          pad.extra |= input::kExtraR2;
          if (profiled || (extras & input::kExtraR2) == 0u) buttons |= right_trigger;
      }
-@@ -899,6 +1043,7 @@ private:
+@@ -899,6 +1045,7 @@ private:
          finished_.notify_all();
      }
      void work() {
@@ -4554,7 +4628,7 @@ index e4d7e11..1eded22 100644
          std::unique_lock<std::mutex> guard(lock_);
          for (;;) {
              wake_.wait(guard, [this] { return stopping_ || !queue_.empty(); });
-@@ -934,8 +1079,59 @@ struct VulkanRenderer::Impl {
+@@ -934,8 +1081,59 @@ struct VulkanRenderer::Impl {
          // How far down a 512-tall texture has been drawn, which decides how
          // much of it the pack's hash covers; see texture_pack.hpp.
          std::uint16_t max_seen_v{};
@@ -4614,7 +4688,7 @@ index e4d7e11..1eded22 100644
      RendererConfig config;
      SDL_Window *window{};
      VkInstance instance{};
-@@ -1213,6 +1409,9 @@ struct VulkanRenderer::Impl {
+@@ -1213,6 +1411,9 @@ struct VulkanRenderer::Impl {
      input::touch::Controls touch;
      bool touch_visible{};
      bool real_mouse_seen{};
@@ -4624,7 +4698,7 @@ index e4d7e11..1eded22 100644
      MouseMotion touch_motion{};
      struct TouchLayoutKey {
          int width{};
-@@ -1254,8 +1453,15 @@ struct VulkanRenderer::Impl {
+@@ -1254,8 +1455,16 @@ struct VulkanRenderer::Impl {
          insets.top += margin;
          insets.right += margin;
          insets.bottom += margin;
@@ -4637,12 +4711,13 @@ index e4d7e11..1eded22 100644
 +        for (std::size_t i = 0; i < layout.combo_count; ++i) {
 +            layout.combo_buttons[i] = profile.touch_combos[i].buttons;
 +            layout.combo_labels[i] = profile.touch_combos[i].label;
++            layout.combo_ready[i] = profile.touch_combos[i].ready;
 +        }
 +        touch.set_layout(layout);
      }
      void handle_touch(const SDL_Event &event) {
          const bool finger = event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION ||
-@@ -1623,6 +1829,7 @@ struct VulkanRenderer::Impl {
+@@ -1623,6 +1832,7 @@ struct VulkanRenderer::Impl {
      // the guest's vertex bytes of transformed triangle draws and the vertex
      // shader decodes and skins them.
      bool gpu_decode_available{};
@@ -4650,7 +4725,7 @@ index e4d7e11..1eded22 100644
      bool check_gpu_decode{};  // <prefix>_CHECK_GPU_DECODE
      std::uint32_t raw_offset{};  // the raw block most recently written this frame
      RawBlock last_raw{};
-@@ -2052,6 +2259,20 @@ struct VulkanRenderer::Impl {
+@@ -2052,6 +2262,20 @@ struct VulkanRenderer::Impl {
          const std::lock_guard<std::mutex> guard(presenter->queue);
          vkDeviceWaitIdle(device);
      }
@@ -4671,7 +4746,7 @@ index e4d7e11..1eded22 100644
      // A flip without interpolation, handed to the present thread: the newest
      // picture (take_picture) with this interface over it.
      bool plain_pending{};
-@@ -2195,6 +2416,16 @@ struct VulkanRenderer::Impl {
+@@ -2195,6 +2419,16 @@ struct VulkanRenderer::Impl {
      std::uint64_t replaced_draws{};  // this second, for <prefix>_TRACE_TEXTURE_PACK
      void apply_texture_pack();
      [[nodiscard]] VkDescriptorSet texture_descriptor(const GuestMemory &memory, const DrawCall &call);
@@ -4688,7 +4763,7 @@ index e4d7e11..1eded22 100644
      std::uint64_t texture_clock{};
      // texture_key results for the display list being walked, by the state that
      // feeds the key; cleared by begin_display_list().
-@@ -2247,9 +2478,13 @@ struct VulkanRenderer::Impl {
+@@ -2247,9 +2481,13 @@ struct VulkanRenderer::Impl {
      bool frame_uploads_open{};
      VkDeviceSize upload_ring_used{};
      std::uint32_t frame_upload_count{};
@@ -4703,7 +4778,7 @@ index e4d7e11..1eded22 100644
      }
      // Stages `bytes` of pixels for a copy recorded into frame_uploads; null
      // when there is no room and no memory.
-@@ -2712,6 +2947,11 @@ struct VulkanRenderer::Impl {
+@@ -2712,6 +2950,11 @@ struct VulkanRenderer::Impl {
      // Copies pixels into a texture's image: ahead of the frame's commands
      // while one is recorded, else at once (waiting for the queue).
      void upload_texture(VkImage image, std::uint32_t width, std::uint32_t height, const std::uint32_t *pixels);
@@ -4715,7 +4790,7 @@ index e4d7e11..1eded22 100644
      void destroy_texture(Texture &texture);
  };
  
-@@ -2868,12 +3108,27 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -2868,12 +3111,27 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      // under them). The safe area keeps the picture clear of a camera cutout.
      window_flags |= SDL_WINDOW_FULLSCREEN;
  #endif
@@ -4745,7 +4820,7 @@ index e4d7e11..1eded22 100644
  
      std::uint32_t extension_count = 0u;
      const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&extension_count);
-@@ -2976,6 +3231,13 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -2976,6 +3234,13 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      VkPhysicalDeviceFeatures supported_features{};
      vkGetPhysicalDeviceFeatures(impl.physical_device, &supported_features);
      VkPhysicalDeviceFeatures enabled_features{};
@@ -4759,7 +4834,7 @@ index e4d7e11..1eded22 100644
      if (portablekit::env("CHECK_GPU_DECODE") != nullptr) {
          if (supported_features.vertexPipelineStoresAndAtomics == VK_TRUE) {
              enabled_features.vertexPipelineStoresAndAtomics = VK_TRUE;
-@@ -3463,6 +3725,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -3463,6 +3728,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      impl.device_name = properties.deviceName;
      impl.prewarm_pipelines();
      // What a player's log needs to tell drivers and memory apart.
@@ -4767,7 +4842,7 @@ index e4d7e11..1eded22 100644
      {
          VkPhysicalDeviceMemoryProperties memory{};
          vkGetPhysicalDeviceMemoryProperties(impl.physical_device, &memory);
-@@ -3472,6 +3735,14 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -3472,6 +3738,14 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
              vertex_requirements.memoryTypeBits,
              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
          const VkMemoryPropertyFlags flags = memory.memoryTypes[vertex_type].propertyFlags;
@@ -4782,7 +4857,7 @@ index e4d7e11..1eded22 100644
          std::cout << "[render] Vulkan " << VK_API_VERSION_MAJOR(properties.apiVersion) << "."
                    << VK_API_VERSION_MINOR(properties.apiVersion) << "." << VK_API_VERSION_PATCH(properties.apiVersion)
                    << ", driver 0x" << std::hex << properties.driverVersion << ", vendor 0x" << properties.vendorID
-@@ -4515,8 +4786,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
+@@ -4515,8 +4789,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
      void *mapped = nullptr;
      vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped);
      const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM || swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
@@ -4794,7 +4869,7 @@ index e4d7e11..1eded22 100644
          std::cout << "[render] window " << capture_extent.width << "x" << capture_extent.height << " -> "
                    << capture_path << std::endl;
      else
-@@ -4576,8 +4848,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
+@@ -4576,8 +4851,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
      VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
      submit.commandBufferCount = 1u;
      submit.pCommandBuffers = &commands;
@@ -4804,7 +4879,7 @@ index e4d7e11..1eded22 100644
      vkFreeCommandBuffers(device, command_pool, 1u, &commands);
  }
  
-@@ -4734,7 +5005,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
+@@ -4734,7 +5008,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
      descriptor_info.descriptorPool = descriptor_pool;
      descriptor_info.descriptorSetCount = 1u;
      descriptor_info.pSetLayouts = &descriptor_layout;
@@ -4819,7 +4894,7 @@ index e4d7e11..1eded22 100644
      VkDescriptorImageInfo image_info{texture_sampler(), texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
      write.dstSet = texture.descriptor;
-@@ -4840,8 +5117,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4840,8 +5120,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      // Uploads are synchronous: the GPU finishes everything queued before this
      // returns, which counts as waiting rather than rendering.
      const perf::Clock::time_point wait_start = perf::Clock::now();
@@ -4829,7 +4904,7 @@ index e4d7e11..1eded22 100644
      perf::add_wait_time(perf::Clock::now() - wait_start, perf::Stall::Upload);
      if (!reuse) {
          vkFreeCommandBuffers(device, command_pool, 1u, &commands);
-@@ -4851,6 +5127,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4851,6 +5130,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      }
  }
  
@@ -4882,7 +4957,21 @@ index e4d7e11..1eded22 100644
  bool VulkanRenderer::Impl::stage_upload(const void *pixels, VkDeviceSize bytes, VkBuffer &buffer,
                                          VkDeviceSize &offset) {
      const auto make = [&](VkDeviceSize size, VkBuffer &made, VkDeviceMemory &memory, void *&mapped) {
-@@ -5117,16 +5439,329 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+@@ -5024,7 +5349,12 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+             const std::uint16_t seen = update_max_seen_v(texture.max_seen_v, drawn_max_v(call), call.through);
+             if (seen != texture.max_seen_v) {
+                 texture.max_seen_v = seen;
+-                texture.replacement = pack->find(memory, state, seen);
++                // A stamped texture keeps the image its stamp named.
++                const std::uint8_t *head = texture_stamp::loaded()
++                                               ? memory.raw_pointer(state.address & 0x0FFFFFF0u, texture_stamp::kMarkerSize)
++                                               : nullptr;
++                if (head == nullptr || texture_stamp::read_marker(head) == nullptr)
++                    texture.replacement = pack->find(memory, state, seen);
+             }
+         }
+         return texture;
+@@ -5117,16 +5447,346 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
      texture.max_seen_v = max_seen_v;
      // The pack's hash reads the whole texture, so it is taken here, once per
      // upload, and never on the per-draw path above.
@@ -4941,7 +5030,24 @@ index e4d7e11..1eded22 100644
 +        }
 +    }
 +    if (pack) {
-+        texture.replacement = pack->find(memory, state, max_seen_v);
++        // A stamp (kernel/texture_stamp.hpp) names the image outright; a texture without one is found by its hash.
++        if (texture_stamp::loaded()) {
++            if (const std::uint8_t *head = memory.raw_pointer(state.address & 0x0FFFFFF0u, texture_stamp::kMarkerSize))
++                if (const std::string *stamped = texture_stamp::read_marker(head)) {
++                    texture.replacement = pack->find_named(*stamped, state);
++                    // <prefix>_STAMP_CHECK=1: log every texture whose stamp names another image than the hash does (log only).
++                    static const bool check = portablekit::env("STAMP_CHECK") != nullptr;
++                    if (check && texture.replacement) {
++                        const auto by_hash = pack->find(memory, state, max_seen_v);
++                        if (by_hash == nullptr || by_hash->name != texture.replacement->name)
++                            std::cout << "[stamp] differs: stamp says " << texture.replacement->name << ", the hash says "
++                                      << (by_hash ? by_hash->name : std::string("(nothing)")) << " for " << state.width << "x"
++                                      << state.height << " fmt " << static_cast<int>(state.format) << " at 0x" << std::hex
++                                      << (state.address & 0x0FFFFFFFu) << std::dec << "\n";
++                    }
++                }
++        }
++        if (!texture.replacement) texture.replacement = pack->find(memory, state, max_seen_v);
 +        // Decoding starts now, ahead of the first draw that uses the image.
 +        if (texture.replacement) pack->request(*texture.replacement);
 +    }
@@ -5213,7 +5319,7 @@ index e4d7e11..1eded22 100644
      if (texture.replacement && pack) {
          // Until the image is decoded and on the GPU, the original is drawn.
          if (const VkDescriptorSet replaced = replacements.descriptor(*texture.replacement, *pack, frames)) {
-@@ -5179,6 +5814,10 @@ void VulkanRenderer::Impl::apply_texture_pack() {
+@@ -5179,6 +5839,17 @@ void VulkanRenderer::Impl::apply_texture_pack() {
          std::cout << "[texpack] " << error << "\n";
          return;
      }
@@ -5221,10 +5327,17 @@ index e4d7e11..1eded22 100644
 +    // blocky next to them. Off unless <prefix>_BC7_TEXTURES is set, so the pack draws exactly as its PNGs.
 +    pack->set_cache(bc7_supported && portablekit::env("BC7_TEXTURES") != nullptr);
 +    pack->set_bundle(bc7_supported);
++    // The stamp table travels in the bundle; <prefix>_NO_STAMP=1 leaves it unread, so every texture is found by its hash as before.
++    if (bc7_supported && portablekit::env("NO_STAMP") == nullptr) {
++        const std::vector<std::uint8_t> blob = pack->bundle_blob("@stamp");
++        if (!blob.empty() && texture_stamp::load(std::string(blob.begin(), blob.end())))
++            std::cout << "[stamp] table: " << texture_stamp::table().by_entry.size() << " entries, " << texture_stamp::table().names.size()
++                      << " images\n";
++    }
      pack_status = std::to_string(pack->entry_count()) + " textures";
      std::cout << "[texpack] " << pack->entry_count() << " textures from " << folder.string() << "\n";
  }
-@@ -6636,6 +7275,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
+@@ -6636,6 +7307,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
          keys.push_back(key_from(words));
      }
      prewarm->thread = std::thread([this, keys = std::move(keys)] {
@@ -5232,7 +5345,7 @@ index e4d7e11..1eded22 100644
          const auto start = std::chrono::steady_clock::now();
          std::uint32_t made = 0u;
          for (const PipelineKey &key : keys) {
-@@ -6849,7 +7489,7 @@ bool VulkanRenderer::pump_events() {
+@@ -6849,7 +7521,7 @@ bool VulkanRenderer::pump_events() {
          // every other event while the on-screen keyboard is up.
          if (event.type == SDL_EVENT_GAMEPAD_ADDED) impl_->open_gamepad(event.gdevice.which);
          if (event.type == SDL_EVENT_GAMEPAD_REMOVED) impl_->close_gamepad(event.gdevice.which);
@@ -5241,7 +5354,7 @@ index e4d7e11..1eded22 100644
          // reserved for the in-game menu.
          if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) impl_->update_display_info();
          if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) impl_->swapchain_dirty = true;
-@@ -6866,7 +7506,14 @@ bool VulkanRenderer::pump_events() {
+@@ -6866,7 +7538,14 @@ bool VulkanRenderer::pump_events() {
          if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) ||
              ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
               event.button.which != SDL_TOUCH_MOUSEID))
@@ -5256,7 +5369,7 @@ index e4d7e11..1eded22 100644
          impl_->handle_touch(event);
          if (event.type == SDL_EVENT_MOUSE_MOTION && impl_->mouse_captured && event.motion.which != SDL_TOUCH_MOUSEID &&
              (!impl_->scripted_input || event.motion.which == kScriptedMouse)) {
-@@ -6880,9 +7527,96 @@ bool VulkanRenderer::pump_events() {
+@@ -6880,9 +7559,96 @@ bool VulkanRenderer::pump_events() {
          if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
              impl_->mouse_buttons &= ~(1u << event.button.button);
          if (impl_->event_hook && impl_->event_hook(event)) continue;
@@ -5331,7 +5444,7 @@ index e4d7e11..1eded22 100644
 +                std::fflush(stdout);
 +            }
 +        }
-+    }
+     }
 +#if !defined(__ANDROID__)
 +    // Hide the pointer over the window after 2 seconds without moving; any move brings it back (above). While the mouse is
 +    // captured for the game, SDL hides it itself.
@@ -5348,12 +5461,12 @@ index e4d7e11..1eded22 100644
 +            if (!SDL_CursorVisible()) SDL_ShowCursor();
 +            impl_->pointer_hidden = false;
 +        }
-     }
++    }
 +#endif
      // Only sample while the window has focus: a key still down when focus is
      // lost stays down in SDL's snapshot, which the guest sees as a held
      // direction it can never release.
-@@ -6919,6 +7653,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6919,6 +7685,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
          if (const int button = input::mouse_button_of(binding))
              return impl_->mouse_captured && (impl_->mouse_buttons & (1u << button)) != 0u;
          const int position = input::key_position(binding);
@@ -5364,7 +5477,7 @@ index e4d7e11..1eded22 100644
          return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
                                   impl_->scripted_keys[static_cast<std::size_t>(position)]);
      });
-@@ -6955,12 +7693,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6955,12 +7725,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
      // So do the on-screen controls.
      if (impl_->touch_visible) {
          pad.buttons |= impl_->touch.buttons();
@@ -5400,7 +5513,7 @@ index e4d7e11..1eded22 100644
      }
  
      pad.analog_x = static_cast<std::uint8_t>(std::clamp(0x80 + analog_x, 0, 255));
-@@ -7312,7 +8073,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+@@ -7312,7 +8105,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
      const Impl::Guard guard(*impl_);
      scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
      if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
@@ -5413,7 +5526,7 @@ index e4d7e11..1eded22 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7322,7 +8087,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+@@ -7322,7 +8119,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
  #if defined(__ANDROID__)
      fullscreen = true;
  #endif
@@ -5423,7 +5536,7 @@ index e4d7e11..1eded22 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7813,6 +8579,13 @@ void VulkanRenderer::begin_display_list() {
+@@ -7813,6 +8611,13 @@ void VulkanRenderer::begin_display_list() {
      if (!impl_) return;
      const Impl::Guard guard(*impl_);
      ++impl_->display_lists;
@@ -5437,7 +5550,7 @@ index e4d7e11..1eded22 100644
      impl_->list_texture_keys.clear();
      impl_->last_texture = nullptr;
  }
-@@ -7820,10 +8593,77 @@ void VulkanRenderer::begin_display_list() {
+@@ -7820,10 +8625,77 @@ void VulkanRenderer::begin_display_list() {
  void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
      Impl &impl = *impl_;
      if (!impl.ready) return;
@@ -5515,7 +5628,7 @@ index e4d7e11..1eded22 100644
  }
  
  void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
-@@ -7832,6 +8672,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7832,6 +8704,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      const Impl::Guard guard(impl);
      const perf::SplitScope split(perf::Split::Draw);
      if (!impl.recording) begin_frame();
@@ -5545,7 +5658,7 @@ index e4d7e11..1eded22 100644
      // Presents between flips fall due while the game draws, too: a busy
      // frame spends most of its time in here.
      if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
-@@ -7937,10 +8800,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7937,10 +8832,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
      // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
      // texture state it samples, to find the tiles a 2D screen is built from.
@@ -5567,7 +5680,7 @@ index e4d7e11..1eded22 100644
  
      // Transformed triangles, strips and fans go straight into the vertex
      // buffer: each decoded vertex once, converted as it is written, and a
-@@ -8110,6 +8982,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8110,6 +9014,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
                                     static_cast<float>(call.texture.height));
          }
@@ -6186,7 +6299,7 @@ index e4d7e11..1eded22 100644
      }
  
      if (trace && impl.draws < 400u) {
-@@ -9520,7 +11004,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+@@ -9520,7 +11036,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
  bool VulkanRenderer::Impl::interpolation_wanted() const {
      // Emulated time running ahead of real time already presents faster than
      // the game's own rate; the keyboard's held frame is shown as it is.
@@ -6846,6 +6959,26 @@ index d3c82a6..db62ae0 100644
  void register_system(HleRegistrar &hle);
  void register_media(HleRegistrar &hle);
  void register_atrac(HleRegistrar &hle);
+diff --git a/host/hle/hle_extension_host.cpp b/host/hle/hle_extension_host.cpp
+index 6356f17..0e04027 100644
+--- a/host/hle/hle_extension_host.cpp
++++ b/host/hle/hle_extension_host.cpp
+@@ -3,6 +3,7 @@
+ // program was built with.
+ 
+ #include "../profile.hpp"
++#include "adhoc/session.hpp"
+ #include "extension_keys.hpp"
+ #include "hle_common.hpp"
+ #include "hle_extensions.hpp"
+@@ -114,6 +115,7 @@ void add_file_provider(FileProvider provider) { ::portablekit::add_file_provider
+ static_assert(kExtraL2 == input::kExtraL2 && kExtraR2 == input::kExtraR2 && kExtraL3 == input::kExtraL3 &&
+               kExtraR3 == input::kExtraR3);
+ std::uint32_t extra_buttons() { return ::portablekit::pad_extra_buttons(); }
++void hold_game_speed(double factor) { ::portablekit::adhoc_hold_game_speed(factor); }
+ 
+ void want_second_pad(bool wanted) { ::portablekit::want_second_pad(wanted); }
+ 
 diff --git a/host/hle/hle_font.cpp b/host/hle/hle_font.cpp
 index 4758110..238dc6e 100644
 --- a/host/hle/hle_font.cpp
@@ -7124,7 +7257,7 @@ index 1588863..dc5e299 100644
  };
  inline constexpr std::size_t kActions = static_cast<std::size_t>(Action::Count);
 diff --git a/host/input/touch_controls.cpp b/host/input/touch_controls.cpp
-index 12d1a1c..75b9ec0 100644
+index 12d1a1c..2255f12 100644
 --- a/host/input/touch_controls.cpp
 +++ b/host/input/touch_controls.cpp
 @@ -26,7 +26,7 @@ bool Circle::contains(Point p, float slack) const {
@@ -7163,16 +7296,17 @@ index 12d1a1c..75b9ec0 100644
      // The D-pad: at the left edge, half way down, clear of L above it.
      const float reach = face * 2.3f;
      layout.dpad_shown = dpad;
-@@ -93,7 +108,7 @@ std::optional<Control> Controls::control_at(Point at, bool face_only) const {
+@@ -93,7 +108,8 @@ std::optional<Control> Controls::control_at(Point at, bool face_only) const {
      float best_distance = 0.0f;
      for (std::size_t i = 0; i <= last; ++i) {
          const Circle &circle = layout_.controls[i];
 -        if (!circle.contains(at, 1.2f)) continue;
 +        if (!(circle.radius > 0.0f) || !circle.contains(at, 1.2f)) continue;
++        if (!combo_available(static_cast<Control>(i))) continue;  // a combo that is not ready cannot be pressed
          const float distance = std::hypot(at.x - circle.centre.x, at.y - circle.centre.y) / circle.radius;
          if (!best || distance < best_distance) {
              best = static_cast<Control>(i);
-@@ -129,8 +144,6 @@ void Controls::finger_down(std::uint64_t id, Point at) {
+@@ -129,8 +145,6 @@ void Controls::finger_down(std::uint64_t id, Point at) {
      } else if (at.x < layout_.stick_split && !stick_.active) {
          slot->role = Role::Stick;
          stick_ = {true, at, at};
@@ -7181,7 +7315,7 @@ index 12d1a1c..75b9ec0 100644
      }
  }
  
-@@ -167,10 +180,19 @@ void Controls::finger_move(std::uint64_t id, Point at) {
+@@ -167,10 +181,19 @@ void Controls::finger_move(std::uint64_t id, Point at) {
          }
          break;
      }
@@ -7204,7 +7338,7 @@ index 12d1a1c..75b9ec0 100644
      case Role::DPad:  // the direction follows the finger; see buttons()
      case Role::None: break;
      }
-@@ -181,12 +203,14 @@ void Controls::finger_up(std::uint64_t id) {
+@@ -181,12 +204,14 @@ void Controls::finger_up(std::uint64_t id) {
      Finger *finger = find(id);
      if (finger == nullptr) return;
      if (finger->role == Role::Stick) stick_ = {};
@@ -7219,7 +7353,7 @@ index 12d1a1c..75b9ec0 100644
      camera_drag_ = {};
      menu_tapped_ = false;
  }
-@@ -195,12 +219,26 @@ std::uint16_t Controls::buttons() const {
+@@ -195,12 +220,34 @@ std::uint16_t Controls::buttons() const {
      std::uint16_t buttons = 0u;
      for (const Finger &finger : fingers_) {
          if (!finger.used) continue;
@@ -7241,13 +7375,21 @@ index 12d1a1c..75b9ec0 100644
 +    if (control == Control::R2) return 0x0200u | 0x1000u;
 +    if (control < Control::Combo0) return psp_button(control);
 +    const std::size_t index = static_cast<std::size_t>(control) - static_cast<std::size_t>(Control::Combo0);
++    if (!combo_available(control)) return 0u;
 +    return index < layout_.combo_count ? layout_.combo_buttons[index] : 0u;
++}
++
++bool Controls::combo_available(Control control) const {
++    if (control < Control::Combo0) return true;
++    const std::size_t index = static_cast<std::size_t>(control) - static_cast<std::size_t>(Control::Combo0);
++    if (index >= layout_.combo_count || layout_.combo_ready[index] == nullptr) return true;
++    return layout_.combo_ready[index]();
 +}
 +
  std::uint16_t Controls::dpad_held_by(const Finger &finger) const {
      return dpad_buttons({finger.last.x - layout_.dpad.centre.x, finger.last.y - layout_.dpad.centre.y},
                          layout_.dpad.radius);
-@@ -231,6 +269,12 @@ Point Controls::stick() const {
+@@ -231,6 +278,12 @@ Point Controls::stick() const {
                              layout_.stick_radius);
  }
  
@@ -7261,7 +7403,7 @@ index 12d1a1c..75b9ec0 100644
      const Point drag = camera_drag_;
      camera_drag_ = {};
 diff --git a/host/input/touch_controls.hpp b/host/input/touch_controls.hpp
-index 293be14..f5d875e 100644
+index 293be14..a9f9a35 100644
 --- a/host/input/touch_controls.hpp
 +++ b/host/input/touch_controls.hpp
 @@ -21,7 +21,12 @@
@@ -7278,7 +7420,7 @@ index 293be14..f5d875e 100644
  inline constexpr std::size_t kControls = static_cast<std::size_t>(Control::Count);
  
  // The PSP button (SceCtrlButtons) a control presses; 0 for the menu button.
-@@ -51,12 +56,18 @@ struct Layout {
+@@ -51,12 +56,20 @@ struct Layout {
      Circle dpad{};
      float stick_radius{};    // the stick's reach from where the thumb landed
      float stick_split{};     // x: fingers landing left of it are for the stick
@@ -7286,6 +7428,8 @@ index 293be14..f5d875e 100644
 +    std::size_t combo_count{};
 +    std::array<std::uint16_t, kMaxCombos> combo_buttons{};
 +    std::array<const char *, kMaxCombos> combo_labels{};
++    // Per combo: null (always there) or a function that says whether it is there now (GameProfile::TouchCombo::ready).
++    std::array<bool (*)(), kMaxCombos> combo_ready{};
      float width{};
      float height{};
  };
@@ -7298,7 +7442,16 @@ index 293be14..f5d875e 100644
  
  // The PSP D-pad bits (up 0x10, right 0x20, down 0x40, left 0x80) for a finger
  // at `offset` from the D-pad's centre: one direction within 22.5 degrees of
-@@ -87,9 +98,15 @@ public:
+@@ -78,6 +91,8 @@ class Controls {
+ public:
+     void set_layout(const Layout &layout) { layout_ = layout; }
+     [[nodiscard]] const Layout &layout() const { return layout_; }
++    // False for a profile's combo button that is not ready yet (Layout::combo_ready): it is not drawn and not pressed. True for the rest.
++    [[nodiscard]] bool combo_available(Control control) const;
+ 
+     void finger_down(std::uint64_t id, Point at);
+     void finger_move(std::uint64_t id, Point at);
+@@ -87,9 +102,15 @@ public:
  
      // PSP buttons held now.
      [[nodiscard]] std::uint16_t buttons() const;
@@ -7314,7 +7467,7 @@ index 293be14..f5d875e 100644
      // Camera drag since the last take, in pixels.
      [[nodiscard]] Point take_camera_drag();
      // The menu button was tapped since the last take.
-@@ -100,7 +117,7 @@ public:
+@@ -100,7 +121,7 @@ public:
      [[nodiscard]] bool any_finger() const;
  
  private:
@@ -7323,7 +7476,7 @@ index 293be14..f5d875e 100644
      struct Finger {
          std::uint64_t id{};
          bool used{};
-@@ -113,10 +130,12 @@ private:
+@@ -113,10 +134,12 @@ private:
      [[nodiscard]] std::optional<Control> control_at(Point at, bool face_only) const;
      Finger *find(std::uint64_t id);
      [[nodiscard]] std::uint16_t dpad_held_by(const Finger &finger) const;
@@ -7993,6 +8146,108 @@ index 0000000..3b6d5d9
 +}
 +
 +} // namespace read_sources
+diff --git a/host/kernel/texture_stamp.hpp b/host/kernel/texture_stamp.hpp
+new file mode 100644
+index 0000000..fcd3768
+--- /dev/null
++++ b/host/kernel/texture_stamp.hpp
+@@ -0,0 +1,96 @@
++#pragma once
++
++// Stamps: a game's profile writes a 16-byte marker over the pixels of a texture the pack replaces, right after the game
++// has read the texture's file into memory (the profile knows the file format; this header knows nothing of it). The
++// renderer finds the marker when the texture is uploaded and asks the pack for the named image, so the texture's own
++// pixels (and so the original file's) are never needed to find its replacement.
++//
++// The table that says which regions of which file entry are textures, and which image each is, travels inside the
++// bundle (texture_bundle.hpp, the entry "@stamp"): one line per region,
++//   <entry id, hex> <offset of the pixels inside the entry> <length> <image name as textures.ini gives it>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <sstream>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++namespace texture_stamp {
++
++inline constexpr std::uint8_t kMagic[8] = {'P', 'K', 'S', 'T', 'A', 'M', 'P', '1'};
++inline constexpr std::uint32_t kMarkerSize = 16u;
++
++struct Region {
++    std::uint64_t offset;  // of the pixels, inside the entry
++    std::uint32_t length;
++    std::uint32_t name;    // index into names()
++};
++
++struct Table {
++    std::vector<std::string> names;
++    std::unordered_map<std::uint32_t, std::vector<Region>> by_entry;
++    bool loaded = false;
++};
++
++// Written once, before the game runs its first read; read-only afterwards, so no lock is needed to read it.
++inline Table &table() {
++    static Table t;
++    return t;
++}
++
++// Parses the table text. False if it holds no region.
++inline bool load(const std::string &text) {
++    Table parsed;
++    std::unordered_map<std::string, std::uint32_t> ids;
++    std::istringstream lines(text);
++    std::string line;
++    while (std::getline(lines, line)) {
++        std::istringstream words(line);
++        std::string id, name;
++        std::uint64_t offset = 0u, length = 0u;
++        if (!(words >> id >> offset >> length >> name) || length < kMarkerSize) continue;
++        const auto found = ids.find(name);
++        std::uint32_t index = 0u;
++        if (found == ids.end()) {
++            index = static_cast<std::uint32_t>(parsed.names.size());
++            parsed.names.push_back(name);
++            ids.emplace(name, index);
++        } else {
++            index = found->second;
++        }
++        parsed.by_entry[static_cast<std::uint32_t>(std::strtoul(id.c_str(), nullptr, 16))].push_back(
++            {offset, static_cast<std::uint32_t>(length), index});
++    }
++    if (parsed.by_entry.empty()) return false;
++    parsed.loaded = true;
++    table() = std::move(parsed);
++    return true;
++}
++
++[[nodiscard]] inline bool loaded() { return table().loaded; }
++
++[[nodiscard]] inline const std::vector<Region> *regions(std::uint32_t entry) {
++    const auto found = table().by_entry.find(entry);
++    return found == table().by_entry.end() ? nullptr : &found->second;
++}
++
++inline void write_marker(std::uint8_t *at, std::uint32_t name) {
++    std::memcpy(at, kMagic, 8u);
++    const std::uint32_t check = ~name;
++    std::memcpy(at + 8, &name, 4u);
++    std::memcpy(at + 12, &check, 4u);
++}
++
++// The image name a marker at `at` stands for, or null if there is no marker (or the table is not loaded).
++[[nodiscard]] inline const std::string *read_marker(const std::uint8_t *at) {
++    if (!loaded() || std::memcmp(at, kMagic, 8u) != 0) return nullptr;
++    std::uint32_t name = 0u, check = 0u;
++    std::memcpy(&name, at + 8, 4u);
++    std::memcpy(&check, at + 12, 4u);
++    if (check != ~name || name >= table().names.size()) return nullptr;
++    return &table().names[name];
++}
++
++} // namespace texture_stamp
 diff --git a/host/main.cpp b/host/main.cpp
 index 845bf0e..e06627e 100644
 --- a/host/main.cpp
@@ -8809,7 +9064,7 @@ index 5a603c6..940f3f6 100644
  const ProfileVariant *active_variant() { return g_active_variant; }
  
 diff --git a/host/profile.hpp b/host/profile.hpp
-index ddcf7eb..5957df1 100644
+index ddcf7eb..d8f6777 100644
 --- a/host/profile.hpp
 +++ b/host/profile.hpp
 @@ -14,12 +14,16 @@
@@ -8867,7 +9122,7 @@ index ddcf7eb..5957df1 100644
      // argv[0] the game is started with, e.g. "disc0:/PSP_GAME/SYSDIR/EBOOT.BIN".
      const char *boot_path;
      // Addresses of the code overlay slots inside the load image's BSS, from
-@@ -212,6 +236,46 @@ struct GameProfile {
+@@ -212,6 +236,49 @@ struct GameProfile {
      // agree on it, so it is the original release's code even when the port's
      // disc id is a different one.
      const char *adhoc_product_code;
@@ -8882,9 +9137,12 @@ index ddcf7eb..5957df1 100644
 +    const char *adhoc_auth_key = nullptr;
 +    // Buttons for a touch screen that press several PSP buttons at once (a move a game makes from two buttons together): up to six,
 +    // each a label and the SceCtrlButtons mask it presses. They sit in two rows to the left of the face buttons.
++    // `ready`, when not null, says whether the move can be made now: until it answers true the button is not drawn and cannot be pressed,
++    // and while it does the button glows (a move that needs a full gauge, say). It is called every frame from the interface thread.
 +    const struct TouchCombo {
 +        const char *label;
 +        std::uint16_t buttons;
++        bool (*ready)() = nullptr;
 +    } *touch_combos = nullptr;
 +    std::size_t touch_combo_count = 0;
 +    // Called with a save's data file as the game loads it from the memory stick, before the game sees it, to repair what a game
@@ -8914,7 +9172,7 @@ index ddcf7eb..5957df1 100644
  
      // --- Controls ----------------------------------------------------------
      // What the triggers may press instead of L and R, for the way this game is
-@@ -246,6 +310,30 @@ struct GameProfile {
+@@ -246,6 +313,30 @@ struct GameProfile {
      // Called once the executable is in memory and before it runs, for the
      // per-game patches that have no better home. Null means there are none.
      void (*patch_loaded_image)(psprecomp::Runtime &, const psprecomp::Elf32Image &) = nullptr;
@@ -8945,7 +9203,7 @@ index ddcf7eb..5957df1 100644
  
      // --- The game's camera and view ----------------------------------------
      // Drives the game's own camera from what the player asks of it
-@@ -299,6 +387,12 @@ struct GameProfile {
+@@ -299,6 +390,12 @@ struct GameProfile {
  // through this and nothing else.
  [[nodiscard]] const GameProfile &game();
  
@@ -8958,7 +9216,7 @@ index ddcf7eb..5957df1 100644
  // --- Editions (ProfileVariant) ----------------------------------------------
  // The edition whose executable, or encrypted EBOOT.BIN, has this SHA-256; null
  // for the profile's own and for an unknown one.
-@@ -310,6 +404,12 @@ struct GameProfile {
+@@ -310,6 +407,12 @@ struct GameProfile {
  // null for the profile's own (and before it is known).
  void set_active_variant(const ProfileVariant *variant);
  [[nodiscard]] const ProfileVariant *active_variant();
@@ -9019,7 +9277,7 @@ index f09c4fa..1856fde 100644
          auto plain = decrypt_data(*file, *mode, key);
          if (!plain) {
 diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
-index 54078af..0a66f0f 100644
+index 54078af..4b7eeb2 100644
 --- a/host/settings/settings.cpp
 +++ b/host/settings/settings.cpp
 @@ -4,6 +4,7 @@
@@ -9062,7 +9320,7 @@ index 54078af..0a66f0f 100644
          {"video.fast_loading", "FAST_LOADING",
           [](Settings &s, const std::string &t) { return parse_bool(t, s.fast_loading); },
           [](const Settings &s) { return std::string(s.fast_loading ? "1" : "0"); },
-@@ -236,10 +255,30 @@ const std::vector<Field> &fields() {
+@@ -236,10 +255,31 @@ const std::vector<Field> &fields() {
          {"text.weight", nullptr,
           [](Settings &s, const std::string &t) { return parse_uint(t, 0u, kMaxFontWeight, s.font_weight); },
           [](const Settings &s) { return std::to_string(s.font_weight); }, nullptr},
@@ -9090,10 +9348,11 @@ index 54078af..0a66f0f 100644
           [](const Settings &s) { return std::to_string(s.volume); }, nullptr},
          BOOL_FIELD("audio.mute", mute),
 +        BOOL_FIELD("input.swap_shoulders", swap_shoulders),
++        BOOL_FIELD("input.disable_l3", disable_l3),
          {"input.confirm", "PAD_FACE",
           [](Settings &s, const std::string &t) {
               if (t == "south") s.confirm_south = true;
-@@ -376,6 +415,12 @@ const std::vector<Field> &fields() {
+@@ -376,6 +416,12 @@ const std::vector<Field> &fields() {
               return true;
           },
           [](const Settings &s) { return s.adhoc_server; }, [](Settings &s, const char *t) { s.adhoc_server = t; }},
@@ -9106,7 +9365,7 @@ index 54078af..0a66f0f 100644
          {"network.nickname", "ADHOC_NICKNAME",
           [](Settings &s, const std::string &t) {
               s.adhoc_nickname = t;
-@@ -422,6 +467,7 @@ const std::vector<Field> &fields() {
+@@ -422,6 +468,7 @@ const std::vector<Field> &fields() {
               if (parse_uint(t, 1024u, 65534u, value)) s.adhoc_host_port = value;
           }},
          BOOL_FIELD("ui.menu_hint_seen", menu_hint_seen),
@@ -9114,7 +9373,7 @@ index 54078af..0a66f0f 100644
          BOOL_FIELD("saves.backup_timestamp", backup_timestamp),
          {"ui.last_folder", nullptr,
           [](Settings &s, const std::string &t) {
-@@ -461,6 +507,7 @@ struct State {
+@@ -461,6 +508,7 @@ struct State {
      // back as the file had them.
      install::SettingsEntries file;
      std::map<std::string, std::string> overrides;
@@ -9122,7 +9381,7 @@ index 54078af..0a66f0f 100644
  };
  
  State &state() {
-@@ -468,12 +515,25 @@ State &state() {
+@@ -468,12 +516,25 @@ State &state() {
      return value;
  }
  
@@ -9148,7 +9407,7 @@ index 54078af..0a66f0f 100644
      } catch (const std::exception &e) {
          std::cerr << "[settings] cannot read settings.ini: " << e.what() << "\n";
      }
-@@ -486,6 +546,20 @@ void load(State &s) {
+@@ -486,6 +547,20 @@ void load(State &s) {
          field.parse_variable(s.values, text);
          s.overrides[field.key] = env_name(field.variable);
      }
@@ -9169,7 +9428,7 @@ index 54078af..0a66f0f 100644
      // Bindings settings.ini did not hold are defaults, which must not take a
      // key it gave another control.
      std::array<bool, input::kActions> saved{};
-@@ -509,6 +583,7 @@ void load(State &s) {
+@@ -509,6 +584,7 @@ void load(State &s) {
          s.values.name_entry = NameEntry::Fixed;
          s.overrides["input.name_entry"] = env_name("OSK_TEXT");
      }
@@ -9177,7 +9436,7 @@ index 54078af..0a66f0f 100644
  }
  
  } // namespace
-@@ -519,6 +594,57 @@ Settings &current() {
+@@ -519,6 +595,57 @@ Settings &current() {
      return s.values;
  }
  
@@ -9235,7 +9494,7 @@ index 54078af..0a66f0f 100644
  std::string game_default_name() {
      const char *name = game().default_player_name;
      return name != nullptr ? name : "";
-@@ -532,7 +658,6 @@ Settings defaults_for(Platform platform) {
+@@ -532,7 +659,6 @@ Settings defaults_for(Platform platform) {
      // The game's keyboard first; a phone then turns the mouse off either way.
      if (const auto keyboard = game().keyboard_defaults) keyboard(values.bindings, values.mouse);
      if (platform == Platform::Android) {
@@ -9244,7 +9503,7 @@ index 54078af..0a66f0f 100644
          values.mouse = false;
      }
 diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
-index 9405fe7..3b73946 100644
+index 9405fe7..a5c43c0 100644
 --- a/host/settings/settings.hpp
 +++ b/host/settings/settings.hpp
 @@ -44,16 +44,17 @@ enum class FrameRate { Fps30, Fps45, Fps60, Fps90, Fps120, Display };
@@ -9285,16 +9544,19 @@ index 9405fe7..3b73946 100644
      // Audio
      std::uint32_t volume{100u};        // percent
      bool mute{};
-@@ -72,6 +82,8 @@ struct Settings {
+@@ -72,6 +82,11 @@ struct Settings {
      // east one. The default follows the console the profile describes: south
      // where cross confirms, east where circle does.
      bool confirm_south{};
 +    // The bumpers (L1, R1) and the triggers (L2, R2) trade places, for a hand that finds the triggers easier (Steam Deck).
 +    bool swap_shoulders{};
++    // The left stick's click (L3) is ignored. A port that reads it as an extra button (a battle shortcut, say) does not see it, for a
++    // hand that presses it by accident.
++    bool disable_l3{};
      float dead_zone{0.15f};
      // The left stick's circle stretched to the PSP nub's square range, so a
      // full diagonal reaches the corner (input/stick.hpp). Off passes the
-@@ -127,6 +139,7 @@ struct Settings {
+@@ -127,6 +142,7 @@ struct Settings {
      bool adhoc{};                      // wireless switch on: the game may go on line
      std::string adhoc_server;          // host or host:port of the server; empty: none
      std::string adhoc_nickname;        // shown to other players; empty: the player name
@@ -9302,7 +9564,7 @@ index 9405fe7..3b73946 100644
      std::string adhoc_mac;             // this player's virtual MAC, made up on first use
      std::vector<std::string> adhoc_recent;  // sessions joined lately, the latest first
      std::uint32_t adhoc_host_port{27312};   // the built-in server's adhocctl port; the relay is on the next
-@@ -134,7 +147,8 @@ struct Settings {
+@@ -134,7 +150,8 @@ struct Settings {
      // Interface
      bool menu_pause{true};             // opening the menu pauses the game
      bool menu_pause_multiplayer{};     // ...also during ad hoc play, where a paused game stops answering its peers
@@ -9312,7 +9574,7 @@ index 9405fe7..3b73946 100644
      std::string last_folder;           // where the setup's file browser was last used
  
      // Saves
-@@ -176,6 +190,16 @@ inline constexpr Platform kPlatform = Platform::Desktop;
+@@ -176,6 +193,16 @@ inline constexpr Platform kPlatform = Platform::Desktop;
  // variables at what the file had. Failures are reported on the console.
  void save();
  
@@ -9744,7 +10006,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..ba0339e 100644
+index 1b830d9..f26be35 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -10108,7 +10370,7 @@ index 1b830d9..ba0339e 100644
 +        }
 +    }
 +}
-+
+ 
 +// Reads the file again when it is new or has changed on disk.
 +#if defined(PORTABLEKIT_ANDROID_APP)
 +// The APK carries no memory stick folder, so the cheat file is fetched, once per run, from the profile's address when it is missing or
@@ -10133,7 +10395,7 @@ index 1b830d9..ba0339e 100644
 +    }).detach();
 +}
 +#endif
- 
++
 +void load_cheats() {
 +    CheatFile &f = cheat_file();
 +    std::error_code ec;
@@ -10458,7 +10720,7 @@ index 1b830d9..ba0339e 100644
  // Only for a game that tilts (GameProfile::tilt).
  void Menu::tilt_controls() {
      const TiltControls *tilt = portablekit::game().tilt;
-@@ -724,6 +1174,12 @@ void Menu::controls() {
+@@ -724,6 +1174,19 @@ void Menu::controls() {
          s.confirm_south = !s.confirm_south;
          settings::save();
      }
@@ -10468,10 +10730,17 @@ index 1b830d9..ba0339e 100644
 +        s.swap_shoulders = !s.swap_shoulders;
 +        settings::save();
 +    }
++    if (toggle_row("Disable L3 button", s.disable_l3,
++                   options_for("input.disable_l3",
++                               "Ignores clicking the left stick. Pressing it won't trigger EX Mode so it "
++                               "cannot be pressed by accident."))) {
++        s.disable_l3 = !s.disable_l3;
++        settings::save();
++    }
      int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
      if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
                     options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
-@@ -915,8 +1371,14 @@ void Menu::controls() {
+@@ -915,8 +1378,14 @@ void Menu::controls() {
      if (binding_) {
          if (const auto pressed = layer.take_captured_binding()) {
              if (*pressed != input::kNone) {
@@ -10486,7 +10755,7 @@ index 1b830d9..ba0339e 100644
              }
              binding_.reset();
          } else if (!layer.capturing_binding()) {
-@@ -925,6 +1387,7 @@ void Menu::controls() {
+@@ -925,6 +1394,7 @@ void Menu::controls() {
      }
      for (std::size_t i = 0; i < input::kActions; ++i) {
          const auto action = static_cast<input::Action>(i);
@@ -10494,18 +10763,19 @@ index 1b830d9..ba0339e 100644
          if (action == input::Action::Jump && portablekit::game().tilt == nullptr) continue;
          // The extra buttons only for a port that reads them.
          if (const std::uint32_t extra = input::extra_bit(action);
-@@ -958,8 +1421,10 @@ void Menu::controls() {
+@@ -958,8 +1428,11 @@ void Menu::controls() {
              if (settings::overridden_by(key).empty()) value = fallback;
          };
          restore("input.confirm", s.confirm_south, d.confirm_south);
 +        restore("input.swap_shoulders", s.swap_shoulders, d.swap_shoulders);
++        restore("input.disable_l3", s.disable_l3, d.disable_l3);
          restore("input.dead_zone", s.dead_zone, d.dead_zone);
          restore("input.stick_square", s.stick_square, d.stick_square);
 +
          restore("input.trigger", s.trigger, d.trigger);
          restore("input.trigger_profile", s.trigger_profile, d.trigger_profile);
          restore("input.right_stick", s.right_stick, d.right_stick);
-@@ -991,6 +1456,21 @@ void Menu::controls() {
+@@ -991,6 +1464,21 @@ void Menu::controls() {
          settings::save();
      }
  
@@ -10527,7 +10797,7 @@ index 1b830d9..ba0339e 100644
      section("Touch screen");
      {
          RowOptions o = options_for("input.touch_controls",
-@@ -1065,7 +1545,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+@@ -1065,7 +1553,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -10536,7 +10806,7 @@ index 1b830d9..ba0339e 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1086,7 +1566,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1086,7 +1574,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -10545,7 +10815,7 @@ index 1b830d9..ba0339e 100644
      return "None";
  }
  
-@@ -1129,13 +1609,89 @@ void play_together() {
+@@ -1129,13 +1617,89 @@ void play_together() {
      settings::Settings &s = settings::current();
      static std::string copied;
      static std::string typed_address;
@@ -10638,7 +10908,7 @@ index 1b830d9..ba0339e 100644
          const std::vector<adhoc::LocalAddress> addresses = adhoc::local_addresses();
          if (addresses.empty()) info_row("Your addresses", "No network is connected");
          for (const adhoc::LocalAddress &address : addresses) {
-@@ -1150,6 +1706,23 @@ void play_together() {
+@@ -1150,6 +1714,23 @@ void play_together() {
                  copied = text;
              }
          }
@@ -10662,7 +10932,7 @@ index 1b830d9..ba0339e 100644
          if (!copied.empty()) info_row("Copied", copied);
          ImGui::PushID("hosted players");
          for (std::size_t i = 0; i < status.players.size(); ++i) {
-@@ -1172,7 +1745,7 @@ void play_together() {
+@@ -1172,7 +1753,7 @@ void play_together() {
          if (button_row("Host a session###hosting",
                         {false, {},
                          "Runs a server in this game for the others to join: no other program, no port forwarding "
@@ -10671,7 +10941,7 @@ index 1b830d9..ba0339e 100644
              adhoc_host_start();
          if (const std::string error = adhoc_host_error(); !error.empty()) info_row("Cannot host", error);
      }
-@@ -1181,7 +1754,13 @@ void play_together() {
+@@ -1181,7 +1762,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -10686,7 +10956,7 @@ index 1b830d9..ba0339e 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1191,10 +1770,13 @@ void play_together() {
+@@ -1191,10 +1778,13 @@ void play_together() {
          const std::string label = (joined(address) ? "Joined " : "Join ") + host.info.name + "   " + address + ", " +
                                    players_text(host.info.players) + "###found " + std::to_string(host.info.session);
          if (button_row(label.c_str(), {false, {}, "A session hosted on this network. Joining it takes you out of any "
@@ -10702,7 +10972,7 @@ index 1b830d9..ba0339e 100644
      if (text_row("join_address", "Address", typed_address, 100u, true, address_character,
                   {false, {},
                    "The host's address, for a VPN without broadcast such as Tailscale: the host's screen lists it. "
-@@ -1218,29 +1800,6 @@ void Menu::network() {
+@@ -1218,29 +1808,6 @@ void Menu::network() {
      adhoc::Client &client = adhoc::Client::get();
      const adhoc::Diagnostics d = client.diagnostics();
      play_together();
@@ -10732,7 +11002,7 @@ index 1b830d9..ba0339e 100644
      section("Status");
      info_row("Connection", connection_text(d));
      if (adhoc_hosting()) {
-@@ -1313,7 +1872,7 @@ void Menu::network() {
+@@ -1313,7 +1880,7 @@ void Menu::network() {
      if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
      if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                       "Drop the server connection and connect again at once. The group is joined "
@@ -10741,7 +11011,7 @@ index 1b830d9..ba0339e 100644
          client.reconnect_now();
      if (button_row("Disconnect", {!d.group && !d.joining, {},
                                    "Leave the group as if the other players were lost. The game shows its own "
-@@ -1322,28 +1881,105 @@ void Menu::network() {
+@@ -1322,28 +1889,105 @@ void Menu::network() {
          client.disconnect_now();
  
      ImGui::Dummy({0.0f, font_gap()});
@@ -10799,7 +11069,7 @@ index 1b830d9..ba0339e 100644
 +        if (toggle_row(title.c_str(), line[2] == '1', {online, {}, online ? "Off while you play online." : ""})) {
 +            line[2] = line[2] == '1' ? '0' : '1';
 +            save_cheats();
-+        }
+         }
 +        ImGui::PopID();
 +    }
 +    // What each enabled cheat did on its last run, all together after the codes, and only when asked for.
@@ -10826,7 +11096,7 @@ index 1b830d9..ba0339e 100644
 +                if (found->second.changed != 0u) note += ", " + std::to_string(found->second.changed) + " changed by the game";
 +            }
 +            info_row(title.c_str(), note);
-         }
++        }
 +        if (!any) info_row("Status", "No cheat is on");
 +    }
 +}
@@ -10854,7 +11124,7 @@ index 1b830d9..ba0339e 100644
      std::string data_dir;
      try {
          data_dir = install::path_to_utf8(install::user_data_directory());
-@@ -1360,14 +1996,6 @@ void Menu::system() {
+@@ -1360,14 +2004,6 @@ void Menu::system() {
          s.menu_pause = !s.menu_pause;
          settings::save();
      }
@@ -10869,7 +11139,7 @@ index 1b830d9..ba0339e 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
      // An Android app's data folder is out of the file manager's reach; its
      // log goes where the player picks instead, to send with a report.
-@@ -1375,18 +2003,21 @@ void Menu::system() {
+@@ -1375,18 +2011,21 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -10893,7 +11163,7 @@ index 1b830d9..ba0339e 100644
          if (std::filesystem::is_directory(storage / "logs", ec))
              std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
          const auto copied = android::pick_folder_and_copy(local);
-@@ -1396,24 +2027,91 @@ void Menu::system() {
+@@ -1396,24 +2035,91 @@ void Menu::system() {
                                                       : "Not saved: " + copied->error;
      }
      if (!saved_log_path().empty()) info_row("Log", saved_log_path());
@@ -10989,7 +11259,7 @@ index 1b830d9..ba0339e 100644
      if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
      info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
      info_row("Data folder", data_dir);
-@@ -1439,6 +2137,108 @@ bool Menu::confirm_dialog() {
+@@ -1439,6 +2145,108 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -11098,7 +11368,7 @@ index 1b830d9..ba0339e 100644
          const bool quit = confirm_ == Confirm::Quit;
          heading(quit ? "Quit the game?" : "Set up game data again?");
          paragraph(quit ? "Progress since your last save is lost."
-@@ -1447,8 +2247,17 @@ bool Menu::confirm_dialog() {
+@@ -1447,8 +2255,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -11118,7 +11388,7 @@ index 1b830d9..ba0339e 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -1466,6 +2275,77 @@ bool Menu::confirm_dialog() {
+@@ -1466,6 +2283,77 @@ bool Menu::confirm_dialog() {
      return keep_open;
  }
  
@@ -11196,17 +11466,31 @@ index 1b830d9..ba0339e 100644
  // Seconds the menu hint has left, or a negative number once it is gone.
  double hint_seconds_left() {
      static const Clock::time_point first_frame = Clock::now();
-@@ -1588,6 +2468,70 @@ void add_menu_rows(void (*rows)()) {
+@@ -1588,6 +2476,84 @@ void add_menu_rows(void (*rows)()) {
      if (rows != nullptr) port_rows().push_back(rows);
  }
  
 +void apply_cheats(psprecomp::Runtime &runtime) {
 +    // Cheats are off while the game is in an online session (hosting, joining or in a group), and come back when it ends. Nothing in
 +    // the cheats file changes: they are only not applied. The other players' games cannot be told, so this only keeps this one honest.
-+    if (adhoc_online_mode()) return;
++    static bool told_online = false, told_file = false;
++    if (adhoc_online_mode()) {
++        if (!told_online) {
++            told_online = true;
++            std::fprintf(stderr, "[cheats] not applied: the game is in online mode (a session, or the relay is selected in the settings)\n");
++        }
++        return;
++    }
 +    const std::lock_guard<std::mutex> lock(cheat_mutex());
 +    load_cheats();
 +    const CheatFile &f = cheat_file();
++    // Once, what the cheats file held when the game first reached this point: where it is, how many cheats and how many are on.
++    if (!told_file) {
++        told_file = true;
++        std::size_t on = 0u;
++        for (const std::size_t head : f.heads) on += f.lines[head][2] == '1' ? 1u : 0u;
++        std::fprintf(stderr, "[cheats] %s: %zu cheats, %zu switched on\n", f.path.string().c_str(), f.heads.size(), on);
++    }
 +    for (std::size_t i = 0; i < f.heads.size(); ++i)
 +        if (f.lines[f.heads[i]][2] == '1') {
 +            static std::map<std::size_t, unsigned> runs;
@@ -11267,7 +11551,7 @@ index 1b830d9..ba0339e 100644
  void draw_over_game() {
      Layer &layer = Layer::get();
      if (!layer.attached()) return;
-@@ -1610,6 +2554,51 @@ void draw_over_game() {
+@@ -1610,6 +2576,51 @@ void draw_over_game() {
          layer.end_frame();
          return;
      }
@@ -11319,7 +11603,7 @@ index 1b830d9..ba0339e 100644
      const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
      const bool overlay = network_overlay();
      const bool touch = !menu && layer.renderer().touch_controls_visible();
-@@ -1639,7 +2628,7 @@ void draw_over_game() {
+@@ -1639,7 +2650,7 @@ void draw_over_game() {
  
  bool menu_pauses() {
      const settings::Settings &s = settings::current();
@@ -11328,7 +11612,7 @@ index 1b830d9..ba0339e 100644
  }
  
  void open_menu_over_game() {
-@@ -1650,6 +2639,9 @@ void open_menu_over_game() {
+@@ -1650,6 +2661,9 @@ void open_menu_over_game() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      menu.emplace(false);
@@ -11338,7 +11622,7 @@ index 1b830d9..ba0339e 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -1659,9 +2651,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+@@ -1659,9 +2673,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
  bool menu_requested() {
      Layer &layer = Layer::get();
      if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
@@ -11366,7 +11650,7 @@ index 1b830d9..ba0339e 100644
  }
  
  bool run_menu() {
-@@ -1670,6 +2678,9 @@ bool run_menu() {
+@@ -1670,6 +2700,9 @@ bool run_menu() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      Menu menu(true);
@@ -11736,7 +12020,7 @@ index bdbe823..5866ef9 100644
      if (!settings.texture_pack_folder.empty() &&
          button_row("Stop using the pack folder",
 diff --git a/host/ui/touch_overlay.cpp b/host/ui/touch_overlay.cpp
-index 4c0ca74..1f1952e 100644
+index 4c0ca74..e87040a 100644
 --- a/host/ui/touch_overlay.cpp
 +++ b/host/ui/touch_overlay.cpp
 @@ -43,6 +43,8 @@ const char *label(Control control) {
@@ -11748,19 +12032,32 @@ index 4c0ca74..1f1952e 100644
      case Control::Start: return "START";
      case Control::Select: return "SELECT";
      default: return nullptr;
-@@ -61,6 +63,7 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
+@@ -61,18 +63,42 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
      for (std::size_t i = 0; i < input::touch::kControls; ++i) {
          const auto control = static_cast<Control>(i);
          const Circle &circle = layout.controls[i];
 +        if (!(circle.radius > 0.0f)) continue;  // a combo button the profile does not have
++        if (!controls.combo_available(control)) continue;  // a combo that is not ready yet is not shown
          const ImVec2 c{circle.centre.x, circle.centre.y};
          const bool held = controls.held(control);
++        // A combo with a ready check that now says yes glows orange, slowly pulsing, to tell the player the move can be made.
++        const bool glows = control >= Control::Combo0 &&
++                           layout.combo_ready[i - static_cast<std::size_t>(Control::Combo0)] != nullptr;
++        if (glows) {
++            const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 4.0f);
++            list->AddCircleFilled(c, circle.radius * 1.25f, colour(255, 140, 0, base * (0.18f + 0.22f * pulse)));
++            list->AddCircle(c, circle.radius * 1.12f, colour(255, 150, 20, base * (0.55f + 0.45f * pulse)), 0,
++                            std::max(2.0f, circle.radius * 0.12f));
++        }
          const float thickness = std::max(1.5f, circle.radius * 0.08f);
-@@ -70,9 +73,22 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
+         list->AddCircleFilled(c, circle.radius, colour(0, 0, 0, base * (held ? 0.55f : 0.3f)));
+         // A dark edge under the light one keeps the outline visible on a bright picture.
+         list->AddCircle(c, circle.radius + thickness, colour(0, 0, 0, base * 0.6f), 0, thickness);
          list->AddCircle(c, circle.radius, colour(255, 255, 255, base * (held ? 1.0f : 0.8f)), 0, thickness);
          if (held) list->AddCircleFilled(c, circle.radius * 0.92f, colour(255, 255, 255, base * 0.35f));
-         const ImU32 ink = i < 4u ? symbol_colours[i] : colour(255, 255, 255, base);
+-        const ImU32 ink = i < 4u ? symbol_colours[i] : colour(255, 255, 255, base);
 -        if (const char *text = label(control)) {
++        const ImU32 ink = i < 4u ? symbol_colours[i] : glows ? colour(255, 176, 64, base) : colour(255, 255, 255, base);
 +        if (control >= Control::Combo0) {
 +            // A profile's button: its name, small enough to fit inside.
 +            const char *text = layout.combo_labels[i - static_cast<std::size_t>(Control::Combo0)];
@@ -11781,7 +12078,7 @@ index 4c0ca74..1f1952e 100644
              const ImVec2 extent = font->CalcTextSizeA(size, 1e9f, 0.0f, text);
              list->AddText(font, size, {c.x - extent.x * 0.5f, c.y - extent.y * 0.5f}, ink, text);
          } else {
-@@ -113,15 +129,18 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
+@@ -113,15 +139,18 @@ void draw_touch_controls(const input::touch::Controls &controls, float opacity)
              list->AddTriangleFilled(tip, side1, side2, colour(255, 255, 255, base * (on ? 1.0f : 0.8f)));
          }
      }
@@ -12978,6 +13275,32 @@ index 0000000..0f5aca5
 +}
 +
 +} // namespace portablekit
+diff --git a/include/portablekit/hle_extension.hpp b/include/portablekit/hle_extension.hpp
+index e53b36b..3cfad0e 100644
+--- a/include/portablekit/hle_extension.hpp
++++ b/include/portablekit/hle_extension.hpp
+@@ -42,7 +42,8 @@
+ // 5: extra_buttons.
+ // 6: want_second_pad, second_pad.
+ // 7: first_pad_connected.
+-#define PORTABLEKIT_HLE_EXTENSION_INTERFACE 7
++// 8: hold_game_speed.
++#define PORTABLEKIT_HLE_EXTENSION_INTERFACE 8
+ 
+ namespace portablekit::hle_extension {
+ 
+@@ -291,6 +292,11 @@ inline constexpr std::uint32_t kExtraL3 = 1u << 2u;
+ inline constexpr std::uint32_t kExtraR3 = 1u << 3u;
+ [[nodiscard]] std::uint32_t extra_buttons();
+ 
++// Runs the game at `factor` times real time (above 1) for as long as a port keeps asking for it, the way the menu's Game speed does;
++// 1 (or 0) gives normal speed back. A port calls it every pad read with whether a button is held, so releasing the button ends it. Never
++// online: the game speed is 1 there whatever is asked.
++void hold_game_speed(double factor);
++
+ // A second player's pad, for a port with a local multiplayer mode. While
+ // wanted, a gamepad other than player 1's (the second one connected) is
+ // player 2's: read with player 1's bindings and tuning, and never reaching
 diff --git a/include/psprecomp/corpus_abi.hpp b/include/psprecomp/corpus_abi.hpp
 index 6cab8f9..0f7111a 100644
 --- a/include/psprecomp/corpus_abi.hpp

@@ -482,7 +482,8 @@ void trace_gauges(psprecomp::Runtime &rt) {
         std::memcpy(&before, &last[i], 4u);
         std::memcpy(&after, &word, 4u);
         if (++lines <= 600)
-            std::printf("[gauges] status +0x%02X: %08X -> %08X (as float %g -> %g)\n", i * 4u, last[i], word, before, after);
+            std::printf("[gauges] pad read %u: status +0x%02X: %08X -> %08X (as float %g -> %g)\n", pad().reads, i * 4u, last[i], word,
+                        before, after);
         last[i] = word;
     }
     std::fflush(stdout);
