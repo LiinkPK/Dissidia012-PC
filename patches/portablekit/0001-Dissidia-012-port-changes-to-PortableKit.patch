@@ -6,154 +6,6 @@ Subject: [PATCH] Dissidia 012 port changes to PortableKit
 Every change this port makes to PortableKit on top of the upstream port's series (third_party/dissidia012-pc/port/portablekit-patches), as one patch:
 the online relay and rooms, the fixed settings, Game speed, the boot skip's fast time, Android and iOS support, texture packs and more.
 ---
- .d012_patched                                 |    1 +
- CMakeLists.txt                                |   20 +
- cmake/FFmpeg.cmake                            |   34 +-
- cmake/PortableKit.cmake                       |   16 +-
- docs/SOURCE_PROVENANCE.md                     |    1 +
- host/adhoc/auth.hpp                           |  104 ++
- host/adhoc/client.cpp                         |   29 +-
- host/adhoc/host.cpp                           |   66 +-
- host/adhoc/matching.cpp                       |  232 +++
- host/adhoc/matching.hpp                       |  167 ++
- host/adhoc/matching_receive.cpp               |  156 ++
- host/adhoc/matching_timers.cpp                |  118 ++
- host/adhoc/portmap.cpp                        |   99 ++
- host/adhoc/portmap.hpp                        |   62 +
- host/adhoc/portmap_http.hpp                   |   25 +
- host/adhoc/portmap_soap.cpp                   |  123 ++
- host/adhoc/portmap_stun.cpp                   |   95 ++
- host/adhoc/portmap_upnp.cpp                   |  112 ++
- host/adhoc/server.cpp                         |  106 +-
- host/adhoc/server.hpp                         |    4 +
- host/adhoc/session.hpp                        |   31 +
- host/adhoc/sockets.hpp                        |    1 +
- host/adhoc/ws_bridge.cpp                      |  251 +++
- host/adhoc/ws_bridge.hpp                      |   27 +
- host/adhoc/ws_frame.hpp                       |   87 +
- host/corpus_library.cpp                       |    4 +
- host/corpus_library.hpp                       |    2 +-
- host/fonts/game_font.cpp                      |  260 ++-
- host/fonts/game_font.hpp                      |   37 +-
- host/gpu/host_inflate.hpp                     |  223 +++
- host/gpu/png_decode.hpp                       |  130 ++
- host/gpu/replacement_textures.cpp             |   71 +-
- host/gpu/replacement_textures.hpp             |    2 +
- host/gpu/texture_cache.cpp                    |  190 +++
- host/gpu/texture_cache.hpp                    |   55 +
- host/gpu/texture_decode.cpp                   |    4 +
- host/gpu/texture_decode.hpp                   |    3 +
- host/gpu/texture_pack.cpp                     |  159 +-
- host/gpu/texture_pack.hpp                     |   61 +-
- host/gpu/texture_pack_import.cpp              |   61 +-
- host/gpu/texture_pack_import.hpp              |    4 +
- host/gpu/vulkan_renderer.cpp                  | 1475 +++++++++++++++-
- host/gpu/vulkan_renderer.hpp                  |   35 +
- host/hle/hle_adhoc.cpp                        |  121 +-
- host/hle/hle_adhoc_matching.cpp               |  124 ++
- host/hle/hle_adhoc_matching.hpp               |   60 +
- host/hle/hle_adhoc_matching_api.cpp           |  184 ++
- host/hle/hle_common.hpp                       |    1 +
- host/hle/hle_font.cpp                         |   35 +-
- host/hle/hle_io.cpp                           |    5 +
- host/hle/hle_media.cpp                        |    9 +-
- host/hle/hle_savedata.cpp                     |    8 +-
- host/hle/hle_system.cpp                       |    1 +
- host/hle/hle_utility.cpp                      |    4 +
- host/input/touch_controls.cpp                 |   60 +-
- host/input/touch_controls.hpp                 |   25 +-
- host/install/executable_preparation.cpp       |    4 +-
- host/install/installer.cpp                    |   37 +-
- host/install/installer_dialogs.cpp            |    4 +
- host/install/shared_data.cpp                  |  119 ++
- host/install/shared_data.hpp                  |   34 +
- host/install/user_data.cpp                    |   94 +-
- host/install/user_data.hpp                    |   11 +
- host/kernel/fast_loading.cpp                  |   22 +-
- host/kernel/fast_loading.hpp                  |    4 +
- host/kernel/kernel.cpp                        |   35 +-
- host/kernel/kernel.hpp                        |    3 +-
- host/main.cpp                                 |  109 +-
- host/overlays.cpp                             |    5 +-
- host/perf/frame_stats.cpp                     |  141 ++
- host/perf/frame_stats.hpp                     |    9 +
- host/platform/android_app.cpp                 |  119 ++
- host/platform/android_jni.cpp                 |  174 ++
- host/platform/android_jni.hpp                 |   28 +
- host/profile.cpp                              |    8 +
- host/profile.hpp                              |  100 ++
- host/save_data/savedata_store.cpp             |   26 +-
- host/settings/settings.cpp                    |  127 +-
- host/settings/settings.hpp                    |   30 +-
- host/single_instance.hpp                      |  157 ++
- host/ui/file_browser.cpp                      |   28 +-
- host/ui/font_menu.cpp                         |  103 +-
- host/ui/layer.cpp                             |    7 +-
- host/ui/layer.hpp                             |    2 +-
- host/ui/menu.cpp                              | 1195 +++++++++++--
- host/ui/save_list_dialog.cpp                  |   55 +
- host/ui/save_screen.cpp                       |   33 +-
- host/ui/save_screen.hpp                       |    3 +
- host/ui/setup_screens.cpp                     |   15 +-
- host/ui/texture_pack_screen.cpp               |   66 +-
- host/ui/touch_overlay.cpp                     |   35 +-
- host/ui/ui.hpp                                |   17 +-
- host/ui/updater.cpp                           |  966 +++++++++++
- host/ui/updater.hpp                           |   57 +
- host/ui/widgets.cpp                           |    9 +-
- host/ui/widgets.hpp                           |    3 +-
- host/worker_priority.hpp                      |   41 +
- include/psprecomp/corpus_abi.hpp              |    3 +
- include/psprecomp/runtime.hpp                 |    3 +
- packaging/android/AndroidManifest.xml         |    8 +
- packaging/android/build_apk.sh                |   17 +
- .../teamgdb/portablekit/GameActivity.java     |  317 ++++
- src/runtime.cpp                               |   30 +-
- third_party/bc7enc16/LICENSE                  |   76 +
- third_party/bc7enc16/bc7enc16.c               | 1498 +++++++++++++++++
- third_party/bc7enc16/bc7enc16.h               |   77 +
- tools/adhoc_relay_main.cpp                    |   62 +
- 107 files changed, 11122 insertions(+), 384 deletions(-)
- create mode 100644 .d012_patched
- create mode 100644 host/adhoc/auth.hpp
- create mode 100644 host/adhoc/matching.cpp
- create mode 100644 host/adhoc/matching.hpp
- create mode 100644 host/adhoc/matching_receive.cpp
- create mode 100644 host/adhoc/matching_timers.cpp
- create mode 100644 host/adhoc/portmap.cpp
- create mode 100644 host/adhoc/portmap.hpp
- create mode 100644 host/adhoc/portmap_http.hpp
- create mode 100644 host/adhoc/portmap_soap.cpp
- create mode 100644 host/adhoc/portmap_stun.cpp
- create mode 100644 host/adhoc/portmap_upnp.cpp
- create mode 100644 host/adhoc/ws_bridge.cpp
- create mode 100644 host/adhoc/ws_bridge.hpp
- create mode 100644 host/adhoc/ws_frame.hpp
- create mode 100644 host/gpu/host_inflate.hpp
- create mode 100644 host/gpu/png_decode.hpp
- create mode 100644 host/gpu/texture_cache.cpp
- create mode 100644 host/gpu/texture_cache.hpp
- create mode 100644 host/hle/hle_adhoc_matching.cpp
- create mode 100644 host/hle/hle_adhoc_matching.hpp
- create mode 100644 host/hle/hle_adhoc_matching_api.cpp
- create mode 100644 host/install/shared_data.cpp
- create mode 100644 host/install/shared_data.hpp
- create mode 100644 host/single_instance.hpp
- create mode 100644 host/ui/updater.cpp
- create mode 100644 host/ui/updater.hpp
- create mode 100644 host/worker_priority.hpp
- create mode 100644 third_party/bc7enc16/LICENSE
- create mode 100644 third_party/bc7enc16/bc7enc16.c
- create mode 100644 third_party/bc7enc16/bc7enc16.h
- create mode 100644 tools/adhoc_relay_main.cpp
-
-diff --git a/.d012_patched b/.d012_patched
-new file mode 100644
-index 0000000..19dd58c
---- /dev/null
-+++ b/.d012_patched
-@@ -0,0 +1 @@
-+121 patches applied
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 82e34b2..93cdf28 100644
 --- a/CMakeLists.txt
@@ -3497,12 +3349,148 @@ index 71dcf2b..dc9a464 100644
      bool warned_budget_{};
  };
  
+diff --git a/host/gpu/texture_bundle.hpp b/host/gpu/texture_bundle.hpp
+new file mode 100644
+index 0000000..0fbccbd
+--- /dev/null
++++ b/host/gpu/texture_bundle.hpp
+@@ -0,0 +1,130 @@
++#pragma once
++
++#include "host_inflate.hpp"
++#include "texture_cache.hpp"
++
++#include <algorithm>
++#include <cstdint>
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++// A whole texture pack as one file of BC7 images with their mip chains, each compressed (zlib) on its own, so the game
++// reads one image with one seek and one inflate: no PNG decode, no mip generation and no encoding on the device.
++//
++//   "D12BNDL1" | u32 count | u32 index_bytes | index | blobs
++//   index entry: u16 name_length | name (lower case, as the pack's ini names the file) | u32 width | u32 height |
++//                u32 levels | u64 offset (from the start of the file) | u32 compressed_size | u32 raw_size
++//   blob: a zlib stream of the BC7 levels, level 0 first, tightly packed (texture_cache.hpp)
++//         or, when levels is 0, the image's PNG file as it is (compressed_size == raw_size): big static images, which
++//         BC7's 4x4 blocks would show in
++//
++// It is made by the converter (outside this repository) from the pack's PNGs.
++namespace portablekit::gpu {
++
++class TextureBundle {
++public:
++    // False when there is no such file or it is not a bundle.
++    bool open(const std::filesystem::path &file) {
++        std::ifstream in(file, std::ios::binary);
++        if (!in) return false;
++        char magic[8];
++        std::uint32_t count = 0u, index_bytes = 0u;
++        in.read(magic, 8);
++        in.read(reinterpret_cast<char *>(&count), 4);
++        in.read(reinterpret_cast<char *>(&index_bytes), 4);
++        if (!in || std::memcmp(magic, "D12BNDL1", 8u) != 0 || index_bytes > (256u << 20)) return false;
++        std::vector<std::uint8_t> index(index_bytes);
++        in.read(reinterpret_cast<char *>(index.data()), static_cast<std::streamsize>(index_bytes));
++        if (!in) return false;
++        std::size_t at = 0u;
++        for (std::uint32_t i = 0u; i < count; ++i) {
++            if (at + 2u > index.size()) return false;
++            std::uint16_t length = 0u;
++            std::memcpy(&length, &index[at], 2u);
++            at += 2u;
++            if (at + length + 4u * 3u + 8u + 4u * 2u > index.size()) return false;
++            std::string name(reinterpret_cast<const char *>(&index[at]), length);
++            at += length;
++            Entry entry;
++            std::memcpy(&entry.width, &index[at], 4u);
++            std::memcpy(&entry.height, &index[at + 4u], 4u);
++            std::memcpy(&entry.levels, &index[at + 8u], 4u);
++            std::memcpy(&entry.offset, &index[at + 12u], 8u);
++            std::memcpy(&entry.compressed, &index[at + 20u], 4u);
++            std::memcpy(&entry.raw, &index[at + 24u], 4u);
++            at += 28u;
++            entries_.emplace(std::move(name), entry);
++        }
++        file_ = file;
++        return !entries_.empty();
++    }
++
++    [[nodiscard]] bool contains(const std::string &name) const { return entries_.find(lower(name)) != entries_.end(); }
++    [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
++
++    // Reads and inflates one image; false when it is not in the bundle or is damaged. Safe from several threads.
++    bool read(const std::string &name, texture_cache::Image &out) const {
++        const auto found = entries_.find(lower(name));
++        if (found == entries_.end()) return false;
++        const Entry &entry = found->second;
++        if (entry.levels == 0u) return false;
++        std::ifstream in(file_, std::ios::binary);
++        if (!in) return false;
++        std::vector<std::uint8_t> packed(entry.compressed);
++        in.seekg(static_cast<std::streamoff>(entry.offset));
++        in.read(reinterpret_cast<char *>(packed.data()), static_cast<std::streamsize>(packed.size()));
++        if (static_cast<std::uint64_t>(in.gcount()) != packed.size()) return false;
++        out.data.clear();
++        out.data.reserve(entry.raw);
++        if (!HostInflate::zlib(packed.data(), packed.size(), out.data) || out.data.size() != entry.raw) return false;
++        out.width = entry.width;
++        out.height = entry.height;
++        out.levels = entry.levels;
++        out.level_offsets.clear();
++        std::uint64_t total = 0u;
++        for (std::uint32_t level = 0u; level < out.levels; ++level) {
++            out.level_offsets.push_back(total);
++            total += texture_cache::level_bytes(std::max(out.width >> level, 1u), std::max(out.height >> level, 1u));
++        }
++        return total == out.data.size();
++    }
++
++    // An entry kept as a PNG file (lossless).
++    [[nodiscard]] bool is_png(const std::string &name) const {
++        const auto found = entries_.find(lower(name));
++        return found != entries_.end() && found->second.levels == 0u;
++    }
++    bool read_png(const std::string &name, std::vector<std::uint8_t> &out) const {
++        const auto found = entries_.find(lower(name));
++        if (found == entries_.end() || found->second.levels != 0u) return false;
++        std::ifstream in(file_, std::ios::binary);
++        if (!in) return false;
++        out.resize(found->second.compressed);
++        in.seekg(static_cast<std::streamoff>(found->second.offset));
++        in.read(reinterpret_cast<char *>(out.data()), static_cast<std::streamsize>(out.size()));
++        return static_cast<std::uint64_t>(in.gcount()) == out.size();
++    }
++
++    [[nodiscard]] static std::string lower(std::string text) {
++        for (char &c : text) {
++            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
++            if (c == '\\') c = '/';
++        }
++        return text;
++    }
++
++private:
++    struct Entry {
++        std::uint32_t width{}, height{}, levels{};
++        std::uint64_t offset{};
++        std::uint32_t compressed{}, raw{};
++    };
++    std::filesystem::path file_;
++    std::unordered_map<std::string, Entry> entries_;
++};
++
++} // namespace portablekit::gpu
 diff --git a/host/gpu/texture_cache.cpp b/host/gpu/texture_cache.cpp
 new file mode 100644
-index 0000000..2322520
+index 0000000..b11546e
 --- /dev/null
 +++ b/host/gpu/texture_cache.cpp
-@@ -0,0 +1,190 @@
+@@ -0,0 +1,199 @@
 +#include "texture_cache.hpp"
 +
 +#include "bc7enc16/bc7enc16.h"
@@ -3623,6 +3611,10 @@ index 0000000..2322520
 +    return in.peek() == std::ifstream::traits_type::eof();
 +}
 +
++static bool g_best_quality = false;
++
++void set_best_quality() noexcept { g_best_quality = true; }
++
 +bool bake(const std::filesystem::path &file, const std::filesystem::path &source, const std::uint8_t *rgba,
 +          std::uint32_t width, std::uint32_t height) {
 +    if (width == 0u || height == 0u || width > kMaxSide || height > kMaxSide) return false;
@@ -3634,6 +3626,11 @@ index 0000000..2322520
 +    // would let drift. A smaller partition search keeps a bake short.
 +    bc7enc16_compress_block_params_init_linear_weights(&params);
 +    params.m_max_partitions_mode1 = 16u;
++    if (g_best_quality) {
++        params.m_max_partitions_mode1 = BC7ENC16_MAX_PARTITIONS1;
++        params.m_uber_level = BC7ENC16_MAX_UBER_LEVEL;
++        params.m_mode1_partition_estimation_filterbank = BC7ENC16_FALSE;
++    }
 +
 +    const std::uint32_t levels = level_count(width, height);
 +    std::vector<std::uint8_t> encoded;
@@ -3695,10 +3692,10 @@ index 0000000..2322520
 +} // namespace portablekit::gpu::texture_cache
 diff --git a/host/gpu/texture_cache.hpp b/host/gpu/texture_cache.hpp
 new file mode 100644
-index 0000000..a6433ca
+index 0000000..2ec7d79
 --- /dev/null
 +++ b/host/gpu/texture_cache.hpp
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,58 @@
 +#pragma once
 +
 +#include <cstdint>
@@ -3746,6 +3743,9 @@ index 0000000..a6433ca
 +// is damaged.
 +bool load(const std::filesystem::path &file, const std::filesystem::path &source, Image &out);
 +
++// Slowest, best encoding for every later bake (the offline converter). The game itself bakes fast.
++void set_best_quality() noexcept;
++
 +// Makes the copy from RGBA8 pixels (red first, rows packed): the mip chain
 +// (each level the previous one halved, as the GPU blit did) encoded to BC7,
 +// written to a temporary file and renamed. Slow; call it on a background
@@ -3784,7 +3784,7 @@ index 131a4db..81335ad 100644
  // decoded on another thread while the game goes on changing memory.
  struct TextureSnapshot {
 diff --git a/host/gpu/texture_pack.cpp b/host/gpu/texture_pack.cpp
-index 28628eb..9c2a230 100644
+index 28628eb..0d2e933 100644
 --- a/host/gpu/texture_pack.cpp
 +++ b/host/gpu/texture_pack.cpp
 @@ -1,5 +1,7 @@
@@ -3892,7 +3892,17 @@ index 28628eb..9c2a230 100644
      // xxh64 keys keep the low 32 bits of the 64-bit hash.
      return hash == TexturePackHash::Xxh32 ? XXH32(data, size, kDataSeed)
                                            : static_cast<std::uint32_t>(XXH64(data, size, kDataSeed));
-@@ -386,6 +470,7 @@ bool TexturePack::load_ini(const std::filesystem::path &path, bool is_override,
+@@ -301,6 +385,9 @@ std::unique_ptr<TexturePack> TexturePack::parse(const std::filesystem::path &dir
+                                                 std::string &error) {
+     std::unique_ptr<TexturePack> pack(new TexturePack());
+     pack->directory_ = directory;
++    // A shipped pack is one file of ready BC7 images; PNGs in the folder come first, so users can still replace any of them.
++    if (portablekit::env("NO_TEXTURE_BUNDLE") == nullptr && pack->bundle_.open(directory / "hd.bundle"))
++        std::cout << "[texpack] hd.bundle: " << pack->bundle_.size() << " images" << std::endl;
+     std::error_code ec;
+     if (!std::filesystem::is_directory(directory, ec)) {
+         error = "no texture pack folder at " + directory.string();
+@@ -386,6 +473,7 @@ bool TexturePack::load_ini(const std::filesystem::path &path, bool is_override,
                  const std::string kind = lower(value);
                  if (kind == "xxh64") options_.hash = TexturePackHash::Xxh64;
                  else if (kind == "xxh32") options_.hash = TexturePackHash::Xxh32;
@@ -3900,7 +3910,7 @@ index 28628eb..9c2a230 100644
                  else if (!value.empty() || !is_override) {
                      // "quick" was the format's first hash; packs made with it
                      // are rare, and it is not implemented here.
-@@ -507,8 +592,14 @@ std::shared_ptr<Replacement> TexturePack::find(const GuestMemory &memory, const
+@@ -507,8 +595,14 @@ std::shared_ptr<Replacement> TexturePack::find(const GuestMemory &memory, const
                                                 std::uint16_t max_seen_v) {
      TexturePackKey key;
      std::uint32_t covered_width = 0u, covered_height = 0u;
@@ -3917,7 +3927,7 @@ index 28628eb..9c2a230 100644
      const auto entry = lookup(entries_, key);
      const bool found = entry != entries_.end() && !entry->second.empty();
      if (texture_pack_trace()) {
-@@ -548,9 +639,20 @@ void TexturePack::request(Replacement &replacement) {
+@@ -548,9 +642,20 @@ void TexturePack::request(Replacement &replacement) {
      wake_.notify_one();
  }
  
@@ -3939,7 +3949,7 @@ index 28628eb..9c2a230 100644
      replacement.state.store(Replacement::State::Resident, std::memory_order_release);
      {
          std::lock_guard lock(mutex_);
-@@ -576,6 +678,7 @@ std::filesystem::path TexturePack::resolve(const std::string &name) {
+@@ -576,6 +681,7 @@ std::filesystem::path TexturePack::resolve(const std::string &name) {
  }
  
  void TexturePack::loader_main() {
@@ -3947,7 +3957,7 @@ index 28628eb..9c2a230 100644
      for (;;) {
          Replacement *replacement = nullptr;
          {
-@@ -588,11 +691,49 @@ void TexturePack::loader_main() {
+@@ -588,12 +694,78 @@ void TexturePack::loader_main() {
              replacement = queue_.front();
              queue_.pop_front();
          }
@@ -3972,8 +3982,37 @@ index 28628eb..9c2a230 100644
  }
  
 -void TexturePack::decode(Replacement &replacement) {
+-    std::vector<std::uint8_t> bytes = read_file(replacement.file);
 +void TexturePack::decode(Replacement &replacement, PendingBake &bake) {
 +    texpack_perf::Scope timer(texpack_perf::Stage::Decode, replacement.name);
++    // The shipped bundle: ready BC7 with mips, one read and one inflate. A file of the same name in the folder wins, and an
++    // image that covers only part of its texture (a [hashranges] entry) needs the padding the PNG path below does.
++    std::vector<std::uint8_t> bundled_png;
++    const bool from_bundle = bundle_.size() != 0u && bundle_enabled_.load(std::memory_order_relaxed) &&
++                             !std::filesystem::exists(replacement.file);
++    // Big static images are kept in the bundle as PNGs, and go through the PNG path below.
++    if (from_bundle && bundle_.is_png(replacement.name)) bundle_.read_png(replacement.name, bundled_png);
++    if (from_bundle && bundled_png.empty() &&
++        !(replacement.covered_width != 0u && replacement.covered_width < replacement.texture_width) &&
++        !(replacement.covered_height != 0u && replacement.covered_height < replacement.texture_height)) {
++        texture_cache::Image image;
++        if (bundle_.read(replacement.name, image)) {
++            replacement.width = image.width;
++            replacement.height = image.height;
++            replacement.levels = image.levels;
++            replacement.level_offsets = std::move(image.level_offsets);
++            {
++                std::lock_guard lock(mutex_);
++                decoded_bytes_ += image.data.size();
++            }
++            replacement.compressed = std::move(image.data);
++            if (texture_pack_trace())
++                std::cout << "[texpack] read " << replacement.name << " from the bundle " << replacement.width << "x"
++                          << replacement.height << "\n";
++            replacement.state.store(Replacement::State::Decoded, std::memory_order_release);
++            return;
++        }
++    }
 +    const bool cache = cache_enabled_.load(std::memory_order_relaxed) && portablekit::env("NO_TEXTURE_CACHE") == nullptr;
 +    std::filesystem::path cache_file;
 +    if (cache) {
@@ -3996,10 +4035,11 @@ index 28628eb..9c2a230 100644
 +            return;
 +        }
 +    }
-     std::vector<std::uint8_t> bytes = read_file(replacement.file);
++    std::vector<std::uint8_t> bytes = bundled_png.empty() ? read_file(replacement.file) : std::move(bundled_png);
      if (bytes.empty()) {
          std::filesystem::path folded;
-@@ -635,6 +776,14 @@ void TexturePack::decode(Replacement &replacement) {
+         {
+@@ -635,6 +807,14 @@ void TexturePack::decode(Replacement &replacement) {
  
      replacement.width = full_width;
      replacement.height = full_height;
@@ -4015,18 +4055,21 @@ index 28628eb..9c2a230 100644
          std::lock_guard lock(mutex_);
          decoded_bytes_ += pixels.size();
 diff --git a/host/gpu/texture_pack.hpp b/host/gpu/texture_pack.hpp
-index 4d4c222..c2b635f 100644
+index 4d4c222..d1fd2d3 100644
 --- a/host/gpu/texture_pack.hpp
 +++ b/host/gpu/texture_pack.hpp
-@@ -3,6 +3,7 @@
+@@ -1,8 +1,10 @@
+ #pragma once
+ 
  #include "ge_state.hpp"
++#include "texture_bundle.hpp"
  
  #include <atomic>
 +#include <chrono>
  #include <condition_variable>
  #include <cstdint>
  #include <deque>
-@@ -68,6 +69,14 @@ struct Replacement {
+@@ -68,6 +70,14 @@ struct Replacement {
      std::uint32_t width{};
      std::uint32_t height{};
      std::vector<std::uint8_t> pixels;  // RGBA8, rows packed
@@ -4041,7 +4084,7 @@ index 4d4c222..c2b635f 100644
  
      // Owned by the renderer's thread: its GPU copy, or null.
      void *gpu{};
-@@ -83,10 +92,38 @@ struct TexturePackKey {
+@@ -83,10 +93,38 @@ struct TexturePackKey {
  // <prefix>_TRACE_TEXTURE_PACK: log every lookup, decode and upload.
  [[nodiscard]] bool texture_pack_trace();
  
@@ -4081,7 +4124,7 @@ index 4d4c222..c2b635f 100644
  
  // What [options] says, plus the parts of the other sections that change a
  // texture's key.
-@@ -148,10 +185,18 @@ public:
+@@ -148,10 +186,21 @@ public:
      // Starts decoding an Unloaded replacement on a loader thread. Only the
      // renderer's thread calls this and consumed().
      void request(Replacement &replacement);
@@ -4097,10 +4140,13 @@ index 4d4c222..c2b635f 100644
 +    // with <prefix>_NO_TEXTURE_CACHE set, every image loads from its PNG.
 +    void set_cache(bool enabled) noexcept { cache_enabled_.store(enabled, std::memory_order_relaxed); }
 +
++    // Uses hd.bundle (BC7: the GPU must sample it). Independent of set_cache: the bundle is encoded at the best quality offline.
++    void set_bundle(bool enabled) noexcept { bundle_enabled_.store(enabled, std::memory_order_relaxed); }
++
      [[nodiscard]] const std::filesystem::path &directory() const noexcept { return directory_; }
      [[nodiscard]] const TexturePackOptions &options() const noexcept { return options_; }
      [[nodiscard]] std::size_t entry_count() const noexcept { return entries_.size(); }
-@@ -173,8 +218,19 @@ private:
+@@ -173,10 +222,24 @@ private:
      template <typename Map>
      [[nodiscard]] typename Map::const_iterator lookup(const Map &map, const TexturePackKey &key) const;
      [[nodiscard]] std::filesystem::path resolve(const std::string &name);
@@ -4118,10 +4164,15 @@ index 4d4c222..c2b635f 100644
 +    void decode(Replacement &replacement, PendingBake &bake);
 +    [[nodiscard]] std::filesystem::path cache_folder() const { return directory_.parent_path() / "texcache"; }
 +    std::atomic<bool> cache_enabled_{false};
++    std::atomic<bool> bundle_enabled_{false};
  
      std::filesystem::path directory_;
++    // hd.bundle in the pack folder (texture_bundle.hpp): the images a folder does not have itself.
++    TextureBundle bundle_;
      TexturePackOptions options_;
-@@ -195,6 +251,7 @@ private:
+     std::vector<std::string> games_;  // [games]
+     // Key -> file name relative to the pack; an empty name means "keep the
+@@ -195,6 +258,7 @@ private:
      std::mutex mutex_;
      std::condition_variable wake_;
      std::condition_variable room_;
@@ -4238,7 +4289,7 @@ index bd59b27..1408fb2 100644
                                                          const std::string &game_id, const std::string &in_place);
  
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index e4d7e11..50f645a 100644
+index e4d7e11..1eded22 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -1,7 +1,9 @@
@@ -4251,7 +4302,7 @@ index e4d7e11..50f645a 100644
  
  #include "frame_interpolation.hpp"
  #include "ge_census.hpp"
-@@ -11,6 +13,7 @@
+@@ -11,18 +13,27 @@
  #include "replacement_textures.hpp"
  #include "texture_decode.hpp"
  #include "triangle_indices.hpp"
@@ -4259,7 +4310,11 @@ index e4d7e11..50f645a 100644
  #include "texture_pack.hpp"
  #include "texture_pack_import.hpp"
  
-@@ -21,8 +24,15 @@
+ #include "install/user_data.hpp"
++#include "kernel/read_sources.hpp"
+ 
+ #include "perf/frame_stats.hpp"
+ #include "perf/perf_overlay.hpp"
  #include "input/bindings.hpp"
  #include "input/motion.hpp"
  #include "input/stick.hpp"
@@ -4275,7 +4330,7 @@ index e4d7e11..50f645a 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
  #include "platform/android_jni.hpp"
  #endif
-@@ -47,6 +57,7 @@
+@@ -47,6 +58,7 @@
  #include <cstdio>
  #include <cstdlib>
  #include <cstring>
@@ -4283,7 +4338,7 @@ index e4d7e11..50f645a 100644
  #include <filesystem>
  #include <fstream>
  #include <iomanip>
-@@ -55,13 +66,59 @@
+@@ -55,13 +67,59 @@
  #include <map>
  #include <memory>
  #include <string>
@@ -4343,7 +4398,7 @@ index e4d7e11..50f645a 100644
  
  namespace {
  // How many renderer calls the calling thread is inside (VulkanRenderer::Impl::
-@@ -73,7 +130,8 @@ std::atomic<VulkanRenderer *> g_presenting{};
+@@ -73,7 +131,8 @@ std::atomic<VulkanRenderer *> g_presenting{};
  } // namespace
  
  std::string default_window_title() {
@@ -4353,7 +4408,7 @@ index e4d7e11..50f645a 100644
      if (*kBuildLabel != '\0') title += std::string(" (") + kBuildLabel + ")";
      return title;
  }
-@@ -94,6 +152,22 @@ constexpr std::uint32_t kSettleFrames = 12u;
+@@ -94,6 +153,22 @@ constexpr std::uint32_t kSettleFrames = 12u;
  // a fade, a backdrop or a copy of the picture, which spreads with the 3D view
  // instead of keeping the interface's proportions.
  constexpr float kScreenWideDraw = 470.0f;
@@ -4376,7 +4431,7 @@ index e4d7e11..50f645a 100644
  // Room for one frame's vertices. With frame interpolation a frame cannot reuse
  // its region part way through, so all of it must fit: measured at 16.1 MiB in
  // the busiest areas found (Flooded Forest area 3, Tundra area 2), where 16 MiB
-@@ -689,6 +763,61 @@ bool write_bmp(const std::string &path, const std::uint8_t *pixels, std::uint32_
+@@ -689,6 +764,61 @@ bool write_bmp(const std::string &path, const std::uint8_t *pixels, std::uint32_
      return static_cast<bool>(out);
  }
  
@@ -4438,7 +4493,7 @@ index e4d7e11..50f645a 100644
  struct PadTuning {
      float dead_zone{0.15f};
      bool stick_square{true};
-@@ -699,6 +828,7 @@ struct PadTuning {
+@@ -699,6 +829,7 @@ struct PadTuning {
      bool invert_x{};
      bool invert_y{};
      bool confirm_south{};
@@ -4446,7 +4501,7 @@ index e4d7e11..50f645a 100644
      settings::JumpButton jump{settings::JumpButton::Off};
      bool trace{false};
  };
-@@ -724,6 +854,7 @@ PadTuning pad_tuning() {
+@@ -724,6 +855,7 @@ PadTuning pad_tuning() {
      value.invert_y = player.invert_camera_y;
      // Which face button presses the game's confirm button; see read_gamepad.
      value.confirm_south = player.confirm_south;
@@ -4454,7 +4509,7 @@ index e4d7e11..50f645a 100644
      value.jump = player.jump_button;
      value.trace = trace;
      return value;
-@@ -761,8 +892,13 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
+@@ -761,8 +893,13 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
      held(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, 0x0020u);
      held(SDL_GAMEPAD_BUTTON_DPAD_DOWN, 0x0040u);
      held(SDL_GAMEPAD_BUTTON_DPAD_LEFT, 0x0080u);
@@ -4470,7 +4525,7 @@ index e4d7e11..50f645a 100644
      held(SDL_GAMEPAD_BUTTON_START, 0x0008u);
      held(SDL_GAMEPAD_BUTTON_BACK, 0x0001u);
      held(SDL_GAMEPAD_BUTTON_NORTH, 0x1000u);
-@@ -795,11 +931,18 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
+@@ -795,11 +932,18 @@ void read_gamepad(SDL_Gamepad *device, PadState &pad, int &analog_x, int &analog
      // gets the triggers as those instead, unless the player chose a profile.
      const std::uint32_t extras = portablekit::active_extra_buttons();
      const bool profiled = tuning.triggers != 0u && tuning.triggers <= profiles.size();
@@ -4491,7 +4546,7 @@ index e4d7e11..50f645a 100644
          pad.extra |= input::kExtraR2;
          if (profiled || (extras & input::kExtraR2) == 0u) buttons |= right_trigger;
      }
-@@ -899,6 +1042,7 @@ private:
+@@ -899,6 +1043,7 @@ private:
          finished_.notify_all();
      }
      void work() {
@@ -4499,7 +4554,7 @@ index e4d7e11..50f645a 100644
          std::unique_lock<std::mutex> guard(lock_);
          for (;;) {
              wake_.wait(guard, [this] { return stopping_ || !queue_.empty(); });
-@@ -934,8 +1078,59 @@ struct VulkanRenderer::Impl {
+@@ -934,8 +1079,59 @@ struct VulkanRenderer::Impl {
          // How far down a 512-tall texture has been drawn, which decides how
          // much of it the pack's hash covers; see texture_pack.hpp.
          std::uint16_t max_seen_v{};
@@ -4559,7 +4614,7 @@ index e4d7e11..50f645a 100644
      RendererConfig config;
      SDL_Window *window{};
      VkInstance instance{};
-@@ -1213,6 +1408,9 @@ struct VulkanRenderer::Impl {
+@@ -1213,6 +1409,9 @@ struct VulkanRenderer::Impl {
      input::touch::Controls touch;
      bool touch_visible{};
      bool real_mouse_seen{};
@@ -4569,7 +4624,7 @@ index e4d7e11..50f645a 100644
      MouseMotion touch_motion{};
      struct TouchLayoutKey {
          int width{};
-@@ -1254,8 +1452,15 @@ struct VulkanRenderer::Impl {
+@@ -1254,8 +1453,15 @@ struct VulkanRenderer::Impl {
          insets.top += margin;
          insets.right += margin;
          insets.bottom += margin;
@@ -4587,7 +4642,7 @@ index e4d7e11..50f645a 100644
      }
      void handle_touch(const SDL_Event &event) {
          const bool finger = event.type == SDL_EVENT_FINGER_DOWN || event.type == SDL_EVENT_FINGER_MOTION ||
-@@ -1623,6 +1828,7 @@ struct VulkanRenderer::Impl {
+@@ -1623,6 +1829,7 @@ struct VulkanRenderer::Impl {
      // the guest's vertex bytes of transformed triangle draws and the vertex
      // shader decodes and skins them.
      bool gpu_decode_available{};
@@ -4595,7 +4650,7 @@ index e4d7e11..50f645a 100644
      bool check_gpu_decode{};  // <prefix>_CHECK_GPU_DECODE
      std::uint32_t raw_offset{};  // the raw block most recently written this frame
      RawBlock last_raw{};
-@@ -2052,6 +2258,20 @@ struct VulkanRenderer::Impl {
+@@ -2052,6 +2259,20 @@ struct VulkanRenderer::Impl {
          const std::lock_guard<std::mutex> guard(presenter->queue);
          vkDeviceWaitIdle(device);
      }
@@ -4616,7 +4671,7 @@ index e4d7e11..50f645a 100644
      // A flip without interpolation, handed to the present thread: the newest
      // picture (take_picture) with this interface over it.
      bool plain_pending{};
-@@ -2195,6 +2415,16 @@ struct VulkanRenderer::Impl {
+@@ -2195,6 +2416,16 @@ struct VulkanRenderer::Impl {
      std::uint64_t replaced_draws{};  // this second, for <prefix>_TRACE_TEXTURE_PACK
      void apply_texture_pack();
      [[nodiscard]] VkDescriptorSet texture_descriptor(const GuestMemory &memory, const DrawCall &call);
@@ -4633,7 +4688,7 @@ index e4d7e11..50f645a 100644
      std::uint64_t texture_clock{};
      // texture_key results for the display list being walked, by the state that
      // feeds the key; cleared by begin_display_list().
-@@ -2247,9 +2477,13 @@ struct VulkanRenderer::Impl {
+@@ -2247,9 +2478,13 @@ struct VulkanRenderer::Impl {
      bool frame_uploads_open{};
      VkDeviceSize upload_ring_used{};
      std::uint32_t frame_upload_count{};
@@ -4648,7 +4703,7 @@ index e4d7e11..50f645a 100644
      }
      // Stages `bytes` of pixels for a copy recorded into frame_uploads; null
      // when there is no room and no memory.
-@@ -2712,6 +2946,11 @@ struct VulkanRenderer::Impl {
+@@ -2712,6 +2947,11 @@ struct VulkanRenderer::Impl {
      // Copies pixels into a texture's image: ahead of the frame's commands
      // while one is recorded, else at once (waiting for the queue).
      void upload_texture(VkImage image, std::uint32_t width, std::uint32_t height, const std::uint32_t *pixels);
@@ -4660,7 +4715,7 @@ index e4d7e11..50f645a 100644
      void destroy_texture(Texture &texture);
  };
  
-@@ -2868,12 +3107,27 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -2868,12 +3108,27 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      // under them). The safe area keeps the picture clear of a camera cutout.
      window_flags |= SDL_WINDOW_FULLSCREEN;
  #endif
@@ -4690,7 +4745,7 @@ index e4d7e11..50f645a 100644
  
      std::uint32_t extension_count = 0u;
      const char *const *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&extension_count);
-@@ -2976,6 +3230,13 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -2976,6 +3231,13 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      VkPhysicalDeviceFeatures supported_features{};
      vkGetPhysicalDeviceFeatures(impl.physical_device, &supported_features);
      VkPhysicalDeviceFeatures enabled_features{};
@@ -4704,7 +4759,7 @@ index e4d7e11..50f645a 100644
      if (portablekit::env("CHECK_GPU_DECODE") != nullptr) {
          if (supported_features.vertexPipelineStoresAndAtomics == VK_TRUE) {
              enabled_features.vertexPipelineStoresAndAtomics = VK_TRUE;
-@@ -3463,6 +3724,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -3463,6 +3725,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
      impl.device_name = properties.deviceName;
      impl.prewarm_pipelines();
      // What a player's log needs to tell drivers and memory apart.
@@ -4712,7 +4767,7 @@ index e4d7e11..50f645a 100644
      {
          VkPhysicalDeviceMemoryProperties memory{};
          vkGetPhysicalDeviceMemoryProperties(impl.physical_device, &memory);
-@@ -3472,6 +3734,14 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+@@ -3472,6 +3735,14 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
              vertex_requirements.memoryTypeBits,
              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
          const VkMemoryPropertyFlags flags = memory.memoryTypes[vertex_type].propertyFlags;
@@ -4727,7 +4782,7 @@ index e4d7e11..50f645a 100644
          std::cout << "[render] Vulkan " << VK_API_VERSION_MAJOR(properties.apiVersion) << "."
                    << VK_API_VERSION_MINOR(properties.apiVersion) << "." << VK_API_VERSION_PATCH(properties.apiVersion)
                    << ", driver 0x" << std::hex << properties.driverVersion << ", vendor 0x" << properties.vendorID
-@@ -4515,8 +4785,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
+@@ -4515,8 +4786,9 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
      void *mapped = nullptr;
      vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped);
      const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM || swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
@@ -4739,7 +4794,7 @@ index e4d7e11..50f645a 100644
          std::cout << "[render] window " << capture_extent.width << "x" << capture_extent.height << " -> "
                    << capture_path << std::endl;
      else
-@@ -4576,8 +4847,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
+@@ -4576,8 +4848,7 @@ void VulkanRenderer::Impl::run_commands(const std::function<void(VkCommandBuffer
      VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
      submit.commandBufferCount = 1u;
      submit.pCommandBuffers = &commands;
@@ -4749,7 +4804,7 @@ index e4d7e11..50f645a 100644
      vkFreeCommandBuffers(device, command_pool, 1u, &commands);
  }
  
-@@ -4734,7 +5004,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
+@@ -4734,7 +5005,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
      descriptor_info.descriptorPool = descriptor_pool;
      descriptor_info.descriptorSetCount = 1u;
      descriptor_info.pSetLayouts = &descriptor_layout;
@@ -4764,7 +4819,7 @@ index e4d7e11..50f645a 100644
      VkDescriptorImageInfo image_info{texture_sampler(), texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
      write.dstSet = texture.descriptor;
-@@ -4840,8 +5116,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4840,8 +5117,7 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      // Uploads are synchronous: the GPU finishes everything queued before this
      // returns, which counts as waiting rather than rendering.
      const perf::Clock::time_point wait_start = perf::Clock::now();
@@ -4774,7 +4829,7 @@ index e4d7e11..50f645a 100644
      perf::add_wait_time(perf::Clock::now() - wait_start, perf::Stall::Upload);
      if (!reuse) {
          vkFreeCommandBuffers(device, command_pool, 1u, &commands);
-@@ -4851,6 +5126,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
+@@ -4851,6 +5127,52 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
      }
  }
  
@@ -4827,7 +4882,7 @@ index e4d7e11..50f645a 100644
  bool VulkanRenderer::Impl::stage_upload(const void *pixels, VkDeviceSize bytes, VkBuffer &buffer,
                                          VkDeviceSize &offset) {
      const auto make = [&](VkDeviceSize size, VkBuffer &made, VkDeviceMemory &memory, void *&mapped) {
-@@ -5117,16 +5438,288 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+@@ -5117,16 +5439,329 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
      texture.max_seen_v = max_seen_v;
      // The pack's hash reads the whole texture, so it is taken here, once per
      // upload, and never on the per-draw path above.
@@ -4840,9 +4895,50 @@ index e4d7e11..50f645a 100644
 +        }();
 +        TexturePackKey hash_key;
 +        std::uint32_t covered_width = 0u, covered_height = 0u;
-+        if (compute_texture_pack_key(memory, state, max_seen_v, pack ? pack->options() : kHashOptions, hash_key,
-+                                     covered_width, covered_height))
-+            texture.content_hash = hash_key.data_hash;
++        const bool hashed = compute_texture_pack_key(memory, state, max_seen_v, pack ? pack->options() : kHashOptions,
++                                                     hash_key, covered_width, covered_height);
++        if (hashed) texture.content_hash = hash_key.data_hash;
++        // <prefix>_DUMP_TEXTURE_BYTES=<folder>: the raw bytes of each texture uploaded, one file each, named by address, size,
++        // format and key (the 8-bit and 4-bit paletted formats are cut to their size; the others to w*h*4 or what fits).
++        static const char *const dump_folder = portablekit::env("DUMP_TEXTURE_BYTES");
++        if (dump_folder != nullptr && *dump_folder != '\0' && hashed &&
++            !(state.format == TextureFormat::Clut4 && state.width == 512u && state.height <= 128u)) {
++            std::uint32_t size = state.width * state.height * 4u;
++            if (state.format == TextureFormat::Clut4) size = state.width * state.height / 2u;
++            else if (state.format == TextureFormat::Clut8) size = state.width * state.height;
++            size = std::min(size, 1024u * 1024u);
++            const std::uint32_t address = state.address & 0x0FFFFFF0u;
++            const std::uint8_t *bytes = memory.raw_pointer(address, size);
++            while (bytes == nullptr && size > 256u) {
++                size /= 2u;
++                bytes = memory.raw_pointer(address, size);
++            }
++            if (bytes != nullptr) {
++                std::error_code ignored;
++                std::filesystem::create_directories(dump_folder, ignored);
++                char name[160];
++                std::snprintf(name, sizeof(name), "%08x_%ux%u_f%d_%s.bin", address, state.width, state.height,
++                              static_cast<int>(state.format), format_texture_pack_key(hash_key).c_str());
++                std::ofstream out(std::filesystem::path(dump_folder) / name, std::ios::binary);
++                out.write(reinterpret_cast<const char *>(bytes), size);
++            }
++        }
++        // <prefix>_TRACE_TEXTURE_SOURCE=1: for each texture uploaded, the file read that filled its memory.
++        static const bool trace_source = portablekit::env("TRACE_TEXTURE_SOURCE") != nullptr;
++        if (trace_source) {
++            read_sources::Source source;
++            std::uint32_t inside = 0u;
++            const bool known = read_sources::find(state.address, source, inside);
++            std::cout << "[texsrc] addr 0x" << std::hex << (state.address & 0x0FFFFFFFu) << std::dec << " " << state.width << "x"
++                      << state.height << " fmt " << static_cast<int>(state.format) << " key "
++                      << (hashed ? format_texture_pack_key(hash_key) : std::string("-")) << " -> ";
++            if (known)
++                std::cout << source.path << " offset " << (source.offset + inside) << " (read at " << source.offset
++                          << " size " << source.size << ")\n";
++            else
++                std::cout << "no read covers it\n";
++            std::cout.flush();
++        }
 +    }
 +    if (pack) {
 +        texture.replacement = pack->find(memory, state, max_seen_v);
@@ -5117,17 +5213,18 @@ index e4d7e11..50f645a 100644
      if (texture.replacement && pack) {
          // Until the image is decoded and on the GPU, the original is drawn.
          if (const VkDescriptorSet replaced = replacements.descriptor(*texture.replacement, *pack, frames)) {
-@@ -5179,6 +5772,9 @@ void VulkanRenderer::Impl::apply_texture_pack() {
+@@ -5179,6 +5814,10 @@ void VulkanRenderer::Impl::apply_texture_pack() {
          std::cout << "[texpack] " << error << "\n";
          return;
      }
 +    // The compressed copies are BC7 made by a fast encoder: smaller and quicker to load than the PNGs, but visibly noisy and
 +    // blocky next to them. Off unless <prefix>_BC7_TEXTURES is set, so the pack draws exactly as its PNGs.
 +    pack->set_cache(bc7_supported && portablekit::env("BC7_TEXTURES") != nullptr);
++    pack->set_bundle(bc7_supported);
      pack_status = std::to_string(pack->entry_count()) + " textures";
      std::cout << "[texpack] " << pack->entry_count() << " textures from " << folder.string() << "\n";
  }
-@@ -6636,6 +7232,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
+@@ -6636,6 +7275,7 @@ void VulkanRenderer::Impl::prewarm_pipelines() {
          keys.push_back(key_from(words));
      }
      prewarm->thread = std::thread([this, keys = std::move(keys)] {
@@ -5135,7 +5232,7 @@ index e4d7e11..50f645a 100644
          const auto start = std::chrono::steady_clock::now();
          std::uint32_t made = 0u;
          for (const PipelineKey &key : keys) {
-@@ -6849,7 +7446,7 @@ bool VulkanRenderer::pump_events() {
+@@ -6849,7 +7489,7 @@ bool VulkanRenderer::pump_events() {
          // every other event while the on-screen keyboard is up.
          if (event.type == SDL_EVENT_GAMEPAD_ADDED) impl_->open_gamepad(event.gdevice.which);
          if (event.type == SDL_EVENT_GAMEPAD_REMOVED) impl_->close_gamepad(event.gdevice.which);
@@ -5144,7 +5241,7 @@ index e4d7e11..50f645a 100644
          // reserved for the in-game menu.
          if (event.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) impl_->update_display_info();
          if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) impl_->swapchain_dirty = true;
-@@ -6866,7 +7463,14 @@ bool VulkanRenderer::pump_events() {
+@@ -6866,7 +7506,14 @@ bool VulkanRenderer::pump_events() {
          if ((event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID) ||
              ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
               event.button.which != SDL_TOUCH_MOUSEID))
@@ -5159,7 +5256,7 @@ index e4d7e11..50f645a 100644
          impl_->handle_touch(event);
          if (event.type == SDL_EVENT_MOUSE_MOTION && impl_->mouse_captured && event.motion.which != SDL_TOUCH_MOUSEID &&
              (!impl_->scripted_input || event.motion.which == kScriptedMouse)) {
-@@ -6880,9 +7484,82 @@ bool VulkanRenderer::pump_events() {
+@@ -6880,9 +7527,96 @@ bool VulkanRenderer::pump_events() {
          if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
              impl_->mouse_buttons &= ~(1u << event.button.button);
          if (impl_->event_hook && impl_->event_hook(event)) continue;
@@ -5208,10 +5305,24 @@ index e4d7e11..50f645a 100644
 +#endif
          if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
              impl_->overlay_visible = !impl_->overlay_visible;
-+        // Numpad 1, 2 and 3: Game speed 2x, 4x and 8x; numpad 0 goes back to Normal (the same key again does nothing). Not online (the speed is locked there)
-+        // and not while a text field is being typed in.
-+        if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && !SDL_TextInputActive(impl_->window) && !adhoc_online_mode()) {
-+            const std::uint32_t wanted = event.key.key == SDLK_KP_0 ? 1u : event.key.key == SDLK_KP_1 ? 2u : event.key.key == SDLK_KP_2 ? 4u : event.key.key == SDLK_KP_3 ? 8u : 0u;
++        // Speed control (Controls menu): one remappable key each for Normal, 2x, 4x and 8x (numpad 0-3 by default; none when
++        // cleared). Not online (the speed is locked there) and not while a text field is being typed in.
++        const bool key_press = event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat;
++        const bool mouse_press = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
++        if ((key_press || mouse_press) && !SDL_TextInputActive(impl_->window) && !adhoc_online_mode()) {
++            const input::Binding pressed = key_press ? input::key(static_cast<std::uint16_t>(event.key.scancode))
++                                                     : input::mouse_button(event.button.button);
++            const auto &bound = settings::current().bindings;
++            const auto is_bound = [&](input::Action action) {
++                for (const input::Binding b : bound[static_cast<std::size_t>(action)])
++                    if (b != input::kNone && b == pressed) return true;
++                return false;
++            };
++            const std::uint32_t wanted = is_bound(input::Action::SpeedNormal) ? 1u
++                                         : is_bound(input::Action::Speed2x)   ? 2u
++                                         : is_bound(input::Action::Speed4x)   ? 4u
++                                         : is_bound(input::Action::Speed8x)   ? 8u
++                                                                              : 0u;
 +            if (wanted != 0u) {
 +                settings::Settings &s = settings::current();
 +                s.unthrottled = false;
@@ -5242,7 +5353,7 @@ index e4d7e11..50f645a 100644
      // Only sample while the window has focus: a key still down when focus is
      // lost stays down in SDL's snapshot, which the guest sees as a held
      // direction it can never release.
-@@ -6919,6 +7596,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6919,6 +7653,10 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
          if (const int button = input::mouse_button_of(binding))
              return impl_->mouse_captured && (impl_->mouse_buttons & (1u << button)) != 0u;
          const int position = input::key_position(binding);
@@ -5253,7 +5364,7 @@ index e4d7e11..50f645a 100644
          return position >= 0 && ((focused && position < SDL_SCANCODE_COUNT && keys[position]) ||
                                   impl_->scripted_keys[static_cast<std::size_t>(position)]);
      });
-@@ -6955,12 +7636,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
+@@ -6955,12 +7693,35 @@ void VulkanRenderer::Impl::sample_pad(bool focused) {
      // So do the on-screen controls.
      if (impl_->touch_visible) {
          pad.buttons |= impl_->touch.buttons();
@@ -5289,7 +5400,7 @@ index e4d7e11..50f645a 100644
      }
  
      pad.analog_x = static_cast<std::uint8_t>(std::clamp(0x80 + analog_x, 0, 255));
-@@ -7312,7 +8016,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
+@@ -7312,7 +8073,11 @@ void VulkanRenderer::set_window_scale(std::uint32_t scale) {
      const Impl::Guard guard(*impl_);
      scale = std::clamp<std::uint32_t>(scale, 1u, settings::kMaxWindowScale);
      if ((SDL_GetWindowFlags(impl_->window) & SDL_WINDOW_FULLSCREEN) != 0u) return;
@@ -5302,7 +5413,7 @@ index e4d7e11..50f645a 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7322,7 +8030,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
+@@ -7322,7 +8087,8 @@ void VulkanRenderer::set_fullscreen(bool fullscreen) {
  #if defined(__ANDROID__)
      fullscreen = true;
  #endif
@@ -5312,7 +5423,7 @@ index e4d7e11..50f645a 100644
      impl_->swapchain_dirty = true;
  }
  
-@@ -7813,6 +8522,13 @@ void VulkanRenderer::begin_display_list() {
+@@ -7813,6 +8579,13 @@ void VulkanRenderer::begin_display_list() {
      if (!impl_) return;
      const Impl::Guard guard(*impl_);
      ++impl_->display_lists;
@@ -5326,7 +5437,7 @@ index e4d7e11..50f645a 100644
      impl_->list_texture_keys.clear();
      impl_->last_texture = nullptr;
  }
-@@ -7820,10 +8536,77 @@ void VulkanRenderer::begin_display_list() {
+@@ -7820,10 +8593,77 @@ void VulkanRenderer::begin_display_list() {
  void VulkanRenderer::marker(std::uint32_t marker, std::uint32_t target_address) {
      Impl &impl = *impl_;
      if (!impl.ready) return;
@@ -5404,7 +5515,7 @@ index e4d7e11..50f645a 100644
  }
  
  void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
-@@ -7832,6 +8615,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7832,6 +8672,29 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      const Impl::Guard guard(impl);
      const perf::SplitScope split(perf::Split::Draw);
      if (!impl.recording) begin_frame();
@@ -5434,7 +5545,7 @@ index e4d7e11..50f645a 100644
      // Presents between flips fall due while the game draws, too: a busy
      // frame spends most of its time in here.
      if (impl.cycle_active && !impl.threaded && (++impl.draws_since_poll & 15u) == 0u)
-@@ -7937,10 +8743,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -7937,10 +8800,19 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
      static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
      // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
      // texture state it samples, to find the tiles a 2D screen is built from.
@@ -5456,7 +5567,7 @@ index e4d7e11..50f645a 100644
  
      // Transformed triangles, strips and fans go straight into the vertex
      // buffer: each decoded vertex once, converted as it is written, and a
-@@ -8110,6 +8925,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+@@ -8110,6 +8982,618 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                  clamp_through_quad(impl.scratch, first, static_cast<float>(call.texture.width),
                                     static_cast<float>(call.texture.height));
          }
@@ -6075,7 +6186,7 @@ index e4d7e11..50f645a 100644
      }
  
      if (trace && impl.draws < 400u) {
-@@ -9520,7 +10947,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
+@@ -9520,7 +11004,7 @@ double VulkanRenderer::Impl::wanted_rate() const {
  bool VulkanRenderer::Impl::interpolation_wanted() const {
      // Emulated time running ahead of real time already presents faster than
      // the game's own rate; the keyboard's held frame is shown as it is.
@@ -6803,10 +6914,17 @@ index 4758110..238dc6e 100644
      const std::int32_t y_whole = floor_div64(y64);
      const fonts::GlyphBitmap glyph = fonts::render(code, static_cast<float>(x64 - x_whole * 64) / 64.0f,
 diff --git a/host/hle/hle_io.cpp b/host/hle/hle_io.cpp
-index bbd0c35..777d857 100644
+index bbd0c35..af3062b 100644
 --- a/host/hle/hle_io.cpp
 +++ b/host/hle/hle_io.cpp
-@@ -13,11 +13,13 @@
+@@ -7,17 +7,20 @@
+ #include "install/user_data.hpp"
+ #include "kernel/fast_loading.hpp"
+ #include "kernel/load_trace.hpp"
++#include "kernel/read_sources.hpp"
+ #include "kernel/iso_image.hpp"
+ 
+ #include "psprecomp/common.hpp"
  #include "portablekit/hle_extension.hpp"
  
  #include <algorithm>
@@ -6820,7 +6938,16 @@ index bbd0c35..777d857 100644
  #include <fstream>
  #include <iostream>
  #include <memory>
-@@ -806,6 +808,9 @@ void register_async_io(HleRegistrar &hle) {
+@@ -491,6 +494,8 @@ std::uint32_t read_file_op(Runtime &rt, std::uint32_t fd, std::uint32_t address,
+         result = static_cast<std::uint32_t>(buffer.size());
+     }
+     rt.memory().copy_in(address, buffer);
++    read_sources::note(file.path, file.position * (file.kind == OpenFile::Kind::Disc && file.sector_units ? IsoImage::kSectorSize : 1u),
++                       address, static_cast<std::uint32_t>(buffer.size()));
+     // A disc read is what tells a load from play (kernel/fast_loading.hpp).
+     if (file.kind == OpenFile::Kind::Disc) {
+         load_trace::note_disc_read(buffer.size());
+@@ -806,6 +811,9 @@ void register_async_io(HleRegistrar &hle) {
  
  } // namespace
  
@@ -6931,6 +7058,71 @@ index 59780e2..9515514 100644
      if (msgdialog_instant()) {
          msg_set_answer(question ? msg::kPressedNo : msg::kPressedYes, "MSGDIALOG_INSTANT");
          return;
+diff --git a/host/input/bindings.cpp b/host/input/bindings.cpp
+index 91cd8d8..e105f52 100644
+--- a/host/input/bindings.cpp
++++ b/host/input/bindings.cpp
+@@ -15,6 +15,7 @@ constexpr std::uint16_t A = 4, D = 7, E = 8, F = 9, I = 12, J = 13, K = 14, L =
+ constexpr std::uint16_t X = 27, Z = 29;
+ constexpr std::uint16_t One = 30, Three = 32;
+ constexpr std::uint16_t Return = 40, Backspace = 42, Tab = 43, Space = 44;
++constexpr std::uint16_t Keypad1 = 89, Keypad2 = 90, Keypad3 = 91, Keypad0 = 98;
+ constexpr std::uint16_t Right = 79, Left = 80, Down = 81, Up = 82;
+ constexpr std::uint16_t LeftShift = 225, RightShift = 229;
+ } // namespace hid
+@@ -57,12 +58,13 @@ constexpr ActionInfo kInfo[kActions] = {
+     {"camera_down", "Camera down"}, {"camera_right", "Camera right"}, {"jump", "Jump (L and R together)"},
+     {"l2", "L2"},                  {"r2", "R2"},                   {"l3", "L3 (left stick click)"},
+     {"r3", "R3 (right stick click)"},
++    {"speed_normal", "Normal speed"}, {"speed_2x", "2x speed"}, {"speed_4x", "4x speed"}, {"speed_8x", "8x speed"},
+ };
+ 
+ // SceCtrlButtons for the actions that are buttons.
+ constexpr std::uint32_t kButtonBits[kActions] = {
+     0u, 0u, 0u, 0u, 0x1000u, 0x2000u, 0x4000u, 0x8000u, 0x0100u, 0x0200u, 0x0008u, 0x0001u,
+-    0x0010u, 0x0080u, 0x0040u, 0x0020u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
++    0x0010u, 0x0080u, 0x0040u, 0x0020u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+ };
+ static_assert(sizeof kButtonBits / sizeof kButtonBits[0] == kActions);
+ static_assert(sizeof kInfo / sizeof kInfo[0] == kActions);
+@@ -99,6 +101,10 @@ Bindings make_default() {
+     // A port that reads L2 and R2: the number keys above L (Q) and □ (E).
+     set(Action::L2, key(hid::One));
+     set(Action::R2, key(hid::Three));
++    set(Action::SpeedNormal, key(hid::Keypad0));
++    set(Action::Speed2x, key(hid::Keypad1));
++    set(Action::Speed4x, key(hid::Keypad2));
++    set(Action::Speed8x, key(hid::Keypad3));
+     return b;
+ }
+ 
+@@ -125,6 +131,10 @@ Bindings make_classic() {
+     set(Action::Right, key(hid::Right));
+     set(Action::L2, key(hid::One));
+     set(Action::R2, key(hid::Three));
++    set(Action::SpeedNormal, key(hid::Keypad0));
++    set(Action::Speed2x, key(hid::Keypad1));
++    set(Action::Speed4x, key(hid::Keypad2));
++    set(Action::Speed8x, key(hid::Keypad3));
+     return b;
+ }
+ 
+diff --git a/host/input/bindings.hpp b/host/input/bindings.hpp
+index 1588863..dc5e299 100644
+--- a/host/input/bindings.hpp
++++ b/host/input/bindings.hpp
+@@ -47,6 +47,11 @@ enum class Action : std::uint8_t {
+     R2,
+     L3,
+     R3,
++    // Speed control: set the Game speed to Normal, 2x, 4x or 8x. They press no PSP button; the renderer reads them.
++    SpeedNormal,
++    Speed2x,
++    Speed4x,
++    Speed8x,
+     Count
+ };
+ inline constexpr std::size_t kActions = static_cast<std::size_t>(Action::Count);
 diff --git a/host/input/touch_controls.cpp b/host/input/touch_controls.cpp
 index 12d1a1c..75b9ec0 100644
 --- a/host/input/touch_controls.cpp
@@ -7735,6 +7927,72 @@ index d542b73..276dfe1 100644
      std::chrono::steady_clock::time_point pacing_real_base_{};
      std::uint64_t pacing_virtual_base_{};
      IdleHook idle_hook_;
+diff --git a/host/kernel/read_sources.hpp b/host/kernel/read_sources.hpp
+new file mode 100644
+index 0000000..3b6d5d9
+--- /dev/null
++++ b/host/kernel/read_sources.hpp
+@@ -0,0 +1,60 @@
++#pragma once
++
++// Where the bytes in guest memory came from: the last file reads, each as the guest address range it filled and the file
++// and offset it came from. Diagnostics only (<prefix>_TRACE_TEXTURE_SOURCE): the renderer asks which read filled a texture.
++
++#include <cstdint>
++#include <deque>
++#include <mutex>
++#include <string>
++
++namespace read_sources {
++
++struct Source {
++    std::uint32_t address{};  // guest address the read filled (masked to 28 bits)
++    std::uint32_t size{};
++    std::uint64_t offset{};   // byte offset in the file
++    std::string path;
++};
++
++inline std::mutex &lock() {
++    static std::mutex m;
++    return m;
++}
++inline std::deque<Source> &reads() {
++    static std::deque<Source> r;
++    return r;
++}
++
++inline void note(const std::string &path, std::uint64_t offset, std::uint32_t address, std::uint32_t size) {
++    if (size == 0u) return;
++    std::lock_guard<std::mutex> guard(lock());
++    auto &list = reads();
++    list.push_back({address & 0x0FFFFFFFu, size, offset, path});
++    if (list.size() > 8192u) list.pop_front();
++}
++
++// The most recent read; false if there is none.
++inline bool latest(Source &out) {
++    std::lock_guard<std::mutex> guard(lock());
++    if (reads().empty()) return false;
++    out = reads().back();
++    return true;
++}
++
++// The latest read that covers `address`; false if none does.
++inline bool find(std::uint32_t address, Source &out, std::uint32_t &inside) {
++    address &= 0x0FFFFFFFu;
++    std::lock_guard<std::mutex> guard(lock());
++    const auto &list = reads();
++    for (auto it = list.rbegin(); it != list.rend(); ++it) {
++        if (address >= it->address && address - it->address < it->size) {
++            out = *it;
++            inside = address - it->address;
++            return true;
++        }
++    }
++    return false;
++}
++
++} // namespace read_sources
 diff --git a/host/main.cpp b/host/main.cpp
 index 845bf0e..e06627e 100644
 --- a/host/main.cpp
@@ -9486,7 +9744,7 @@ index 30ef180..1fc69f2 100644
      std::optional<std::filesystem::path> take_dropped_file();
      [[nodiscard]] bool window_closed() const noexcept { return window_closed_; }
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 1b830d9..2eae38d 100644
+index 1b830d9..ba0339e 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -1,4 +1,4 @@
@@ -9543,7 +9801,19 @@ index 1b830d9..2eae38d 100644
  #include <optional>
  #include <string>
  #include <utility>
-@@ -96,34 +111,386 @@ std::vector<void (*)()> &port_rows() {
+@@ -60,6 +75,11 @@
+ namespace portablekit::ui {
+ namespace {
+ 
++bool is_speed_action(input::Action action) {
++    return action == input::Action::SpeedNormal || action == input::Action::Speed2x ||
++           action == input::Action::Speed4x || action == input::Action::Speed8x;
++}
++
+ using Clock = std::chrono::steady_clock;
+ 
+ // Seconds the "how to open the menu" hint stays up at start, until the menu
+@@ -96,34 +116,386 @@ std::vector<void (*)()> &port_rows() {
      return list;
  }
  
@@ -9838,7 +10108,7 @@ index 1b830d9..2eae38d 100644
 +        }
 +    }
 +}
- 
++
 +// Reads the file again when it is new or has changed on disk.
 +#if defined(PORTABLEKIT_ANDROID_APP)
 +// The APK carries no memory stick folder, so the cheat file is fetched, once per run, from the profile's address when it is missing or
@@ -9863,7 +10133,7 @@ index 1b830d9..2eae38d 100644
 +    }).detach();
 +}
 +#endif
-+
+ 
 +void load_cheats() {
 +    CheatFile &f = cheat_file();
 +    std::error_code ec;
@@ -9943,7 +10213,7 @@ index 1b830d9..2eae38d 100644
  
      void video();
      void audio();
-@@ -131,7 +498,10 @@ private:
+@@ -131,7 +503,10 @@ private:
      void tilt_controls();
      void network();
      void system();
@@ -9954,7 +10224,7 @@ index 1b830d9..2eae38d 100644
  
      gpu::VulkanRenderer &renderer() { return Layer::get().renderer(); }
  
-@@ -144,7 +514,9 @@ private:
+@@ -144,7 +519,9 @@ private:
      bool back_{};  // the back button was pressed this frame
      Confirm confirm_{Confirm::None};
      bool confirm_opened_{};  // the confirmation was on screen last frame
@@ -9964,7 +10234,7 @@ index 1b830d9..2eae38d 100644
  };
  
  bool Menu::frame() {
-@@ -161,16 +533,53 @@ bool Menu::frame() {
+@@ -161,16 +538,53 @@ bool Menu::frame() {
      // The pad's back button closes the menu too, once nothing is being edited.
      const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
      const bool pad_back = ImGui::IsKeyPressed(cancel, false);
@@ -10022,7 +10292,7 @@ index 1b830d9..2eae38d 100644
      first_frame_ = false;
      begin_content();
      if (switched) {
-@@ -182,10 +591,12 @@ bool Menu::frame() {
+@@ -182,10 +596,12 @@ bool Menu::frame() {
      case 1: audio(); break;
      case 2: controls(); break;
      case 3: network(); break;
@@ -10036,7 +10306,7 @@ index 1b830d9..2eae38d 100644
          hints({{Control::Confirm, "Select"}, {Control::Back, "Back"}, {Control::Tabs, "Section"},
                 {Control::Menu, "Resume"}});
      else
-@@ -198,11 +609,16 @@ bool Menu::frame() {
+@@ -198,11 +614,16 @@ bool Menu::frame() {
  
      if (confirm_ != Confirm::None) {
          if ((back || pad_back) && confirm_opened_) confirm_ = Confirm::None;
@@ -10053,7 +10323,7 @@ index 1b830d9..2eae38d 100644
      was_editing_ = ImGui::IsAnyItemActive();
      return !close_;
  }
-@@ -231,6 +647,29 @@ void Menu::video() {
+@@ -231,6 +652,29 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -10083,7 +10353,7 @@ index 1b830d9..2eae38d 100644
  #if !defined(__ANDROID__)
      // A phone is always full screen: no window to size.
      {
-@@ -258,6 +697,10 @@ void Menu::video() {
+@@ -258,6 +702,10 @@ void Menu::video() {
          }
      }
  #endif
@@ -10094,7 +10364,7 @@ index 1b830d9..2eae38d 100644
      {
          static const char *const kAspects[] = {"Original", "Stretch", "Fill"};
          // Fill is offered only to a game that can widen its own view.
-@@ -289,26 +732,6 @@ void Menu::video() {
+@@ -289,26 +737,6 @@ void Menu::video() {
          renderer().set_sharp_textures(s.sharp_textures);
          settings::save();
      }
@@ -10121,7 +10391,7 @@ index 1b830d9..2eae38d 100644
      }
      texture_pack_rows();
      section("Timing");
-@@ -378,7 +801,9 @@ void Menu::video() {
+@@ -378,7 +806,9 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -10132,7 +10402,7 @@ index 1b830d9..2eae38d 100644
          RowOptions o = options_for("video.frame_rate_auto",
                                     "On lowers the frame rate by itself when presenting that often would slow the "
                                     "game. Off keeps the chosen rate, and the game may then run below full speed.");
-@@ -389,13 +814,23 @@ void Menu::video() {
+@@ -389,13 +819,23 @@ void Menu::video() {
              settings::save();
          }
      }
@@ -10162,7 +10432,7 @@ index 1b830d9..2eae38d 100644
          RowOptions o = options_for("video.fast_loading",
                                     "Lets the game run ahead of real time while it loads and is silent, so loads "
                                     "take as long as the computer needs. Never during play, sound, movies or "
-@@ -579,7 +1014,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
+@@ -579,7 +1019,6 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
  }
  
  // Host names: printable ASCII without spaces.
@@ -10170,7 +10440,7 @@ index 1b830d9..2eae38d 100644
  
  // What an address to join may hold: a host name or IPv4 address, a colon and
  // a port, or an IPv6 address in brackets.
-@@ -588,6 +1022,17 @@ bool address_character(char32_t c) {
+@@ -588,6 +1027,17 @@ bool address_character(char32_t c) {
             c == U':' || c == U'-' || c == U'[' || c == U']';
  }
  
@@ -10188,7 +10458,7 @@ index 1b830d9..2eae38d 100644
  // Only for a game that tilts (GameProfile::tilt).
  void Menu::tilt_controls() {
      const TiltControls *tilt = portablekit::game().tilt;
-@@ -724,6 +1169,12 @@ void Menu::controls() {
+@@ -724,6 +1174,12 @@ void Menu::controls() {
          s.confirm_south = !s.confirm_south;
          settings::save();
      }
@@ -10201,15 +10471,63 @@ index 1b830d9..2eae38d 100644
      int dead_zone = static_cast<int>(std::lround(s.dead_zone * 100.0f));
      if (slider_row("Stick dead zone", dead_zone, 0, 50, 1, "%d%%",
                     options_for("input.dead_zone", "How far the left stick moves before the game sees it. Raise it if "
-@@ -958,6 +1409,7 @@ void Menu::controls() {
+@@ -915,8 +1371,14 @@ void Menu::controls() {
+     if (binding_) {
+         if (const auto pressed = layer.take_captured_binding()) {
+             if (*pressed != input::kNone) {
++                // A speed has exactly one key: the new one replaces the old, never joins it.
++                if (is_speed_action(*binding_)) s.bindings[static_cast<std::size_t>(*binding_)] = {};
+                 input::assign(s.bindings, *binding_, *pressed);
+                 settings::save();
++            } else if (is_speed_action(*binding_)) {
++                // Esc on a speed key removes it, so that speed has no key.
++                s.bindings[static_cast<std::size_t>(*binding_)] = {};
++                settings::save();
+             }
+             binding_.reset();
+         } else if (!layer.capturing_binding()) {
+@@ -925,6 +1387,7 @@ void Menu::controls() {
+     }
+     for (std::size_t i = 0; i < input::kActions; ++i) {
+         const auto action = static_cast<input::Action>(i);
++        if (is_speed_action(action)) continue;  // listed under "Speed control" below
+         if (action == input::Action::Jump && portablekit::game().tilt == nullptr) continue;
+         // The extra buttons only for a port that reads them.
+         if (const std::uint32_t extra = input::extra_bit(action);
+@@ -958,8 +1421,10 @@ void Menu::controls() {
              if (settings::overridden_by(key).empty()) value = fallback;
          };
          restore("input.confirm", s.confirm_south, d.confirm_south);
 +        restore("input.swap_shoulders", s.swap_shoulders, d.swap_shoulders);
          restore("input.dead_zone", s.dead_zone, d.dead_zone);
          restore("input.stick_square", s.stick_square, d.stick_square);
++
          restore("input.trigger", s.trigger, d.trigger);
-@@ -1065,7 +1517,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
+         restore("input.trigger_profile", s.trigger_profile, d.trigger_profile);
+         restore("input.right_stick", s.right_stick, d.right_stick);
+@@ -991,6 +1456,21 @@ void Menu::controls() {
+         settings::save();
+     }
+ 
++    section("Speed control");
++    for (const input::Action action : {input::Action::SpeedNormal, input::Action::Speed2x, input::Action::Speed4x,
++                                       input::Action::Speed8x}) {
++        std::string value = input::format(s.bindings[static_cast<std::size_t>(action)]);
++        if (binding_ == action) value = "Press a key or a mouse button";
++        else if (value.empty()) value = "None";
++        const RowOptions o{false, {},
++                           "Press a key or a mouse button to set it; Esc removes it, so this speed has no key. "
++                           "A key taken from another control leaves that one. Not used online."};
++        if (value_row(input::info(action).label, value, o) && !binding_) {
++            binding_ = action;
++            layer.begin_binding_capture();
++        }
++    }
++
+     section("Touch screen");
+     {
+         RowOptions o = options_for("input.touch_controls",
+@@ -1065,7 +1545,7 @@ std::string connection_text(const adhoc::Diagnostics &d) {
      case adhoc::ServerState::Off:
          return d.server.empty() || !settings::current().adhoc ? "Off line" : "Off line (the game is not on line)";
      case adhoc::ServerState::Connecting:
@@ -10218,7 +10536,7 @@ index 1b830d9..2eae38d 100644
          return "Reconnecting, attempt " + std::to_string(d.failed_attempts + 1u) +
                 (d.last_error.empty() ? "" : " (" + d.last_error + ")");
      case adhoc::ServerState::Online: break;
-@@ -1086,7 +1538,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
+@@ -1086,7 +1566,7 @@ std::string group_text(const adhoc::Diagnostics &d) {
          if (d.rejoin_ms) text += ", rejoining for " + format_duration(*d.rejoin_ms);
          return text;
      }
@@ -10227,7 +10545,7 @@ index 1b830d9..2eae38d 100644
      return "None";
  }
  
-@@ -1129,13 +1581,89 @@ void play_together() {
+@@ -1129,13 +1609,89 @@ void play_together() {
      settings::Settings &s = settings::current();
      static std::string copied;
      static std::string typed_address;
@@ -10320,7 +10638,7 @@ index 1b830d9..2eae38d 100644
          const std::vector<adhoc::LocalAddress> addresses = adhoc::local_addresses();
          if (addresses.empty()) info_row("Your addresses", "No network is connected");
          for (const adhoc::LocalAddress &address : addresses) {
-@@ -1150,6 +1678,23 @@ void play_together() {
+@@ -1150,6 +1706,23 @@ void play_together() {
                  copied = text;
              }
          }
@@ -10344,7 +10662,7 @@ index 1b830d9..2eae38d 100644
          if (!copied.empty()) info_row("Copied", copied);
          ImGui::PushID("hosted players");
          for (std::size_t i = 0; i < status.players.size(); ++i) {
-@@ -1172,7 +1717,7 @@ void play_together() {
+@@ -1172,7 +1745,7 @@ void play_together() {
          if (button_row("Host a session###hosting",
                         {false, {},
                          "Runs a server in this game for the others to join: no other program, no port forwarding "
@@ -10353,7 +10671,7 @@ index 1b830d9..2eae38d 100644
              adhoc_host_start();
          if (const std::string error = adhoc_host_error(); !error.empty()) info_row("Cannot host", error);
      }
-@@ -1181,7 +1726,13 @@ void play_together() {
+@@ -1181,7 +1754,13 @@ void play_together() {
      adhoc::Discovery &discovery = adhoc::Discovery::get();
      discovery.start_listening();
      discovery.query(s.adhoc_recent);
@@ -10368,7 +10686,7 @@ index 1b830d9..2eae38d 100644
      const bool hosting = adhoc_hosting();
      const auto joined = [&](const std::string &address) {
          return !hosting && s.adhoc && s.adhoc_server == address;
-@@ -1191,10 +1742,13 @@ void play_together() {
+@@ -1191,10 +1770,13 @@ void play_together() {
          const std::string label = (joined(address) ? "Joined " : "Join ") + host.info.name + "   " + address + ", " +
                                    players_text(host.info.players) + "###found " + std::to_string(host.info.session);
          if (button_row(label.c_str(), {false, {}, "A session hosted on this network. Joining it takes you out of any "
@@ -10384,7 +10702,7 @@ index 1b830d9..2eae38d 100644
      if (text_row("join_address", "Address", typed_address, 100u, true, address_character,
                   {false, {},
                    "The host's address, for a VPN without broadcast such as Tailscale: the host's screen lists it. "
-@@ -1218,29 +1772,6 @@ void Menu::network() {
+@@ -1218,29 +1800,6 @@ void Menu::network() {
      adhoc::Client &client = adhoc::Client::get();
      const adhoc::Diagnostics d = client.diagnostics();
      play_together();
@@ -10414,7 +10732,7 @@ index 1b830d9..2eae38d 100644
      section("Status");
      info_row("Connection", connection_text(d));
      if (adhoc_hosting()) {
-@@ -1313,7 +1844,7 @@ void Menu::network() {
+@@ -1313,7 +1872,7 @@ void Menu::network() {
      if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
      if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                       "Drop the server connection and connect again at once. The group is joined "
@@ -10423,7 +10741,7 @@ index 1b830d9..2eae38d 100644
          client.reconnect_now();
      if (button_row("Disconnect", {!d.group && !d.joining, {},
                                    "Leave the group as if the other players were lost. The game shows its own "
-@@ -1322,28 +1853,105 @@ void Menu::network() {
+@@ -1322,28 +1881,105 @@ void Menu::network() {
          client.disconnect_now();
  
      ImGui::Dummy({0.0f, font_gap()});
@@ -10536,7 +10854,7 @@ index 1b830d9..2eae38d 100644
      std::string data_dir;
      try {
          data_dir = install::path_to_utf8(install::user_data_directory());
-@@ -1360,14 +1968,6 @@ void Menu::system() {
+@@ -1360,14 +1996,6 @@ void Menu::system() {
          s.menu_pause = !s.menu_pause;
          settings::save();
      }
@@ -10551,7 +10869,7 @@ index 1b830d9..2eae38d 100644
  #if defined(PORTABLEKIT_ANDROID_APP)
      // An Android app's data folder is out of the file manager's reach; its
      // log goes where the player picks instead, to send with a report.
-@@ -1375,18 +1975,21 @@ void Menu::system() {
+@@ -1375,18 +2003,21 @@ void Menu::system() {
      const std::string project = portablekit::game().project_name;
      const std::string log_name = std::string(portablekit::game().app_name) + ".log";
      const std::string previous_log_name = std::string(portablekit::game().app_name) + "-previous.log";
@@ -10575,7 +10893,7 @@ index 1b830d9..2eae38d 100644
          if (std::filesystem::is_directory(storage / "logs", ec))
              std::filesystem::copy(storage / "logs", local / "logs", std::filesystem::copy_options::recursive, ec);
          const auto copied = android::pick_folder_and_copy(local);
-@@ -1396,24 +1999,91 @@ void Menu::system() {
+@@ -1396,24 +2027,91 @@ void Menu::system() {
                                                       : "Not saved: " + copied->error;
      }
      if (!saved_log_path().empty()) info_row("Log", saved_log_path());
@@ -10671,7 +10989,7 @@ index 1b830d9..2eae38d 100644
      if (*kBuildLabel != '\0') info_row("Build", kBuildLabel);
      info_row("Game", std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ")");
      info_row("Data folder", data_dir);
-@@ -1439,6 +2109,108 @@ bool Menu::confirm_dialog() {
+@@ -1439,6 +2137,108 @@ bool Menu::confirm_dialog() {
              return true;
          }
          confirm_opened_ = true;
@@ -10780,7 +11098,7 @@ index 1b830d9..2eae38d 100644
          const bool quit = confirm_ == Confirm::Quit;
          heading(quit ? "Quit the game?" : "Set up game data again?");
          paragraph(quit ? "Progress since your last save is lost."
-@@ -1447,8 +2219,17 @@ bool Menu::confirm_dialog() {
+@@ -1447,8 +2247,17 @@ bool Menu::confirm_dialog() {
                    colors::kTextDim);
          ImGui::Dummy({0.0f, font * 0.6f});
          const float gap = font * 0.6f;
@@ -10800,7 +11118,7 @@ index 1b830d9..2eae38d 100644
              if (!quit) install::request_setup_on_exit();
              quit_ = true;
              keep_open = false;
-@@ -1466,6 +2247,77 @@ bool Menu::confirm_dialog() {
+@@ -1466,6 +2275,77 @@ bool Menu::confirm_dialog() {
      return keep_open;
  }
  
@@ -10878,7 +11196,7 @@ index 1b830d9..2eae38d 100644
  // Seconds the menu hint has left, or a negative number once it is gone.
  double hint_seconds_left() {
      static const Clock::time_point first_frame = Clock::now();
-@@ -1588,6 +2440,70 @@ void add_menu_rows(void (*rows)()) {
+@@ -1588,6 +2468,70 @@ void add_menu_rows(void (*rows)()) {
      if (rows != nullptr) port_rows().push_back(rows);
  }
  
@@ -10949,7 +11267,7 @@ index 1b830d9..2eae38d 100644
  void draw_over_game() {
      Layer &layer = Layer::get();
      if (!layer.attached()) return;
-@@ -1610,6 +2526,51 @@ void draw_over_game() {
+@@ -1610,6 +2554,51 @@ void draw_over_game() {
          layer.end_frame();
          return;
      }
@@ -11001,7 +11319,7 @@ index 1b830d9..2eae38d 100644
      const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
      const bool overlay = network_overlay();
      const bool touch = !menu && layer.renderer().touch_controls_visible();
-@@ -1639,7 +2600,7 @@ void draw_over_game() {
+@@ -1639,7 +2628,7 @@ void draw_over_game() {
  
  bool menu_pauses() {
      const settings::Settings &s = settings::current();
@@ -11010,7 +11328,7 @@ index 1b830d9..2eae38d 100644
  }
  
  void open_menu_over_game() {
-@@ -1650,6 +2611,9 @@ void open_menu_over_game() {
+@@ -1650,6 +2639,9 @@ void open_menu_over_game() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      menu.emplace(false);
@@ -11020,7 +11338,7 @@ index 1b830d9..2eae38d 100644
  }
  
  bool menu_over_game() { return menu_over_game_state().has_value(); }
-@@ -1659,9 +2623,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
+@@ -1659,9 +2651,25 @@ bool take_quit_request() { return std::exchange(quit_requested(), false); }
  bool menu_requested() {
      Layer &layer = Layer::get();
      if (!layer.attached() || text_input_open() || game_message_open() || game_save_list_open()) return false;
@@ -11048,7 +11366,7 @@ index 1b830d9..2eae38d 100644
  }
  
  bool run_menu() {
-@@ -1670,6 +2650,9 @@ bool run_menu() {
+@@ -1670,6 +2678,9 @@ bool run_menu() {
      layer.renderer().set_game_input(false);
      layer.set_interactive(true);
      Menu menu(true);
@@ -14917,5 +15235,5 @@ index 0000000..a7aca7b
 +    return 0;
 +}
 -- 
-2.54.0.windows.1
+2.45.0
 

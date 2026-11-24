@@ -8,7 +8,9 @@
 #   - requirements.bat and README.txt come from the repo's release\ folder;
 #   - fonts\calibri.ttf (next to the exe, not inside data\) comes from the Windows fonts folder (or release\fonts);
 #   - data\ (fonts, textures, ...) is copied as it is, except the player's own folders and the files made while
-#     testing here (listed below): those are in the zip as empty folders.
+#     testing here (listed below): those are in the zip as empty folders;
+#   - data\textures keeps only textures.ini and hd.bundle (the HD pack as one file, made by the converter): the PNGs and
+#     any other folder in it never ship, so a player's own PNGs go there on top of the bundle.
 # It stops with a message if something the game needs is missing.
 param(
     [string]$Build = "out\d012_vk\bin\Release",
@@ -30,7 +32,7 @@ $playerFolders = "data\ms0\PSP\GAME", "data\ms0\PSP\SAVEDATA", "game"
 $localFiles = "data\settings.ini", "data\pipeline_cache.bin", "data\pipeline_keys.bin"
 # The logs and the screenshots are the player's own (running the game from the build folder makes data\logs, F9 makes
 # data\screenshots): they never ship.
-$localFolders = "data\logs", "data\screenshots", "logs"
+$localFolders = "data\logs", "data\screenshots", "logs", "data\texcache", "data\textures_png"
 # Test leftovers and old copies that must not ship.
 $junk = "*.stale*", "*.old", "*.old-*", "*.old.*","*.log", "*.pdb", "*.ilk", "*.exp", "*.lib", "*.bak",
     # what the test switches write beside the exe: traces, crash dumps and trigger files
@@ -101,6 +103,9 @@ if (-not $WithEmendatus) {
 if (-not (Get-ChildItem (Join-Path $stage "corpora") -File -Filter "*expanded*" -ErrorAction SilentlyContinue)) {
     throw "corpora\ has no memory-expansion corpus: every package ships the expansion edition"
 }
+# data\textures ships as textures.ini and hd.bundle only: the PNG folders of an older pack and whatever else the build folder holds there stay out.
+$texStage = Join-Path $stage "data\textures"
+if (Test-Path $texStage) { Get-ChildItem $texStage -Force | Where-Object { $_.Name -notin "textures.ini", "hd.bundle" } | Remove-Item -Recurse -Force }
 # data\logs and data\screenshots are never packed, whichever way they got in.
 foreach ($folder in $localFolders) { Remove-Item -Recurse -Force (Join-Path $stage $folder) -ErrorAction SilentlyContinue }
 # Sweep: whatever Linux file got in by another way is removed before zipping, and so is anything of the game's own (prepared executables) or
@@ -121,7 +126,7 @@ foreach ($f in "d012_native.exe", "SDL3.dll", "avcodec-61.dll", "avformat-61.dll
 foreach ($o in "battle", "extra", "menu", "suppreacc") {
     if (-not (Get-ChildItem $stageOverlays -Filter "ovl*_${o}_*.dll")) { $missing += "overlays\*_${o}_*.dll" }
 }
-if (-not (Test-Path (Join-Path $stage "data\textures"))) { $missing += "data\textures" }
+foreach ($f in "textures.ini", "hd.bundle") { if (-not (Test-Path (Join-Path $stage "data\textures\$f"))) { $missing += "data\textures\$f" } }
 if (-not (Test-Path (Join-Path $stage "fonts\calibri.ttf"))) { $missing += "fonts\calibri.ttf" }
 Remove-Item -Recurse -Force (Join-Path $stage "data\fonts") -ErrorAction SilentlyContinue  # fonts live in the root only
 if ($missing.Count -gt 0) { throw "Missing from the package: $($missing -join ', ')" }

@@ -51,7 +51,7 @@ jobs:
           unzip -q -o "$RUNNER_TEMP/data.zip" -d release/data || [ $? -eq 1 ]
           rm -f "$RUNNER_TEMP/data.zip"
           ls release/data
-          test -d release/data/textures && test -d release/data/ms0/PSP/CHEATS
+          test -f release/data/textures/textures.ini && test -f release/data/textures/hd.bundle && test -d release/data/ms0/PSP/CHEATS
       - name: Emendatus data (338 MB, in the data pack as mods/emendatus_assets.bin; the build fails without it)
         run: |
           mkdir -p release/mods
@@ -124,7 +124,7 @@ jobs:
           unzip -q -o "$RUNNER_TEMP/data.zip" -d release/data || [ $? -eq 1 ]
           rm -f "$RUNNER_TEMP/data.zip"
           ls release/data
-          test -d release/data/textures && test -d release/data/ms0/PSP/CHEATS
+          test -f release/data/textures/textures.ini && test -f release/data/textures/hd.bundle && test -d release/data/ms0/PSP/CHEATS
       - name: Emendatus data (338 MB, in the data pack as mods/emendatus_assets.bin; the build fails without it)
         run: |
           mkdir -p release/mods
@@ -187,7 +187,7 @@ jobs:
           # unzip exits 1 for a mere warning; anything above is a real failure
           unzip -q -o "$RUNNER_TEMP/data.zip" "textures/*" -d "$RUNNER_TEMP/pack" || [ $? -eq 1 ]
           rm -f "$RUNNER_TEMP/data.zip"
-          test -f "$RUNNER_TEMP/pack/textures/textures.ini" || test -f "$RUNNER_TEMP/pack/textures/ULES01505/textures.ini"
+          test -f "$RUNNER_TEMP/pack/textures/textures.ini" && test -f "$RUNNER_TEMP/pack/textures/hd.bundle"
           echo "TEXTURE_DIR=$RUNNER_TEMP/pack/textures" >> "$GITHUB_ENV"
           echo "STRICT_TEXTURES=1" >> "$GITHUB_ENV"
           du -sh "$RUNNER_TEMP/pack/textures"

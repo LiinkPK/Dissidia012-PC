@@ -62,7 +62,7 @@ jobs:
           # unzip exits 1 for a mere warning; anything above is a real failure
           unzip -q -o "$RUNNER_TEMP/data.zip" "textures/*" -d "$RUNNER_TEMP/pack" || [ $? -eq 1 ]
           rm -f "$RUNNER_TEMP/data.zip"
-          test -f "$RUNNER_TEMP/pack/textures/textures.ini" || test -f "$RUNNER_TEMP/pack/textures/ULES01505/textures.ini"
+          test -f "$RUNNER_TEMP/pack/textures/textures.ini" && test -f "$RUNNER_TEMP/pack/textures/hd.bundle"
           echo "TEXTURE_DIR=$RUNNER_TEMP/pack/textures" >> "$GITHUB_ENV"
           echo "STRICT_TEXTURES=1" >> "$GITHUB_ENV"
           du -sh "$RUNNER_TEMP/pack/textures"

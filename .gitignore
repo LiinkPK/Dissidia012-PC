@@ -77,8 +77,6 @@ crash_report.txt
 # patches/portablekit/.
 /third_party/PortableKit-d012/
 
-# The upstream port (VCKing101/Dissidia012-pc, MIT): only what the build uses is kept (port/host, port/decomp, port/config,
-# the PortableKit patches, and its licence and notices); its docs, tools, BGM maker, examples and tests are not shipped here.
 /third_party/dissidia012-pc/docs/
 /third_party/dissidia012-pc/tools/
 /third_party/dissidia012-pc/setup.*
@@ -89,8 +87,7 @@ crash_report.txt
 /third_party/dissidia012-pc/port/tests/
 /third_party/dissidia012-pc/port/tools/
 
-# The server setup for the online relay: stays local
+# Build scripts that stay local
 /scripts/setup_relay_server.sh
-
-# The relay server's source package (scripts/setup_relay_server.sh), made by hand
 relay-src.tar.gz
+/scripts/make_data_pack.ps1
