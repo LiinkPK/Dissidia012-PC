@@ -1,6 +1,8 @@
-// Log only: which texture regions of PACKAGE.BIN each read brings in, from a table made offline (stamp_table.py): lines of
-// "<entry id hex> <pixel offset in the entry> <length> <image name>". The game's memory is not changed. The point is to see,
-// before writing anything, how many reads carry a whole texture region and how many only part of one.
+// Stamps the textures the pack replaces. After each PACKAGE.BIN read, the pixels of every texture region the read brought in
+// whole get a 16-byte marker (kernel/texture_stamp.hpp) that names the pack's image for it; the renderer finds the marker when the
+// texture is uploaded and loads that image, so the pixels the game read from the disc are never used to find the replacement.
+// The table of regions (which entry, where, which image) is the bundle's "@stamp" entry, loaded by the renderer; made by
+// stamp_table.py. D012_NO_STAMP=1 turns it off.
 #include "d012_stamp.hpp"
 
 #include "hle/hle_common.hpp"
@@ -10,16 +12,13 @@
 #include "psprecomp/runtime.hpp"
 
 #include "kernel/read_sources.hpp"
+#include "kernel/texture_stamp.hpp"
 #include "portablekit/hle_extension.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <fstream>
-#include <sstream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace d012_stamp {
@@ -31,33 +30,11 @@ using psprecomp::Runtime;
 constexpr std::uint32_t kSceIoRead = 0x6A638D83u;
 constexpr std::uint64_t kSector = 2048u;
 
-struct Region {
-    std::uint64_t offset;  // inside the entry
-    std::uint32_t length;
-    std::string name;
-};
-
-std::unordered_map<std::uint32_t, std::vector<Region>> g_table;  // entry id -> regions
 std::vector<std::pair<std::uint32_t, std::uint32_t>> g_entries;  // (sector, id), sorted by sector
 
 bool ends_with(const std::string &text, const char *tail) {
     const std::string t(tail);
     return text.size() >= t.size() && text.compare(text.size() - t.size(), t.size(), t) == 0;
-}
-
-void load_table(const char *path) {
-    std::ifstream in(path);
-    std::string line;
-    while (std::getline(in, line)) {
-        std::istringstream words(line);
-        std::string id, name;
-        std::uint64_t offset = 0, length = 0;
-        if (!(words >> id >> offset >> length >> name)) continue;
-        g_table[static_cast<std::uint32_t>(std::strtoul(id.c_str(), nullptr, 16))].push_back(
-            {offset, static_cast<std::uint32_t>(length), name});
-    }
-    std::printf("[stamp] table: %zu entries with texture regions (log only)\n", g_table.size());
-    std::fflush(stdout);
 }
 
 void on_read(Runtime &rt) {
@@ -71,47 +48,39 @@ void on_read(Runtime &rt) {
             g_entries.emplace_back(rt.memory().load32(read.address + 16u + 12u * i + 4u),
                                    rt.memory().load32(read.address + 16u + 12u * i));
         std::sort(g_entries.begin(), g_entries.end());
-        std::printf("[stamp] PACKAGE_INFO.BIN: %zu entries\n", g_entries.size());
-        std::fflush(stdout);
         return;
     }
-    if (!ends_with(read.path, "PACKAGE.BIN") || g_entries.empty()) return;
+    if (!texture_stamp::loaded() || g_entries.empty() || !ends_with(read.path, "PACKAGE.BIN")) return;
 
-    static std::uint64_t whole = 0, partial = 0, reads = 0;
-    static int lines = 0;
+    static std::uint64_t stamped = 0, partial = 0;
     const std::uint64_t begin = read.offset, end = read.offset + read.size;
     // The first entry that starts at or before the read's start.
-    auto it = std::upper_bound(g_entries.begin(), g_entries.end(), std::make_pair(static_cast<std::uint32_t>(begin / kSector), 0xFFFFFFFFu));
+    auto it = std::upper_bound(g_entries.begin(), g_entries.end(),
+                               std::make_pair(static_cast<std::uint32_t>(begin / kSector), 0xFFFFFFFFu));
     if (it != g_entries.begin()) --it;
-    bool any = false;
     for (; it != g_entries.end() && static_cast<std::uint64_t>(it->first) * kSector < end; ++it) {
-        const auto regions = g_table.find(it->second);
-        if (regions == g_table.end()) continue;
+        const std::vector<texture_stamp::Region> *regions = texture_stamp::regions(it->second);
+        if (regions == nullptr) continue;
         const std::uint64_t entry_start = static_cast<std::uint64_t>(it->first) * kSector;
-        for (const Region &region : regions->second) {
+        for (const texture_stamp::Region &region : *regions) {
             const std::uint64_t a = entry_start + region.offset, b = a + region.length;
             if (b <= begin || a >= end) continue;
-            any = true;
-            const bool full = a >= begin && b <= end;
-            ++(full ? whole : partial);
-            if (++lines <= 400)
-                std::printf("[stamp] %s entry %08X +%llu len %u %s at guest 0x%X\n", full ? "whole  " : "partial", it->second,
-                            static_cast<unsigned long long>(region.offset), region.length, region.name.c_str(),
-                            full ? read.address + static_cast<std::uint32_t>(a - begin) : 0u);
+            // A region the read brought in only in part is left alone: the renderer finds it by its hash, as before.
+            if (a < begin || b > end) { ++partial; continue; }
+            std::vector<std::uint8_t> marker(texture_stamp::kMarkerSize);
+            texture_stamp::write_marker(marker.data(), region.name);
+            rt.memory().copy_in(read.address + static_cast<std::uint32_t>(a - begin), marker);
+            if (++stamped % 1000u == 0u)
+                std::printf("[stamp] %llu texture regions stamped so far (%llu only in part, left to the hash)\n",
+                            static_cast<unsigned long long>(stamped), static_cast<unsigned long long>(partial));
         }
     }
-    if (any && (++reads % 200u) == 0u)
-        std::printf("[stamp] so far: %llu whole regions, %llu partial, in %llu reads\n", static_cast<unsigned long long>(whole),
-                    static_cast<unsigned long long>(partial), static_cast<unsigned long long>(reads));
-    std::fflush(stdout);
 }
 
 } // namespace
 
 void install(portablekit::HleRegistrar &hle) {
-    const char *table = portablekit::env("STAMP_TABLE");
-    if (table == nullptr || *table == '\0') return;
-    load_table(table);
+    if (portablekit::env("NO_STAMP") != nullptr) return;
     const portablekit::HleFunction read = hle.bound_function("IoFileMgrForUser", kSceIoRead);
     if (!read) return;
     hle.bind("IoFileMgrForUser", kSceIoRead, [read](Runtime &rt, AllegrexContext &ctx) {

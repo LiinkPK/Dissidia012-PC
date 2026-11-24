@@ -1,7 +1,7 @@
 #pragma once
 
-// Log only (d012_stamp.cpp): with D012_STAMP_TABLE=<table file> set, each PACKAGE.BIN read that brings in texture pixels the
-// pack replaces is logged. Nothing in the game's memory is changed.
+// Stamps (d012_stamp.cpp): after each PACKAGE.BIN read, the pixels of the texture regions the pack replaces get a marker naming
+// the pack image for them (the table is in hd.bundle). D012_NO_STAMP=1 turns it off.
 
 namespace portablekit {
 class HleRegistrar;
