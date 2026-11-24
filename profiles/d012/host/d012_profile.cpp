@@ -25,6 +25,7 @@
 #include "../../d012_vk/d012_discord.hpp"
 #include "../../d012_vk/d012_netplay_trace.hpp"
 #include "../../d012_vk/d012_battle_shortcuts.hpp"
+#include "../../d012_vk/d012_stamp.hpp"
 
 // The one battle move on a touch screen that has no button on a controller: EX Mode, R + square (a controller's L3). Dodge and dash are
 // L2 and R2, and the assists and the summon are the D-pad in battle (d012_camera.cpp), as on a controller.
@@ -116,6 +117,7 @@ void register_hle(HleRegistrar &hle) {
     d012_netplay_trace::install(hle);
     d012_boot_skip::install(hle);
     d012_battle_shortcuts::install(hle);  // the battle state in the log; the pad is not changed
+    d012_stamp::install(hle);             // log only: which texture regions of PACKAGE.BIN a read brings in
 }
 
 // One overlay window. The game loads OVL_MENU_APP.ELF, OVL_BATTLE_APP.ELF or OVL_EXTRA_APP.ELF there; each is

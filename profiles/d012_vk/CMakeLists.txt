@@ -70,6 +70,7 @@ portablekit_add_game(d012_native
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_netplay_trace.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_boot_skip.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_battle_shortcuts.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/d012_stamp.cpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/d012_unlock_all.cpp"
             "${D012_PORT_DIR}/host/d012_camera.cpp"
             "${D012_PORT_DIR}/host/d012_crash_report.cpp"
