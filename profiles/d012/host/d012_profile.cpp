@@ -26,11 +26,12 @@
 #include "../../d012_vk/d012_netplay_trace.hpp"
 #include "../../d012_vk/d012_battle_shortcuts.hpp"
 #include "../../d012_vk/d012_stamp.hpp"
+#include "d012_camera.hpp"
 
-// The one battle move on a touch screen that has no button on a controller: EX Mode, R + square (a controller's L3). Dodge and dash are
-// L2 and R2, and the assists and the summon are the D-pad in battle (d012_camera.cpp), as on a controller.
+// The battle moves on a touch screen that have no button on a controller. Dodge and dash are L2 and R2. EX Mode (R + square, a
+// controller's L3) is there only while the player's EX gauge is full, and glows (d012_camera.cpp), so it cannot be pressed by accident.
 constexpr portablekit::GameProfile::TouchCombo kTouchCombos[] = {
-    {"EX Mode", 0x0200u | 0x8000u},   // R + square
+    {"EX Mode", 0x0200u | 0x8000u, &d012::camera::ex_ready},  // R + square
     {"Summon", 0x0200u | 0x2000u},     // R + circle
     {"BRV Assist", 0x0100u | 0x2000u}, // L + circle
     {"HP Assist", 0x0100u | 0x8000u},  // L + square
@@ -88,7 +89,7 @@ namespace {
 
 // The version of this release, as its GitHub tag. Change it here for every release: the in-game update check
 // compares it with the newest release on https://github.com/LiinkPK/Dissidia012-PC/releases.
-constexpr const char *kReleaseVersion = "v1.1.2";
+constexpr const char *kReleaseVersion = "v1.1.3";
 
 // The game names its saves "ms0:/PSP/SAVEDATA/%s%s": the disc id followed by the slot.
 constexpr SaveFolder kSaveFolders[] = {

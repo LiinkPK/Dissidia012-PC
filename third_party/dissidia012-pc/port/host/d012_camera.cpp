@@ -36,6 +36,7 @@
 #include "psprecomp/runtime.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -54,6 +55,7 @@ constexpr std::uint32_t kSelect = 0x0001u;
 constexpr std::uint32_t kHold = 0x00020000u;
 // The PSP buttons the battle shortcuts below press (SceCtrlButtons).
 constexpr std::uint32_t kDpadRight = 0x0020u;
+constexpr double kHeldSpeed = 6.3;  // PortableKit's factor for the 4x step of Game speed (adhoc_game_speed)
 constexpr std::uint32_t kDpadUp = 0x0010u, kDpadDown = 0x0040u, kDpadLeft = 0x0080u, kL1 = 0x0100u, kR1 = 0x0200u;
 constexpr std::uint32_t kTriangle = 0x1000u, kCircle = 0x2000u, kCross = 0x4000u, kSquare = 0x8000u;
 // A battle camera must have taken input within this many pad reads for R3
@@ -79,6 +81,8 @@ struct Options {
     // The battle shortcuts for the buttons a PSP lacks (L2, R2, L3) and the D-pad's up and down; D012_NO_BATTLE_SHORTCUTS=1
     // leaves the pad as the game reads it.
     bool shortcuts = true;
+    // L3 (EX Mode) does nothing until the player's EX gauge is full; D012_NO_L3_GAUGE=1 presses it whatever the gauge reads.
+    bool l3_needs_gauge = true;
     // The plugin's: each axis's dead zone, the response rescaled to start
     // from 0 at its edge. On top of PortableKit's radial dead zone for the
     // stick (the menu's Dead zone), as the plugin's was on top of PPSSPP's.
@@ -103,6 +107,7 @@ const Options &options() {
         Options v;
         v.enabled = !flag("D012_NO_RIGHT_STICK_CAMERA");
         v.shortcuts = !flag("D012_NO_BATTLE_SHORTCUTS");
+        v.l3_needs_gauge = !flag("D012_NO_L3_GAUGE");
         v.dead_zone = number("D012_CAMERA_DEAD_ZONE", v.dead_zone, 0.0f, 0.9f);
         v.sensitivity = number("D012_CAMERA_SENSITIVITY", v.sensitivity, 0.05f, 4.0f);
         v.invert_x = flag("D012_CAMERA_INVERT_X");
@@ -426,9 +431,67 @@ struct Install {
     }
 } install_overrides;
 
+// Whether the player's EX gauge is full: a float from 0 to 10000 in the fighter's status block,
+// *(*(*(0x089D6A10) + 0x38) + 0x52C) + 0x18 (docs/research: the battle manager, its player fighter, its status block). It is
+// full at 10000, and it falls as soon as EX Mode starts, so the shortcut is off again by itself. A chain that does not read as a
+// fighter's (a battle that is not set up yet, an address that is not memory) answers true: a wrong address must never take L3 away.
+// -1: the chain does not read as a fighter's (no battle yet); 0: the gauge is not full; 1: it is full.
+int ex_gauge_state(psprecomp::Runtime &rt) {
+    const auto ram = [](std::uint32_t address) {
+        const std::uint32_t a = address & 0x1FFFFFFFu;
+        return a >= 0x08800000u && a < 0x0A000000u - 4u;
+    };
+    const std::uint32_t manager = rt.memory().load32(0x089D6A10u);
+    if (!ram(manager)) return -1;
+    const std::uint32_t fighter = rt.memory().load32(manager + 0x38u);
+    if (!ram(fighter)) return -1;
+    const std::uint32_t status = rt.memory().load32(fighter + 0x52Cu);
+    if (!ram(status)) return -1;
+    const std::uint32_t bits = rt.memory().load32(status + 0x18u);
+    float gauge = 0.0f;
+    std::memcpy(&gauge, &bits, sizeof(gauge));
+    if (!std::isfinite(gauge) || gauge < 0.0f || gauge > 10000.0f) return -1;
+    return gauge >= 9999.0f ? 1 : 0;
+}
+
+// Written by the pad read, read by the interface thread (the on-screen EX button).
+std::atomic<bool> g_ex_full{false};
+
+// D012_TRACE_GAUGES=1: log only. The first 64 bytes of the player's status block (the EX gauge is the float at +0x18) printed each
+// time a word of them changes, to find the assist gauge and the other values the D-pad shortcuts would wait for: play a battle,
+// use an assist, fill the gauges, and read which offsets move. Nothing is changed.
+void trace_gauges(psprecomp::Runtime &rt) {
+    static const bool on = flag("D012_TRACE_GAUGES");
+    if (!on) return;
+    static std::uint32_t last[16] = {};
+    static int lines = 0;
+    const auto ram = [](std::uint32_t address) {
+        const std::uint32_t a = address & 0x1FFFFFFFu;
+        return a >= 0x08800000u && a < 0x0A000000u - 4u;
+    };
+    const std::uint32_t manager = rt.memory().load32(0x089D6A10u);
+    if (!ram(manager)) return;
+    const std::uint32_t fighter = rt.memory().load32(manager + 0x38u);
+    if (!ram(fighter)) return;
+    const std::uint32_t status = rt.memory().load32(fighter + 0x52Cu);
+    if (!ram(status)) return;
+    for (std::uint32_t i = 0; i < 16u; ++i) {
+        const std::uint32_t word = rt.memory().load32(status + i * 4u);
+        if (word == last[i]) continue;
+        float before = 0.0f, after = 0.0f;
+        std::memcpy(&before, &last[i], 4u);
+        std::memcpy(&after, &word, 4u);
+        if (++lines <= 600)
+            std::printf("[gauges] status +0x%02X: %08X -> %08X (as float %g -> %g)\n", i * 4u, last[i], word, before, after);
+        last[i] = word;
+    }
+    std::fflush(stdout);
+}
+
 } // namespace
 
 bool enabled() { return options().enabled; }
+bool ex_ready() { return g_ex_full.load(std::memory_order_relaxed); }
 
 // True while a battle camera is stepping (not in the pause menu, the pre-battle screens or the results).
 bool battle_running() {
@@ -480,6 +543,10 @@ void install(portablekit::HleRegistrar &hle) {
         // D-pad up and down no longer move the camera closer or away (the right stick does that), and D-pad left no longer
         // turns it (the right stick does that too); D-pad right still turns it.
         const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
+        // The EX gauge's state on every read, in or out of a battle: L3 and the on-screen EX button wait for it. An unreadable chain (-1)
+        // leaves L3 alone, so a wrong address never takes it away, but it hides the on-screen button, which only belongs in a battle.
+        const int ex_state = ex_gauge_state(rt);
+        g_ex_full.store(shortcut_live && ex_state == 1, std::memory_order_relaxed);
         if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             static bool announced = false;
@@ -488,17 +555,27 @@ void install(portablekit::HleRegistrar &hle) {
                 std::cout << "[camera] battle shortcut pressed (extra buttons 0x" << std::hex << extra << std::dec << ")" << std::endl;
             }
             std::uint32_t add = 0u;
-            if ((extra & ext::kExtraL3) != 0u) add |= kR1 | kSquare;
+            if ((extra & ext::kExtraL3) != 0u && (!options().l3_needs_gauge || ex_state != 0)) add |= kR1 | kSquare;
             if ((extra & ext::kExtraL2) != 0u) add |= kR1 | kCross;
             if ((extra & ext::kExtraR2) != 0u) add |= kR1 | kTriangle;
+            trace_gauges(rt);
+            bool speed_held = false;
             for (std::uint32_t i = 0; i < count; ++i) {
                 const std::uint32_t at = buffer + i * 16u + 4u;
                 std::uint32_t buttons = rt.memory().load32(at);
+                // D-pad right held: the game runs at 4x (the menu's Game speed 4x step) until it is let go. It no longer turns the camera.
+                if ((buttons & kDpadRight) != 0u) {
+                    speed_held = true;
+                    buttons &= ~kDpadRight;
+                }
                 if ((buttons & kDpadUp) != 0u) buttons = (buttons & ~kDpadUp) | kL1 | kCircle;
                 if ((buttons & kDpadDown) != 0u) buttons = (buttons & ~kDpadDown) | kL1 | kSquare;
                 if ((buttons & kDpadLeft) != 0u) buttons = (buttons & ~kDpadLeft) | kR1 | kCircle;
                 rt.memory().store32(at, buttons | add);
             }
+            ext::hold_game_speed(speed_held ? kHeldSpeed : 1.0);
+        } else {
+            ext::hold_game_speed(1.0);
         }
         // Ad hoc battle: the right stick cannot turn the camera itself (the camera is part of the simulation both machines
         // run), but the D-pad bits of the pad state can, because they are sent like any button and each side turns the
