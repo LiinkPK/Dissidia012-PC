@@ -1,0 +1,345 @@
+From f274ec3362dc6bf16e1b2028454b472b73f81554 Mon Sep 17 00:00:00 2001
+From: d012 setup <setup@localhost>
+Date: Wed, 25 Nov 2026 13:45:31 +0100
+Subject: [PATCH] Texture pack: decode the bundle on the CPU when the GPU
+ cannot sample BC7
+
+The shipped pack is only hd.bundle (BC7), with no PNGs beside it. On a GPU without BC7 (most phones) the bundle was switched off,
+so the game showed the original textures. It now decodes each image's first level to RGBA8 (host/gpu/bc7_decode.hpp: modes 1 and 6,
+which the pack's encoder writes, and modes 3, 4, 5 and 7) and loads it like a PNG, mip chain included.
+---
+ host/gpu/bc7_decode.hpp      | 243 +++++++++++++++++++++++++++++++++++
+ host/gpu/texture_pack.cpp    |  21 ++-
+ host/gpu/texture_pack.hpp    |   4 +
+ host/gpu/vulkan_renderer.cpp |   4 +-
+ 4 files changed, 270 insertions(+), 2 deletions(-)
+ create mode 100644 host/gpu/bc7_decode.hpp
+
+diff --git a/host/gpu/bc7_decode.hpp b/host/gpu/bc7_decode.hpp
+new file mode 100644
+index 0000000..2d932e4
+--- /dev/null
++++ b/host/gpu/bc7_decode.hpp
+@@ -0,0 +1,243 @@
++#pragma once
++
++// A BC7 decoder for GPUs that cannot sample BC7 (most phones): the texture pack's images are stored as BC7 (texture_cache.hpp), and
++// there they are turned back into RGBA8 on the CPU when they are loaded.
++//
++// The pack's own encoder (bc7enc16) writes only modes 1 and 6. Modes 3, 4, 5 and 7 are decoded as well. Modes 0 and 2 (three
++// subsets) need the 3-subset partition tables, which are not here: those blocks come out transparent black. The 2-subset
++// partition and anchor tables below are from bc7enc16 (Richard Geldreich, Jr., MIT license or public domain; see
++// third_party/bc7enc16/LICENSE) and are the standard BC7 tables.
++
++#include <cstddef>
++#include <cstdint>
++
++namespace portablekit::gpu::bc7 {
++
++namespace detail {
++
++inline constexpr std::uint8_t kPartition2[64 * 16] = {
++    0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,
++    0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,
++    0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,
++    0,0,0,1,0,0,1,1,0,0,1,1,0,1,1,1,
++    0,0,0,0,0,0,0,1,0,0,0,1,0,0,1,1,
++    0,0,1,1,0,1,1,1,0,1,1,1,1,1,1,1,
++    0,0,0,1,0,0,1,1,0,1,1,1,1,1,1,1,
++    0,0,0,0,0,0,0,1,0,0,1,1,0,1,1,1,
++    0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,1,
++    0,0,1,1,0,1,1,1,1,1,1,1,1,1,1,1,
++    0,0,0,0,0,0,0,1,0,1,1,1,1,1,1,1,
++    0,0,0,0,0,0,0,0,0,0,0,1,0,1,1,1,
++    0,0,0,1,0,1,1,1,1,1,1,1,1,1,1,1,
++    0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,
++    0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,
++    0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,
++    0,0,0,0,1,0,0,0,1,1,1,0,1,1,1,1,
++    0,1,1,1,0,0,0,1,0,0,0,0,0,0,0,0,
++    0,0,0,0,0,0,0,0,1,0,0,0,1,1,1,0,
++    0,1,1,1,0,0,1,1,0,0,0,1,0,0,0,0,
++    0,0,1,1,0,0,0,1,0,0,0,0,0,0,0,0,
++    0,0,0,0,1,0,0,0,1,1,0,0,1,1,1,0,
++    0,0,0,0,0,0,0,0,1,0,0,0,1,1,0,0,
++    0,1,1,1,0,0,1,1,0,0,1,1,0,0,0,1,
++    0,0,1,1,0,0,0,1,0,0,0,1,0,0,0,0,
++    0,0,0,0,1,0,0,0,1,0,0,0,1,1,0,0,
++    0,1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,
++    0,0,1,1,0,1,1,0,0,1,1,0,1,1,0,0,
++    0,0,0,1,0,1,1,1,1,1,1,0,1,0,0,0,
++    0,0,0,0,1,1,1,1,1,1,1,1,0,0,0,0,
++    0,1,1,1,0,0,0,1,1,0,0,0,1,1,1,0,
++    0,0,1,1,1,0,0,1,1,0,0,1,1,1,0,0,
++    0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,
++    0,0,0,0,1,1,1,1,0,0,0,0,1,1,1,1,
++    0,1,0,1,1,0,1,0,0,1,0,1,1,0,1,0,
++    0,0,1,1,0,0,1,1,1,1,0,0,1,1,0,0,
++    0,0,1,1,1,1,0,0,0,0,1,1,1,1,0,0,
++    0,1,0,1,0,1,0,1,1,0,1,0,1,0,1,0,
++    0,1,1,0,1,0,0,1,0,1,1,0,1,0,0,1,
++    0,1,0,1,1,0,1,0,1,0,1,0,0,1,0,1,
++    0,1,1,1,0,0,1,1,1,1,0,0,1,1,1,0,
++    0,0,0,1,0,0,1,1,1,1,0,0,1,0,0,0,
++    0,0,1,1,0,0,1,0,0,1,0,0,1,1,0,0,
++    0,0,1,1,1,0,1,1,1,1,0,1,1,1,0,0,
++    0,1,1,0,1,0,0,1,1,0,0,1,0,1,1,0,
++    0,0,1,1,1,1,0,0,1,1,0,0,0,0,1,1,
++    0,1,1,0,0,1,1,0,1,0,0,1,1,0,0,1,
++    0,0,0,0,0,1,1,0,0,1,1,0,0,0,0,0,
++    0,1,0,0,1,1,1,0,0,1,0,0,0,0,0,0,
++    0,0,1,0,0,1,1,1,0,0,1,0,0,0,0,0,
++    0,0,0,0,0,0,1,0,0,1,1,1,0,0,1,0,
++    0,0,0,0,0,1,0,0,1,1,1,0,0,1,0,0,
++    0,1,1,0,1,1,0,0,1,0,0,1,0,0,1,1,
++    0,0,1,1,0,1,1,0,1,1,0,0,1,0,0,1,
++    0,1,1,0,0,0,1,1,1,0,0,1,1,1,0,0,
++    0,0,1,1,1,0,0,1,1,1,0,0,0,1,1,0,
++    0,1,1,0,1,1,0,0,1,1,0,0,1,0,0,1,
++    0,1,1,0,0,0,1,1,0,0,1,1,1,0,0,1,
++    0,1,1,1,1,1,1,0,1,0,0,0,0,0,0,1,
++    0,0,0,1,1,0,0,0,1,1,1,0,0,1,1,1,
++    0,0,0,0,1,1,1,1,0,0,1,1,0,0,1,1,
++    0,0,1,1,0,0,1,1,1,1,1,1,0,0,0,0,
++    0,0,1,0,0,0,1,0,1,1,1,0,1,1,1,0,
++    0,1,0,0,0,1,0,0,0,1,1,1,0,1,1,1,
++};
++inline constexpr std::uint8_t kAnchor2[64] = {
++    15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,
++    15,2,8,2,2,8,8,15,2,8,2,2,8,8,2,2,
++    15,15,6,8,2,8,15,15,2,8,2,2,2,15,15,6,
++    6,2,6,8,15,15,2,2,15,15,15,15,15,2,2,15,
++};
++inline constexpr int kWeights2[4] = {0, 21, 43, 64};
++inline constexpr int kWeights3[8] = {0, 9, 18, 27, 37, 46, 55, 64};
++inline constexpr int kWeights4[16] = {0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64};
++
++} // namespace detail
++
++namespace detail {
++
++// Reads bits of a 128-bit block, least significant first.
++struct BitReader {
++    const std::uint8_t *block;
++    unsigned position = 0;
++    [[nodiscard]] std::uint32_t take(unsigned count) {
++        std::uint32_t value = 0;
++        for (unsigned i = 0; i < count; ++i, ++position)
++            value |= static_cast<std::uint32_t>((block[position >> 3] >> (position & 7u)) & 1u) << i;
++        return value;
++    }
++};
++
++[[nodiscard]] inline int interpolate(int a, int b, int weight) { return (a * (64 - weight) + b * weight + 32) >> 6; }
++[[nodiscard]] inline int expand(int value, int bits) {  // a `bits`-bit value to 8 bits
++    return bits >= 8 ? value : (value << (8 - bits)) | (value >> (2 * bits - 8));
++}
++
++// The weight of each pixel's index, with the anchor pixels' missing top bit. `anchor1` is the second subset's anchor (-1: none).
++inline void read_indices(BitReader &in, unsigned index_bits, int anchor1, std::uint8_t out[16]) {
++    for (int i = 0; i < 16; ++i)
++        out[i] = static_cast<std::uint8_t>(in.take(i == 0 || i == anchor1 ? index_bits - 1u : index_bits));
++}
++
++[[nodiscard]] inline int weight_for(unsigned index_bits, unsigned index) {
++    return index_bits == 2u ? kWeights2[index] : index_bits == 3u ? kWeights3[index] : kWeights4[index];
++}
++
++} // namespace detail
++
++// Decodes one 16-byte block to 16 RGBA8 pixels (row by row, 4 by 4).
++inline void decode_block(const std::uint8_t *block, std::uint8_t rgba[16 * 4]) {
++    using namespace detail;
++    BitReader in{block};
++    unsigned mode = 0;
++    while (mode < 8u && (block[mode >> 3] & (1u << (mode & 7u))) == 0u) ++mode;
++    for (int i = 0; i < 64; ++i) rgba[i] = 0u;
++    if (mode >= 8u || mode == 0u || mode == 2u) return;  // reserved, or three subsets (not supported): transparent black
++    in.position = mode + 1u;
++
++    if (mode == 6u) {
++        int e[2][4];
++        for (int c = 0; c < 4; ++c) {
++            e[0][c] = static_cast<int>(in.take(7));
++            e[1][c] = static_cast<int>(in.take(7));
++        }
++        const int p0 = static_cast<int>(in.take(1)), p1 = static_cast<int>(in.take(1));
++        for (int c = 0; c < 4; ++c) {
++            e[0][c] = (e[0][c] << 1) | p0;
++            e[1][c] = (e[1][c] << 1) | p1;
++        }
++        std::uint8_t idx[16];
++        read_indices(in, 4u, -1, idx);
++        for (int i = 0; i < 16; ++i)
++            for (int c = 0; c < 4; ++c)
++                rgba[i * 4 + c] = static_cast<std::uint8_t>(interpolate(e[0][c], e[1][c], kWeights4[idx[i]]));
++        return;
++    }
++
++    if (mode == 1u || mode == 3u || mode == 7u) {  // two subsets
++        const unsigned partition = in.take(6);
++        const int comps = mode == 7u ? 4 : 3;
++        const int bits = mode == 1u ? 6 : mode == 3u ? 7 : 5;
++        int e[4][4] = {};  // [subset * 2 + end][component]
++        for (int c = 0; c < comps; ++c)
++            for (int k = 0; k < 4; ++k) e[k][c] = static_cast<int>(in.take(static_cast<unsigned>(bits)));
++        int p[4] = {};
++        if (mode == 1u) {  // one shared p-bit per subset
++            p[0] = p[1] = static_cast<int>(in.take(1));
++            p[2] = p[3] = static_cast<int>(in.take(1));
++        } else {
++            for (int k = 0; k < 4; ++k) p[k] = static_cast<int>(in.take(1));
++        }
++        for (int k = 0; k < 4; ++k) {
++            for (int c = 0; c < comps; ++c) e[k][c] = expand((e[k][c] << 1) | p[k], bits + 1);
++            if (comps == 3) e[k][3] = 255;
++        }
++        const unsigned index_bits = mode == 1u ? 3u : 2u;
++        std::uint8_t idx[16];
++        read_indices(in, index_bits, kAnchor2[partition], idx);
++        for (int i = 0; i < 16; ++i) {
++            const int s = kPartition2[partition * 16 + static_cast<unsigned>(i)];
++            const int w = weight_for(index_bits, idx[i]);
++            for (int c = 0; c < 4; ++c)
++                rgba[i * 4 + c] = static_cast<std::uint8_t>(interpolate(e[s * 2][c], e[s * 2 + 1][c], w));
++        }
++        return;
++    }
++
++    // Modes 4 and 5: one subset, a rotation of the channels, colour and alpha indexed apart.
++    const unsigned rotation = in.take(2);
++    unsigned index_select = 0;
++    if (mode == 4u) index_select = in.take(1);
++    const int colour_bits = mode == 4u ? 5 : 7;
++    const int alpha_bits = mode == 4u ? 6 : 8;
++    int e[2][4];
++    for (int c = 0; c < 3; ++c) {
++        e[0][c] = static_cast<int>(in.take(static_cast<unsigned>(colour_bits)));
++        e[1][c] = static_cast<int>(in.take(static_cast<unsigned>(colour_bits)));
++    }
++    e[0][3] = static_cast<int>(in.take(static_cast<unsigned>(alpha_bits)));
++    e[1][3] = static_cast<int>(in.take(static_cast<unsigned>(alpha_bits)));
++    for (int k = 0; k < 2; ++k) {
++        for (int c = 0; c < 3; ++c) e[k][c] = expand(e[k][c], colour_bits);
++        e[k][3] = expand(e[k][3], alpha_bits);
++    }
++    std::uint8_t first[16], second[16];
++    const unsigned first_bits = 2u, second_bits = mode == 4u ? 3u : 2u;
++    read_indices(in, first_bits, -1, first);
++    read_indices(in, second_bits, -1, second);
++    for (int i = 0; i < 16; ++i) {
++        // Mode 4 index selection 0: colour from the 2-bit indices, alpha from the 3-bit ones; 1: the other way round.
++        const bool swap = mode == 4u && index_select != 0u;
++        const unsigned colour_index = swap ? second[i] : first[i];
++        const unsigned alpha_index = swap ? first[i] : second[i];
++        const unsigned colour_index_bits = swap ? second_bits : first_bits;
++        const unsigned alpha_index_bits = swap ? first_bits : second_bits;
++        int pixel[4];
++        for (int c = 0; c < 3; ++c)
++            pixel[c] = interpolate(e[0][c], e[1][c], weight_for(colour_index_bits, colour_index));
++        pixel[3] = interpolate(e[0][3], e[1][3], weight_for(alpha_index_bits, alpha_index));
++        if (rotation != 0u) {  // 1: swap red and alpha, 2: green and alpha, 3: blue and alpha
++            const int t = pixel[3];
++            pixel[3] = pixel[rotation - 1u];
++            pixel[rotation - 1u] = t;
++        }
++        for (int c = 0; c < 4; ++c) rgba[i * 4 + c] = static_cast<std::uint8_t>(pixel[c]);
++    }
++}
++
++// Decodes the first (largest) level of a BC7 image, `width` by `height` pixels, to RGBA8 (red first, rows packed).
++// `blocks` holds ceil(width / 4) * ceil(height / 4) blocks, row by row.
++inline void decode_level(const std::uint8_t *blocks, std::uint32_t width, std::uint32_t height, std::uint8_t *rgba) {
++    const std::uint32_t blocks_x = (width + 3u) / 4u, blocks_y = (height + 3u) / 4u;
++    std::uint8_t pixels[16 * 4];
++    for (std::uint32_t by = 0; by < blocks_y; ++by)
++        for (std::uint32_t bx = 0; bx < blocks_x; ++bx) {
++            decode_block(blocks + (static_cast<std::size_t>(by) * blocks_x + bx) * 16u, pixels);
++            for (std::uint32_t y = 0; y < 4u && by * 4u + y < height; ++y)
++                for (std::uint32_t x = 0; x < 4u && bx * 4u + x < width; ++x) {
++                    std::uint8_t *out = rgba + (static_cast<std::size_t>(by * 4u + y) * width + bx * 4u + x) * 4u;
++                    for (int c = 0; c < 4; ++c) out[c] = pixels[(y * 4u + x) * 4u + static_cast<std::uint32_t>(c)];
++                }
++        }
++}
++
++} // namespace portablekit::gpu::bc7
+diff --git a/host/gpu/texture_pack.cpp b/host/gpu/texture_pack.cpp
+index af67be4..249a672 100644
+--- a/host/gpu/texture_pack.cpp
++++ b/host/gpu/texture_pack.cpp
+@@ -1,6 +1,7 @@
+ #include "../profile.hpp"
+ #include "texture_pack.hpp"
+ #include "texture_cache.hpp"
++#include "bc7_decode.hpp"
+ #include "../worker_priority.hpp"
+ 
+ #include <algorithm>
+@@ -747,7 +748,25 @@ void TexturePack::decode(Replacement &replacement, PendingBake &bake) {
+         !(replacement.covered_width != 0u && replacement.covered_width < replacement.texture_width) &&
+         !(replacement.covered_height != 0u && replacement.covered_height < replacement.texture_height)) {
+         texture_cache::Image image;
+-        if (bundle_.read(replacement.name, image)) {
++        if (bundle_.read(replacement.name, image) && bundle_decoded_.load(std::memory_order_relaxed)) {
++            // No BC7 on this GPU: the first level becomes RGBA8, and the renderer builds the mips as it does for a PNG.
++            std::vector<std::uint8_t> pixels(static_cast<std::size_t>(image.width) * image.height * 4u);
++            if (image.width != 0u && image.height != 0u && !image.data.empty()) {
++                bc7::decode_level(image.data.data(), image.width, image.height, pixels.data());
++                replacement.width = image.width;
++                replacement.height = image.height;
++                {
++                    std::lock_guard lock(mutex_);
++                    decoded_bytes_ += pixels.size();
++                }
++                replacement.pixels = std::move(pixels);
++                if (texture_pack_trace())
++                    std::cout << "[texpack] decoded " << replacement.name << " from the bundle " << replacement.width << "x"
++                              << replacement.height << "\n";
++                replacement.state.store(Replacement::State::Decoded, std::memory_order_release);
++                return;
++            }
++        } else if (!image.data.empty()) {
+             replacement.width = image.width;
+             replacement.height = image.height;
+             replacement.levels = image.levels;
+diff --git a/host/gpu/texture_pack.hpp b/host/gpu/texture_pack.hpp
+index aeda326..898bf29 100644
+--- a/host/gpu/texture_pack.hpp
++++ b/host/gpu/texture_pack.hpp
+@@ -211,6 +211,9 @@ public:
+     // Uses hd.bundle (BC7: the GPU must sample it). Independent of set_cache: the bundle is encoded at the best quality offline.
+     void set_bundle(bool enabled) noexcept { bundle_enabled_.store(enabled, std::memory_order_relaxed); }
+ 
++    // With the bundle on, for a GPU that cannot sample BC7: each image's first level is decoded to RGBA8 on the CPU (bc7_decode.hpp) and
++    // goes through the same path as a PNG, mip chain included.
++    void set_bundle_decoded(bool decoded) noexcept { bundle_decoded_.store(decoded, std::memory_order_relaxed); }
+ 
+     [[nodiscard]] const std::filesystem::path &directory() const noexcept { return directory_; }
+     [[nodiscard]] const TexturePackOptions &options() const noexcept { return options_; }
+@@ -247,6 +250,7 @@ private:
+     [[nodiscard]] std::filesystem::path cache_folder() const { return directory_.parent_path() / "texcache"; }
+     std::atomic<bool> cache_enabled_{false};
+     std::atomic<bool> bundle_enabled_{false};
++    std::atomic<bool> bundle_decoded_{false};
+ 
+     std::filesystem::path directory_;
+     // hd.bundle in the pack folder (texture_bundle.hpp): the images a folder does not have itself.
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 10b0089..8a29ff4 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5861,7 +5861,9 @@ void VulkanRenderer::Impl::apply_texture_pack() {
+     // The compressed copies are BC7 made by a fast encoder: smaller and quicker to load than the PNGs, but visibly noisy and
+     // blocky next to them. Off unless <prefix>_BC7_TEXTURES is set, so the pack draws exactly as its PNGs.
+     pack->set_cache(bc7_supported && portablekit::env("BC7_TEXTURES") != nullptr);
+-    pack->set_bundle(bc7_supported);
++    // The shipped pack is only the bundle (no PNGs beside it): a GPU that cannot sample BC7 decodes it on the CPU instead of going without.
++    pack->set_bundle(true);
++    pack->set_bundle_decoded(!bc7_supported);
+     // The stamp table travels in the bundle; <prefix>_NO_STAMP=1 leaves it unread, so every texture is found by its hash as before.
+     if (bc7_supported && portablekit::env("NO_STAMP") == nullptr) {
+         const std::vector<std::uint8_t> blob = pack->bundle_blob("@stamp");
+-- 
+2.54.0.windows.1
+
