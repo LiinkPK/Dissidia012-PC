@@ -1,6 +1,6 @@
-From f274ec3362dc6bf16e1b2028454b472b73f81554 Mon Sep 17 00:00:00 2001
-From: d012 setup <setup@localhost>
-Date: Wed, 25 Nov 2026 13:45:31 +0100
+From 8179cd62d5ab2ffdd430cb2f06d78e394aa3f6b5 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Wed, 25 Nov 2026 14:02:34 +0100
 Subject: [PATCH] Texture pack: decode the bundle on the CPU when the GPU
  cannot sample BC7
 
@@ -10,9 +10,9 @@ which the pack's encoder writes, and modes 3, 4, 5 and 7) and loads it like a PN
 ---
  host/gpu/bc7_decode.hpp      | 243 +++++++++++++++++++++++++++++++++++
  host/gpu/texture_pack.cpp    |  21 ++-
- host/gpu/texture_pack.hpp    |   4 +
+ host/gpu/texture_pack.hpp    |   5 +
  host/gpu/vulkan_renderer.cpp |   4 +-
- 4 files changed, 270 insertions(+), 2 deletions(-)
+ 4 files changed, 271 insertions(+), 2 deletions(-)
  create mode 100644 host/gpu/bc7_decode.hpp
 
 diff --git a/host/gpu/bc7_decode.hpp b/host/gpu/bc7_decode.hpp
@@ -304,20 +304,21 @@ index af67be4..249a672 100644
              replacement.height = image.height;
              replacement.levels = image.levels;
 diff --git a/host/gpu/texture_pack.hpp b/host/gpu/texture_pack.hpp
-index aeda326..898bf29 100644
+index c2fdfa1..898bf29 100644
 --- a/host/gpu/texture_pack.hpp
 +++ b/host/gpu/texture_pack.hpp
-@@ -211,6 +211,9 @@ public:
+@@ -211,6 +211,10 @@ public:
      // Uses hd.bundle (BC7: the GPU must sample it). Independent of set_cache: the bundle is encoded at the best quality offline.
      void set_bundle(bool enabled) noexcept { bundle_enabled_.store(enabled, std::memory_order_relaxed); }
  
 +    // With the bundle on, for a GPU that cannot sample BC7: each image's first level is decoded to RGBA8 on the CPU (bc7_decode.hpp) and
 +    // goes through the same path as a PNG, mip chain included.
 +    void set_bundle_decoded(bool decoded) noexcept { bundle_decoded_.store(decoded, std::memory_order_relaxed); }
- 
++
      [[nodiscard]] const std::filesystem::path &directory() const noexcept { return directory_; }
      [[nodiscard]] const TexturePackOptions &options() const noexcept { return options_; }
-@@ -247,6 +250,7 @@ private:
+     [[nodiscard]] std::size_t entry_count() const noexcept { return entries_.size(); }
+@@ -246,6 +250,7 @@ private:
      [[nodiscard]] std::filesystem::path cache_folder() const { return directory_.parent_path() / "texcache"; }
      std::atomic<bool> cache_enabled_{false};
      std::atomic<bool> bundle_enabled_{false};
