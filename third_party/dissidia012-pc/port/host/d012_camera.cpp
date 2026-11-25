@@ -627,7 +627,9 @@ bool battle_running() {
 
 void install(portablekit::HleRegistrar &hle) {
     static bool installed = false;
-    if (installed || !enabled()) return;
+    // Installed whether or not the right-stick camera is on: the pad read also keeps up the gauge state the on-screen move buttons wait
+    // for (a phone's EX Mode, assists and Summon), which must not depend on the camera option.
+    if (installed) return;
     installed = true;
     const portablekit::HleFunction previous = hle.bound_function("sceCtrl", kSceCtrlReadBufferPositive);
     if (!previous) {
@@ -635,9 +637,10 @@ void install(portablekit::HleRegistrar &hle) {
         return;
     }
     const Options &o = options();
-    std::cout << "[camera] right-stick battle camera on (dead zone " << o.dead_zone << ", sensitivity "
-              << o.sensitivity << (o.invert_x ? ", X inverted" : "") << (o.invert_y ? ", Y inverted" : "")
-              << "); R3 recentres" << std::endl;
+    if (o.enabled)
+        std::cout << "[camera] right-stick battle camera on (dead zone " << o.dead_zone << ", sensitivity "
+                  << o.sensitivity << (o.invert_x ? ", X inverted" : "") << (o.invert_y ? ", Y inverted" : "")
+                  << "); R3 recentres" << std::endl;
 #if defined(__ANDROID__)
     SDL_Log("[camera] pad hook installed");
 #endif
@@ -675,7 +678,9 @@ void install(portablekit::HleRegistrar &hle) {
         // The EX gauge's state on every read, in or out of a battle: L3 and the on-screen EX button wait for it. An unreadable chain (-1)
         // leaves L3 alone, so a wrong address never takes it away, but it hides the on-screen button, which only belongs in a battle.
         const int ex_state = ex_gauge_state(rt);
-        g_ex_full.store(shortcut_live && ex_state == 1, std::memory_order_relaxed);
+        // With the camera off nothing marks a battle as running, so the gauge chain reading as a fighter's is the sign of one.
+        const bool shown = shortcut_live || !enabled();
+        g_ex_full.store(shown && ex_state == 1, std::memory_order_relaxed);
         // The other gauges, on every read too: the D-pad shortcuts and the on-screen buttons of the moves wait for them.
         const BattleGauges gauges = read_battle_gauges(rt);
         // The status word that says "summon ready" is not cleared when the summon is used (measured: it stays 1 after Ifrit), so the use is
@@ -691,10 +696,15 @@ void install(portablekit::HleRegistrar &hle) {
         } else if (gauges.summon_out == 2u && left_pressed_once && p.reads - left_pressed_read <= 180u) {
             summon_used = true;
         }
+        // The on-screen Summon button presses R1 + Circle itself, not the D-pad shortcut: that press counts as the use too.
+        if (gauges.valid && gauges.summon_flag == 1u && (rt.memory().load32(last + 4u) & (kR1 | kCircle)) == (kR1 | kCircle)) {
+            left_pressed_once = true;
+            left_pressed_read = p.reads;
+        }
         const bool summon_ready_now = gauges.valid && gauges.summon_flag == 1u && gauges.summon_out != 2u && !summon_used;
-        g_assist_bar.store(shortcut_live && gauges.valid && gauges.assist >= 4999.0f, std::memory_order_relaxed);
-        g_assist_full.store(shortcut_live && gauges.valid && gauges.assist >= 9999.0f, std::memory_order_relaxed);
-        g_summon_ready.store(shortcut_live && summon_ready_now, std::memory_order_relaxed);
+        g_assist_bar.store(shown && gauges.valid && gauges.assist >= 4999.0f, std::memory_order_relaxed);
+        g_assist_full.store(shown && gauges.valid && gauges.assist >= 9999.0f, std::memory_order_relaxed);
+        g_summon_ready.store(shown && summon_ready_now, std::memory_order_relaxed);
         // What the on-screen move buttons wait for, logged when it changes (at most 60 lines), to see on a device why a button stays
         // hidden: whether a battle is "live", whether the gauge chain reads as a fighter's, and what it reads.
         {
