@@ -1,4 +1,4 @@
-From 83f05fe66ac6738f9a573fb0867d47cb4ff26df1 Mon Sep 17 00:00:00 2001
+From 2325f2cda8f08c77b5b4725556575e671ccfdda8 Mon Sep 17 00:00:00 2001
 From: x <x@x>
 Date: Wed, 25 Nov 2026 18:01:50 +0100
 Subject: [PATCH] Menu: a left column, boxed-less rows with a pointing hand,
@@ -22,12 +22,12 @@ toggle_off); the port ships none. The Audio tab has a "Menu sounds" switch (audi
  host/settings/settings.cpp   |   1 +
  host/settings/settings.hpp   |   1 +
  host/ui/layer.cpp            |  29 +++-
- host/ui/menu.cpp             |  24 ++-
+ host/ui/menu.cpp             |  41 +++--
  host/ui/ui_sound.cpp         |  85 ++++++++++
  host/ui/ui_sound.hpp         |  21 +++
- host/ui/widgets.cpp          | 290 +++++++++++++++++++++++++++--------
- host/ui/widgets.hpp          |  12 ++
- 13 files changed, 440 insertions(+), 66 deletions(-)
+ host/ui/widgets.cpp          | 305 ++++++++++++++++++++++++++++-------
+ host/ui/widgets.hpp          |  14 +-
+ 13 files changed, 467 insertions(+), 73 deletions(-)
  create mode 100644 host/ui/ui_sound.cpp
  create mode 100644 host/ui/ui_sound.hpp
 
@@ -227,7 +227,7 @@ index f3bd91f..1c11f84 100644
      ImGui::NewFrame();
      description_.clear();
 diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
-index 7c176ed..a22de86 100644
+index 7c176ed..7be06c0 100644
 --- a/host/ui/menu.cpp
 +++ b/host/ui/menu.cpp
 @@ -12,6 +12,7 @@
@@ -238,14 +238,56 @@ index 7c176ed..a22de86 100644
  #include "ui/text_input.hpp"
  #include "ui/touch_overlay.hpp"
  #include "ui/updater.hpp"
-@@ -931,12 +932,17 @@ void Menu::audio() {
+@@ -548,15 +549,20 @@ bool Menu::frame() {
+     back_ = back || pad_back;
+ 
+     begin_panel("##menu", portablekit::game().project_name, paused_ ? "Paused" : "Running", true);
+-    {
+-        // A pill next to "Paused" that closes the menu by touch or mouse: on a phone the Resume button was otherwise in the system menu.
++    // A pill at the bottom right of the screen, in the footer, that closes the menu by touch or mouse: on a phone the Resume button was
++    // otherwise in the system menu. Drawn once the footer's window is open (below), where there is room for it.
++    auto draw_resume_pill = [&] {
++        {
+         const ImGuiStyle &style = ImGui::GetStyle();
+         const char *state_text = paused_ ? "Paused" : "Running";
+         const float unit = Layer::get().font_size();
+         const float height = unit * 1.4f, width = unit * 5.2f;
+-        const ImVec2 window = ImGui::GetWindowPos(), extent = ImGui::GetWindowSize();
+-        const ImVec2 at{window.x + extent.x - style.WindowPadding.x - ImGui::CalcTextSize(state_text).x - unit * 0.9f - width,
+-                        window.y + style.WindowPadding.y + style.FontSizeBase * 1.45f - unit * 0.65f - height * 0.5f};
++        (void)style;
++        (void)state_text;
++        const ImVec2 display = ImGui::GetIO().DisplaySize;
++        const float margin = std::round(std::min(display.x, display.y) * 0.03f);
++        // In line with the button hints, at the right end of the footer.
++        const ImVec2 at{display.x - margin - width, display.y - unit * 3.4f + unit * 1.1f - (height - unit) * 0.5f};
+         const ImVec2 saved = ImGui::GetCursorScreenPos();
+         ImGui::SetCursorScreenPos(at);
+         ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);  // the pad and keys keep their rows: this is for touch and mouse
+@@ -582,7 +588,8 @@ bool Menu::frame() {
+         ImGui::PopItemFlag();
+         if (pressed) close_ = true;
+         ImGui::SetCursorScreenPos(saved);
+-    }
++        }
++    };
+     static const char *const kTabs[] = {"Video", "Audio", "Controls", "Network", "Cheats", "Mods", "System"};
+     const bool switched = tab_bar(kTabs, 7, tab_) || first_frame_;
+     first_frame_ = false;
+@@ -601,6 +608,7 @@ bool Menu::frame() {
+     default: system(); break;
+     }
+     begin_footer();
++    draw_resume_pill();
+     if (tab_ == 6)
+         hints({{Control::Confirm, "Select"}, {Control::Back, "Back"}, {Control::Tabs, "Section"},
+                {Control::Menu, "Resume"}});
+@@ -931,12 +939,15 @@ void Menu::audio() {
          sink.set_volume(gain(s));
          settings::save();
      }
-+    if (toggle_row("Menu sounds", s.menu_sounds, {false, {}, "The clicks of this menu: moving, switching and leaving. The game's own sound is not affected."})) {
-+        s.menu_sounds = !s.menu_sounds;
-+        settings::save();
-+    }
++    // The "Menu sounds" switch (audio.menu_sounds) is not shown: the port ships no menu sounds. The setting and the sound code stay, for a
++    // build that has sound files in <data>/sounds; edit audio.menu_sounds in settings.ini to turn them off.
      info_row("Device", device ? (paused_ ? "44100 Hz stereo, paused while this menu is open" : "44100 Hz stereo")
                                : "None");
      ImGui::Dummy({0.0f, font_gap()});
@@ -256,7 +298,7 @@ index 7c176ed..a22de86 100644
          sink.set_volume(gain(s));
          settings::save();
      }
-@@ -2119,8 +2125,10 @@ void Menu::system() {
+@@ -2119,8 +2130,10 @@ void Menu::system() {
          }
      }
      if (button_row("Quit game", {false, {}, std::string("Close ") + portablekit::game().project_name + ". Progress since your last save is lost."},
@@ -268,7 +310,7 @@ index 7c176ed..a22de86 100644
  
      for (void (*rows)() : system_rows()) rows();
  
-@@ -2143,8 +2151,17 @@ bool Menu::confirm_dialog() {
+@@ -2143,8 +2156,17 @@ bool Menu::confirm_dialog() {
      if (confirm_ != Confirm::None && !ImGui::IsPopupOpen("##confirm")) ImGui::OpenPopup("##confirm");
      const ImGuiIO &io = ImGui::GetIO();
      const float font = Layer::get().font_size();
@@ -288,7 +330,7 @@ index 7c176ed..a22de86 100644
      bool keep_open = true;
      confirm_opened_ = false;
      if (ImGui::BeginPopupModal("##confirm", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) {
-@@ -2446,6 +2463,7 @@ void note_menu_opened(bool paused) {
+@@ -2446,6 +2468,7 @@ void note_menu_opened(bool paused) {
  }
  
  void note_menu_closed(bool quit) {
@@ -415,7 +457,7 @@ index 0000000..5dbe0f0
 +
 +} // namespace portablekit::ui::sound
 diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
-index b59d864..e51bef3 100644
+index b59d864..0d5a7e0 100644
 --- a/host/ui/widgets.cpp
 +++ b/host/ui/widgets.cpp
 @@ -1,6 +1,7 @@
@@ -426,7 +468,7 @@ index b59d864..e51bef3 100644
  
  #include "gpu/vulkan_renderer.hpp"
  
-@@ -58,6 +59,15 @@ void draw_triangle(ImDrawList *draw, ImVec2 center, float size, bool right, ImU3
+@@ -58,6 +59,18 @@ void draw_triangle(ImDrawList *draw, ImVec2 center, float size, bool right, ImU3
                                  {center.x - h * 0.8f, center.y}, color);
  }
  
@@ -434,6 +476,9 @@ index b59d864..e51bef3 100644
 +// True while the game menu is drawn (begin_panel with the game behind it): its descriptions go on the right of the screen.
 +bool game_menu = false;
 +float game_menu_space_left = 0.0f, game_menu_space_right = 0.0f;
++ImGuiID row_last_focused = 0;  // the row the cursor was last on
++int row_focus_frame = -100;     // the frame a row last had the cursor
++int rows_unfocused_frames = 0;  // frames in a row with no row on the cursor
 +double pointer_since = 0.0;  // when the focus last moved to another row: the hand's animation starts over from there
 +ImTextureData *pointer_texture = nullptr;
 +ImVec2 pointer_uv0{0, 0}, pointer_uv1{1, 1};
@@ -442,19 +487,17 @@ index b59d864..e51bef3 100644
  struct Row {
      ImVec2 min;
      ImVec2 max;
-@@ -77,15 +87,47 @@ Row row(const char *label, const RowOptions &options, ImU32 color = colors::kTex
+@@ -77,15 +90,45 @@ Row row(const char *label, const RowOptions &options, ImU32 color = colors::kTex
      take_focus();
      result.focused = ImGui::IsItemFocused();
      result.hovered = ImGui::IsItemHovered();
 +    if (result.focused) {
 +        // The cursor moved to another row while one was focused a moment ago (not when a screen opens): the menu's click.
-+        static ImGuiID last_focused = 0;
-+        static int last_frame = -100;
 +        const ImGuiID id = ImGui::GetItemID();
-+        if (id != last_focused) pointer_since = ImGui::GetTime();
-+        if (id != last_focused && ImGui::GetFrameCount() - last_frame <= 2) sound::play(sound::Cue::Navigate);
-+        last_focused = id;
-+        last_frame = ImGui::GetFrameCount();
++        if (id != row_last_focused) pointer_since = ImGui::GetTime();
++        if (id != row_last_focused && ImGui::GetFrameCount() - row_focus_frame <= 2) sound::play(sound::Cue::Navigate);
++        row_last_focused = id;
++        row_focus_frame = ImGui::GetFrameCount();
 +    }
  
      ImDrawList *draw = ImGui::GetWindowDrawList();
@@ -496,7 +539,7 @@ index b59d864..e51bef3 100644
      }
      const float text_y = result.min.y + (height - font()) * 0.5f;
      draw->AddText({result.min.x + px(16.0f), text_y}, options.disabled ? colors::kTextDisabled : color, label,
-@@ -209,6 +251,34 @@ const char *select_name() {
+@@ -209,6 +252,34 @@ const char *select_name() {
  
  } // namespace
  
@@ -531,7 +574,7 @@ index b59d864..e51bef3 100644
  ImGuiStyle make_style(float scale, float font_size) {
      ImGuiStyle style;
      ImGui::StyleColorsDark(&style);
-@@ -221,9 +291,9 @@ ImGuiStyle make_style(float scale, float font_size) {
+@@ -221,9 +292,9 @@ ImGuiStyle make_style(float scale, float font_size) {
      style.PopupBorderSize = 1.5f;
      style.WindowPadding = {26.0f, 20.0f};
      style.FramePadding = {12.0f, 7.0f};
@@ -544,7 +587,7 @@ index b59d864..e51bef3 100644
      style.ScaleAllSizes(scale);
      style.FontSizeBase = font_size;
  
-@@ -241,9 +311,9 @@ ImGuiStyle make_style(float scale, float font_size) {
+@@ -241,9 +312,9 @@ ImGuiStyle make_style(float scale, float font_size) {
      c[ImGuiCol_FrameBgActive] = rgba(colors::kRowFocus);
      c[ImGuiCol_TextSelectedBg] = rgba(IM_COL32(74, 170, 255, 110));
      c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
@@ -557,7 +600,7 @@ index b59d864..e51bef3 100644
      c[ImGuiCol_Separator] = rgba(IM_COL32(40, 100, 180, 120));
      // Rows draw their own focus; ImGui's rectangle would double it.
      c[ImGuiCol_NavCursor] = ImVec4(0, 0, 0, 0);
-@@ -252,18 +322,41 @@ ImGuiStyle make_style(float scale, float font_size) {
+@@ -252,18 +323,41 @@ ImGuiStyle make_style(float scale, float font_size) {
  
  void begin_panel(const char *id, const std::string &title, const std::string &subtitle, bool dim_game) {
      const ImGuiIO &io = ImGui::GetIO();
@@ -609,7 +652,7 @@ index b59d864..e51bef3 100644
      const ImVec2 title_at = ImGui::GetCursorScreenPos();
      ImGui::PushStyleColor(ImGuiCol_Text, colors::kAccentBright);
      ImGui::TextUnformatted(title.c_str());
-@@ -284,7 +377,7 @@ void begin_panel(const char *id, const std::string &title, const std::string &su
+@@ -284,7 +378,7 @@ void begin_panel(const char *id, const std::string &title, const std::string &su
  }
  
  void begin_content() {
@@ -618,7 +661,7 @@ index b59d864..e51bef3 100644
      const float content = std::max(font() * 3.0f, ImGui::GetContentRegionAvail().y - footer);
      ImGui::BeginChild("content", {0.0f, content}, ImGuiChildFlags_NavFlattened);
  }
-@@ -292,7 +385,16 @@ void begin_content() {
+@@ -292,7 +386,16 @@ void begin_content() {
  void touch_scroll() {
      ImGuiIO &io = ImGui::GetIO();
      if (io.MouseSource != ImGuiMouseSource_TouchScreen) return;
@@ -636,7 +679,7 @@ index b59d864..e51bef3 100644
          return;
      if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left, font() * 0.4f)) return;
      ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
-@@ -303,6 +405,22 @@ void touch_scroll() {
+@@ -303,6 +406,36 @@ void touch_scroll() {
  
  void begin_footer() {
      touch_scroll();
@@ -656,10 +699,24 @@ index b59d864..e51bef3 100644
 +        window->DrawList->AddRectFilledMultiColor({x0, mid}, {x1, top + thumb}, strong, strong, none, none);
 +        window->DrawList->PopClipRect();
 +    }
++    // The cursor must not stay lost: after Esc or a click on the empty space ImGui clears the focused row, and the hand would vanish with
++    // the arrow keys doing nothing. When no row has it, it goes back to the last row (or to the first one, if that row is gone).
++    if (game_menu && ImGui::GetFrameCount() - row_focus_frame > 0 && row_last_focused != 0 && !ImGui::GetIO().WantTextInput &&
++        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
++        if (++rows_unfocused_frames > 20) {
++            focus_next = true;
++            rows_unfocused_frames = 0;
++        } else {
++            ImGui::SetFocusID(row_last_focused, ImGui::GetCurrentWindow());
++            ImGui::GetCurrentContext()->NavCursorVisible = true;
++        }
++    } else {
++        rows_unfocused_frames = 0;
++    }
      ImGui::EndChild();
      ImDrawList *draw = ImGui::GetWindowDrawList();
      const ImVec2 line = ImGui::GetCursorScreenPos();
-@@ -310,8 +428,23 @@ void begin_footer() {
+@@ -310,8 +443,23 @@ void begin_footer() {
      draw->AddLine({line.x, line.y + px(4.0f)}, {line.x + width, line.y + px(4.0f)}, IM_COL32(40, 100, 180, 90),
                    px(1.0f));
      ImGui::Dummy({0.0f, px(10.0f)});
@@ -685,7 +742,7 @@ index b59d864..e51bef3 100644
      const ImVec2 at = ImGui::GetCursorScreenPos();
      // A description that would wrap past its two lines (a narrow or a very
      // wide window) is set smaller rather than run into the hints below.
-@@ -321,17 +454,40 @@ void begin_footer() {
+@@ -321,17 +469,40 @@ void begin_footer() {
      while (size > smallest &&
             ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, width, description.c_str()).y > description_height)
          size -= 1.0f;
@@ -734,7 +791,7 @@ index b59d864..e51bef3 100644
  
  bool tab_bar(const char *const *labels, int count, int &selected) {
      const int before = selected;
-@@ -341,42 +497,53 @@ bool tab_bar(const char *const *labels, int count, int &selected) {
+@@ -341,42 +512,53 @@ bool tab_bar(const char *const *labels, int count, int &selected) {
      if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || (!typing && ImGui::IsKeyPressed(ImGuiKey_W, false)))
          selected = (selected + 1) % count;
  
@@ -815,7 +872,7 @@ index b59d864..e51bef3 100644
      return selected != before;
  }
  
-@@ -419,6 +586,7 @@ bool toggle_row(const char *label, bool value, const RowOptions &options) {
+@@ -419,6 +601,7 @@ bool toggle_row(const char *label, bool value, const RowOptions &options) {
      const ImVec2 max{r.max.x - px(16.0f), mid_y + height * 0.5f};
      const ImVec2 min{max.x - width, mid_y - height * 0.5f};
      const bool on = toggled ? !value : value;
@@ -824,7 +881,7 @@ index b59d864..e51bef3 100644
      draw->AddRectFilled(min, max, track, height * 0.5f);
      const float knob = height * 0.5f - px(3.0f);
 diff --git a/host/ui/widgets.hpp b/host/ui/widgets.hpp
-index 6a16f80..27f9eb3 100644
+index 6a16f80..8659dca 100644
 --- a/host/ui/widgets.hpp
 +++ b/host/ui/widgets.hpp
 @@ -2,6 +2,7 @@
@@ -835,11 +892,13 @@ index 6a16f80..27f9eb3 100644
  #include <initializer_list>
  #include <string>
  
-@@ -13,9 +14,12 @@ namespace portablekit::ui {
+@@ -12,10 +13,13 @@ namespace portablekit::ui {
+ 
  // Colours from the project's logo: dark brown, bronze and gold.
  namespace colors {
- inline constexpr ImU32 kBackdrop = IM_COL32(3, 8, 24, 120);
-+inline constexpr ImU32 kScrim = IM_COL32(3, 10, 36, 225);  // the left edge of the game menu, fading out to the right
+-inline constexpr ImU32 kBackdrop = IM_COL32(3, 8, 24, 120);
++inline constexpr ImU32 kBackdrop = IM_COL32(6, 14, 52, 190);
++inline constexpr ImU32 kScrim = IM_COL32(4, 12, 44, 240);  // the left edge of the game menu, fading out to the right
  inline constexpr ImU32 kPanel = IM_COL32(8, 22, 66, 205);
  inline constexpr ImU32 kPanelEdge = IM_COL32(70, 140, 225, 255);
  inline constexpr ImU32 kRow = IM_COL32(190, 220, 255, 10);
