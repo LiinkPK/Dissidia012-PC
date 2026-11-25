@@ -45,6 +45,10 @@
 #include <iostream>
 #include <vector>
 
+#if defined(__ANDROID__)
+#include <SDL3/SDL_log.h>
+#endif
+
 namespace d012::camera {
 namespace {
 
@@ -634,6 +638,9 @@ void install(portablekit::HleRegistrar &hle) {
     std::cout << "[camera] right-stick battle camera on (dead zone " << o.dead_zone << ", sensitivity "
               << o.sensitivity << (o.invert_x ? ", X inverted" : "") << (o.invert_y ? ", Y inverted" : "")
               << "); R3 recentres" << std::endl;
+#if defined(__ANDROID__)
+    SDL_Log("[camera] pad hook installed");
+#endif
     hle.bind("sceCtrl", kSceCtrlReadBufferPositive, [previous](psprecomp::Runtime &rt, psprecomp::AllegrexContext &ctx) {
         const std::uint32_t buffer = ctx.gpr[4];
         const std::uint32_t count = std::clamp<std::uint32_t>(ctx.gpr[5], 1u, 64u);
@@ -704,6 +711,12 @@ void install(portablekit::HleRegistrar &hle) {
                             gauges.valid, gauges.assist, gauges.summon_flag, gauges.summon_out, ex_state == 1 && shortcut_live,
                             gauges.valid && gauges.assist >= 4999.0f && shortcut_live,
                             gauges.valid && gauges.assist >= 9999.0f && shortcut_live, shortcut_live && summon_ready_now);
+#if defined(__ANDROID__)
+                // A phone's stdout goes nowhere: the same line to logcat (tag SDL), read with adb logcat -s SDL.
+                SDL_Log("[buttons] live %d (camera %d, fed %d, battle %d), EX state %d, gauges valid %d, assist %g, summon flag %u out %u",
+                        shortcut_live, live, p.reads - p.fed_read <= kLiveReads, p.reads - p.battle_read <= kLiveReads, ex_state,
+                        gauges.valid, gauges.assist, gauges.summon_flag, gauges.summon_out);
+#endif
                 std::fflush(stdout);
             }
         }
