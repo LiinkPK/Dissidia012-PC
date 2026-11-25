@@ -684,8 +684,9 @@ void install(portablekit::HleRegistrar &hle) {
         const bool adhoc_battle = !live && p.reads - p.fed_read <= kLiveReads;
         int ex_state = ex_gauge_state(rt);
         if (adhoc_battle) ex_state = std::max(ex_state, ex_gauge_state(rt, 1u));
-        // With the camera off nothing marks a battle as running, so the gauge chain reading as a fighter's is the sign of one.
-        const bool shown = shortcut_live || !enabled();
+        // The camera is not what says a battle is running: on a phone its override never fires (measured: "live 0" through a whole battle),
+        // so the on-screen buttons go by the gauge chain reading as a fighter's, which it does only in a battle.
+        const bool shown = shortcut_live || ex_state >= 0;
         g_ex_full.store(shown && ex_state == 1, std::memory_order_relaxed);
         // The other gauges, on every read too: the D-pad shortcuts and the on-screen buttons of the moves wait for them.
         BattleGauges gauges = read_battle_gauges(rt);
