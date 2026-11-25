@@ -160,12 +160,17 @@ chmod +x "$REL/run.sh" "$REL/requirements.sh" "$REL/d012_native"
 # The package: d012_native-linux.tar.gz (the files at the top, no folder around them; the in-game updater takes it as it is).
 # The player's own files never go in: nothing inside game/, mods, PSP/GAME (ISO, DLC) or PSP/SAVEDATA, no logs, settings or caches.
 ITEMS=()
-for item in d012_native lib overlays corpora mods fonts data game run.sh requirements.sh linux_deps.sh README.txt d012_native.png d012_native.desktop; do
+# data/ is a WHITELIST: only what this script put there (the cheat files and the texture pack). Never the folder as a whole: dist/ is
+# kept between builds and its data/ can hold the builder's own saves, settings and anything else the game wrote.
+for item in d012_native lib overlays corpora mods fonts data/ms0/PSP/CHEATS data/textures game run.sh requirements.sh linux_deps.sh README.txt d012_native.png d012_native.desktop; do
   [ -e "$REL/$item" ] && ITEMS+=("$item")
 done
 TARBALL="$REL/d012_native-linux.tar.gz"
 TMP_TAR="$(mktemp "${TMPDIR:-/tmp}/d012_linux_XXXXXX.tar.gz")"
 tar -C "$REL" -czf "$TMP_TAR"   --exclude='game/*' --exclude='data/mods/*' --exclude='data/ms0/PSP/GAME/*' --exclude='data/ms0/PSP/SAVEDATA/*'   --exclude='data/logs' --exclude='data/settings.ini' --exclude='data/pipeline_cache.bin' --exclude='data/pipeline_keys.bin'   "${ITEMS[@]}"
+# Guard: nothing of the player's may be in the tarball. Any data/ entry other than the cheats and the textures stops the build.
+STRAY="$(tar -tzf "$TMP_TAR" | grep -E '^data/' | grep -v -E '^data/(ms0/PSP/CHEATS|textures)(/|$)' || true)"
+if [ -n "$STRAY" ]; then echo "ERROR: unexpected files in the package's data/:"; echo "$STRAY" | head -20; rm -f "$TMP_TAR"; exit 1; fi
 # Leave only the tar in dist/. What the player put in the empty folders (an ISO, DLC, mods, saves) is never deleted: those
 # folders are kept, with a warning.
 rm -f "$TARBALL"
