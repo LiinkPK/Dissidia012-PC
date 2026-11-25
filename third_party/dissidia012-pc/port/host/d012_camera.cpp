@@ -444,14 +444,14 @@ struct Install {
 // full at 10000, and it falls as soon as EX Mode starts, so the shortcut is off again by itself. A chain that does not read as a
 // fighter's (a battle that is not set up yet, an address that is not memory) answers true: a wrong address must never take L3 away.
 // -1: the chain does not read as a fighter's (no battle yet); 0: the gauge is not full; 1: it is full.
-int ex_gauge_state(psprecomp::Runtime &rt) {
+int ex_gauge_state(psprecomp::Runtime &rt, std::uint32_t slot = 0u) {
     const auto ram = [](std::uint32_t address) {
         const std::uint32_t a = address & 0x1FFFFFFFu;
         return a >= 0x08800000u && a < 0x0A000000u - 4u;
     };
     const std::uint32_t manager = rt.memory().load32(0x089D6A10u);
     if (!ram(manager)) return -1;
-    const std::uint32_t fighter = rt.memory().load32(manager + 0x38u);
+    const std::uint32_t fighter = rt.memory().load32(manager + 0x38u + 4u * slot);
     if (!ram(fighter)) return -1;
     const std::uint32_t status = rt.memory().load32(fighter + 0x52Cu);
     if (!ram(status)) return -1;
@@ -478,7 +478,7 @@ struct BattleGauges {
     std::uint32_t summon_out = 0u;
 };
 
-BattleGauges read_battle_gauges(psprecomp::Runtime &rt) {
+BattleGauges read_battle_gauges(psprecomp::Runtime &rt, std::uint32_t slot = 0u) {
     const auto ram = [](std::uint32_t address) {
         const std::uint32_t a = address & 0x1FFFFFFFu;
         return a >= 0x08800000u && a < 0x0A000000u - 4u;
@@ -486,7 +486,7 @@ BattleGauges read_battle_gauges(psprecomp::Runtime &rt) {
     BattleGauges out;
     const std::uint32_t manager = rt.memory().load32(0x089D6A10u);
     if (!ram(manager)) return out;
-    const std::uint32_t fighter = rt.memory().load32(manager + 0x38u);
+    const std::uint32_t fighter = rt.memory().load32(manager + 0x38u + 4u * slot);
     if (!ram(fighter)) return out;
     const std::uint32_t status = rt.memory().load32(fighter + 0x52Cu);
     if (!ram(status)) return out;
@@ -658,7 +658,9 @@ void install(portablekit::HleRegistrar &hle) {
         p.y = hold ? 0x80u : rt.memory().load8(last + 11u);
         const bool r3 = (ext::extra_buttons() & ext::kExtraR3) != 0u;
         const bool live = p.reads - p.live_read <= kLiveReads;
-        if (r3 && live) {
+        // R3 is SELECT, an ordinary button, so it works in a battle whoever feeds the pad (ad hoc included), like the shortcuts below.
+        const bool battle_now = live || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
+        if (r3 && battle_now) {
             for (std::uint32_t i = 0; i < count; ++i) {
                 const std::uint32_t at = buffer + i * 16u + 4u;
                 rt.memory().store32(at, rt.memory().load32(at) | kSelect);
@@ -677,12 +679,28 @@ void install(portablekit::HleRegistrar &hle) {
         const bool shortcut_live = live || p.reads - p.fed_read <= kLiveReads || p.reads - p.battle_read <= kLiveReads;
         // The EX gauge's state on every read, in or out of a battle: L3 and the on-screen EX button wait for it. An unreadable chain (-1)
         // leaves L3 alone, so a wrong address never takes it away, but it hides the on-screen button, which only belongs in a battle.
-        const int ex_state = ex_gauge_state(rt);
+        // Ad hoc play: which of the battle's two fighters this machine's player is, is not known here, so a move counts as ready when
+        // either fighter's gauge allows it (a wrong guess would hold back a move that can be made).
+        const bool adhoc_battle = !live && p.reads - p.fed_read <= kLiveReads;
+        int ex_state = ex_gauge_state(rt);
+        if (adhoc_battle) ex_state = std::max(ex_state, ex_gauge_state(rt, 1u));
         // With the camera off nothing marks a battle as running, so the gauge chain reading as a fighter's is the sign of one.
         const bool shown = shortcut_live || !enabled();
         g_ex_full.store(shown && ex_state == 1, std::memory_order_relaxed);
         // The other gauges, on every read too: the D-pad shortcuts and the on-screen buttons of the moves wait for them.
-        const BattleGauges gauges = read_battle_gauges(rt);
+        BattleGauges gauges = read_battle_gauges(rt);
+        if (adhoc_battle) {
+            const BattleGauges other = read_battle_gauges(rt, 1u);
+            if (other.valid) {
+                gauges.assist = gauges.valid ? std::max(gauges.assist, other.assist) : other.assist;
+                gauges.summon_flag = (gauges.valid && gauges.summon_flag == 1u) || other.summon_flag != 1u ? gauges.summon_flag : 1u;
+                if (!gauges.valid) {
+                    gauges.summon_flag = other.summon_flag;
+                    gauges.summon_out = other.summon_out;
+                }
+                gauges.valid = true;
+            }
+        }
         // The status word that says "summon ready" is not cleared when the summon is used (measured: it stays 1 after Ifrit), so the use is
         // remembered here: a summon that comes out right after this shortcut was pressed is this player's, and the stone stays used
         // until the word drops to 0 or the battle ends. The manager's "a summon is out" word is shared with the CPU, which is why it
