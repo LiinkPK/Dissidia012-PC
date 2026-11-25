@@ -1,0 +1,846 @@
+From 7f8a11f9ec1325c888c816d7849f87911b2eb67e Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Wed, 25 Nov 2026 18:01:50 +0100
+Subject: [PATCH] Menu: a left column, boxed-less rows with a pointing hand,
+ descriptions on the right, menu sounds
+
+The in-game menu becomes a column down the left edge with the game showing to its right through a fading scrim: a blue section band instead of
+the tab strip, rows underlined in blue (the focused one darker, with the game's pointing hand, which moves in a quick beep-beep), the focused
+row's description as plain white text on the right, and the confirmation windows in that space too. A drag on the right scrolls the list on a
+touch screen. The scrollbar is a thin gradient. The text is smaller on a computer (2.6% of the window height; a phone keeps 3.4%).
+The hand is read from the texture pack (ui/handsmall.png), a triangle without it.
+
+The menu has sounds (ui/ui_sound.cpp): a click when the cursor or the section changes, a back sound when a screen is left or the menu
+closes, one for a switch on and one off, one for Quit game. They are WAV files in <data>/sounds (navigate, back, confirm, toggle_on,
+toggle_off); the port ships none. The Audio tab has a "Menu sounds" switch (audio.menu_sounds).
+---
+ cmake/PortableKit.cmake      |   1 +
+ host/gpu/texture_pack.cpp    |   6 +
+ host/gpu/texture_pack.hpp    |   3 +
+ host/gpu/vulkan_renderer.cpp |   5 +
+ host/gpu/vulkan_renderer.hpp |   2 +
+ host/settings/settings.cpp   |   1 +
+ host/settings/settings.hpp   |   1 +
+ host/ui/layer.cpp            |  33 +++-
+ host/ui/menu.cpp             |  24 ++-
+ host/ui/ui_sound.cpp         |  85 ++++++++++
+ host/ui/ui_sound.hpp         |  21 +++
+ host/ui/widgets.cpp          | 290 +++++++++++++++++++++++++++--------
+ host/ui/widgets.hpp          |  12 ++
+ 13 files changed, 418 insertions(+), 66 deletions(-)
+ create mode 100644 host/ui/ui_sound.cpp
+ create mode 100644 host/ui/ui_sound.hpp
+
+diff --git a/cmake/PortableKit.cmake b/cmake/PortableKit.cmake
+index fdf4000..62fa4e2 100644
+--- a/cmake/PortableKit.cmake
++++ b/cmake/PortableKit.cmake
+@@ -130,6 +130,7 @@ set(PORTABLEKIT_RENDERER_SOURCES
+     host/ui/touch_overlay.cpp
+     host/ui/texture_pack_screen.cpp
+     host/ui/widgets.cpp
++    host/ui/ui_sound.cpp
+     third_party/imgui/imgui.cpp
+     third_party/imgui/imgui_draw.cpp
+     third_party/imgui/imgui_tables.cpp
+diff --git a/host/gpu/texture_pack.cpp b/host/gpu/texture_pack.cpp
+index 249a672..87b4403 100644
+--- a/host/gpu/texture_pack.cpp
++++ b/host/gpu/texture_pack.cpp
+@@ -865,6 +865,12 @@ void TexturePack::decode(Replacement &replacement, PendingBake &bake) {
+     replacement.state.store(Replacement::State::Decoded, std::memory_order_release);
+ }
+ 
++std::vector<std::uint8_t> TexturePack::ui_file(const std::string &name) const {
++    std::vector<std::uint8_t> out;
++    if (bundle_.is_png(name) && bundle_.read_png(name, out) && !out.empty()) return out;
++    return read_file(directory_ / std::filesystem::path(name));
++}
++
+ TextureDumper::TextureDumper(std::filesystem::path directory) : directory_(std::move(directory)) {
+     std::error_code ec;
+     std::filesystem::create_directories(directory_, ec);
+diff --git a/host/gpu/texture_pack.hpp b/host/gpu/texture_pack.hpp
+index 898bf29..d246719 100644
+--- a/host/gpu/texture_pack.hpp
++++ b/host/gpu/texture_pack.hpp
+@@ -186,6 +186,9 @@ public:
+     // The replacement a stamp names (kernel/texture_stamp.hpp): the image `name` of the pack, found without hashing the texture. Null
+     // when the pack has no such image, or when the texture is one a [hashranges] entry covers only in part (the hash path pads those).
+     std::shared_ptr<Replacement> find_named(const std::string &name, const TextureState &texture);
++    // A file of the pack that is not a texture the game draws (the menu's pointing hand, "ui/handsmall.png"): its bytes from hd.bundle
++    // (a PNG entry), else from the pack's folder; empty when the pack has none.
++    [[nodiscard]] std::vector<std::uint8_t> ui_file(const std::string &name) const;
+     // A blob stored in hd.bundle (the stamp table, "@stamp"); empty when there is none.
+     [[nodiscard]] std::vector<std::uint8_t> bundle_blob(const std::string &name) const {
+         std::vector<std::uint8_t> out;
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 8a29ff4..aa65dea 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -8200,6 +8200,11 @@ void VulkanRenderer::set_texture_pack(bool enabled) {
+     if (impl_) impl_->pack_wanted = enabled;
+ }
+ 
++std::vector<std::uint8_t> VulkanRenderer::texture_pack_file(const std::string &name) const {
++    if (!impl_ || !impl_->pack) return {};
++    return impl_->pack->ui_file(name);
++}
++
+ std::string VulkanRenderer::texture_pack_status() const {
+     if (!impl_) return {};
+     const Impl &impl = *impl_;
+diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
+index f3ccbf2..e70882a 100644
+--- a/host/gpu/vulkan_renderer.hpp
++++ b/host/gpu/vulkan_renderer.hpp
+@@ -276,6 +276,8 @@ public:
+     // For the menu: "Off", "Not installed", or how many textures the pack has
+     // and how many of them are on the GPU.
+     [[nodiscard]] std::string texture_pack_status() const;
++    // A file of the open texture pack that is not a game texture (the menu's pointing hand); empty when there is no pack or no such file.
++    [[nodiscard]] std::vector<std::uint8_t> texture_pack_file(const std::string &name) const;
+     // Opens the pack again from the next frame, e.g. after an import.
+     void reload_texture_pack();
+     // While held, no pack is open, so an import can move its folder; true
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index bb6e292..96e5cb3 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -278,6 +278,7 @@ const std::vector<Field> &fields() {
+          [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 100u, s.volume); },
+          [](const Settings &s) { return std::to_string(s.volume); }, nullptr},
+         BOOL_FIELD("audio.mute", mute),
++        BOOL_FIELD("audio.menu_sounds", menu_sounds),
+         BOOL_FIELD("input.swap_shoulders", swap_shoulders),
+         BOOL_FIELD("input.disable_l3", disable_l3),
+         {"input.confirm", "PAD_FACE",
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index a5c43c0..09fa8d9 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -76,6 +76,7 @@ struct Settings {
+     // Audio
+     std::uint32_t volume{100u};        // percent
+     bool mute{};
++    bool menu_sounds{true};  // the menu's own clicks (ui/ui_sound.hpp)
+ 
+     // Controls
+     // The game's confirm button on the south face button rather than the
+diff --git a/host/ui/layer.cpp b/host/ui/layer.cpp
+index f3bd91f..e72fb6d 100644
+--- a/host/ui/layer.cpp
++++ b/host/ui/layer.cpp
+@@ -6,6 +6,8 @@
+ 
+ #include "ui/input_script.hpp"
+ #include "ui/widgets.hpp"
++#include "ui/ui_sound.hpp"
++#include "stb_image.h"
+ 
+ #include "fonts/game_font.hpp"
+ #include "gpu/vulkan_renderer.hpp"
+@@ -169,6 +171,9 @@ bool Layer::attach(gpu::VulkanRenderer &renderer) {
+     ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
+     load_fonts();
+     load_game_text_font();
++    // The menu sounds, when the data folder has them (sounds/navigate.wav and sounds/back.wav).
++    sound::load_folder(install::user_data_directory() / "sounds");
++    sound::set_enabled_source([] { return settings::current().menu_sounds; });
+     std::string error;
+     if (!renderer.initialize_ui(error)) {
+         std::cout << "[ui] cannot draw the interface (" << error << "); no menu\n";
+@@ -323,7 +328,9 @@ bool Layer::take_menu_toggle() {
+ 
+ bool Layer::take_back() {
+     resolve_escape();
+-    return std::exchange(back_, false);
++    const bool back = std::exchange(back_, false);
++    if (back) sound::play(sound::Cue::Back);  // leaving a screen, or closing the menu
++    return back;
+ }
+ 
+ std::optional<std::filesystem::path> Layer::take_dropped_file() { return std::exchange(dropped_, std::nullopt); }
+@@ -332,12 +339,33 @@ void Layer::apply_theme() {
+     const ImGuiIO &io = ImGui::GetIO();
+     // About 27 px on a Steam Deck's 800 lines, 18 px in the default 544-line
+     // window, growing with larger windows.
+-    const float size = std::clamp(std::round(io.DisplaySize.y * 0.034f), 16.0f, 72.0f);
++#if defined(__ANDROID__)
++    const float text_share = 0.034f;  // a phone's fingers need the larger rows
++#else
++    const float text_share = 0.026f;
++#endif
++    const float size = std::clamp(std::round(io.DisplaySize.y * text_share), 16.0f, 72.0f);
+     if (size == font_size_) return;
+     font_size_ = size;
+     ImGui::GetStyle() = make_style(scale(), font_size_);
+ }
+ 
++// The menu's pointing hand comes from the texture pack ("ui/handsmall.png"), which is open only some time after the interface starts:
++// asked for about once a second until it is found (at most 10 minutes), and then never again. Without it a triangle is drawn.
++static void load_pointer_image(gpu::VulkanRenderer &renderer) {
++    static bool done = false;
++    static unsigned calls = 0;
++    if (done || calls > 36000u || (++calls % 60u) != 1u) return;
++    const std::vector<std::uint8_t> png = renderer.texture_pack_file("ui/handsmall.png");
++    if (png.empty()) return;
++    int width = 0, height = 0, channels = 0;
++    stbi_uc *pixels = stbi_load_from_memory(png.data(), static_cast<int>(png.size()), &width, &height, &channels, 4);
++    if (pixels == nullptr) return;
++    set_pointer_image(pixels, static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
++    stbi_image_free(pixels);
++    done = true;
++}
++
+ void Layer::begin_frame() {
+     renderer_->begin_ui_frame();
+     ImGui_ImplSDL3_NewFrame();
+@@ -346,6 +374,7 @@ void Layer::begin_frame() {
+     if (!gamepad_armed_) gamepad_armed_ = !face_button_held();
+     if (gamepad_armed_) io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+     else io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
++    load_pointer_image(*renderer_);
+     apply_theme();
+     ImGui::NewFrame();
+     description_.clear();
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 7c176ed..a22de86 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -12,6 +12,7 @@
+ #include "ui/save_list_dialog.hpp"
+ #include "ui/save_screen.hpp"
+ #include "ui/texture_pack_screen.hpp"
++#include "ui/ui_sound.hpp"
+ #include "ui/text_input.hpp"
+ #include "ui/touch_overlay.hpp"
+ #include "ui/updater.hpp"
+@@ -931,12 +932,17 @@ void Menu::audio() {
+         sink.set_volume(gain(s));
+         settings::save();
+     }
++    if (toggle_row("Menu sounds", s.menu_sounds, {false, {}, "The clicks of this menu: moving, switching and leaving. The game's own sound is not affected."})) {
++        s.menu_sounds = !s.menu_sounds;
++        settings::save();
++    }
+     info_row("Device", device ? (paused_ ? "44100 Hz stereo, paused while this menu is open" : "44100 Hz stereo")
+                               : "None");
+     ImGui::Dummy({0.0f, font_gap()});
+     if (button_row("Restore audio defaults", {!device, {}, "Full volume, not muted."})) {
+         s.volume = settings::defaults().volume;
+         s.mute = settings::defaults().mute;
++        s.menu_sounds = settings::defaults().menu_sounds;
+         sink.set_volume(gain(s));
+         settings::save();
+     }
+@@ -2119,8 +2125,10 @@ void Menu::system() {
+         }
+     }
+     if (button_row("Quit game", {false, {}, std::string("Close ") + portablekit::game().project_name + ". Progress since your last save is lost."},
+-                   colors::kDanger))
++                   colors::kDanger)) {
++        sound::play(sound::Cue::Confirm);
+         confirm_ = Confirm::Quit;
++    }
+ 
+     for (void (*rows)() : system_rows()) rows();
+ 
+@@ -2143,8 +2151,17 @@ bool Menu::confirm_dialog() {
+     if (confirm_ != Confirm::None && !ImGui::IsPopupOpen("##confirm")) ImGui::OpenPopup("##confirm");
+     const ImGuiIO &io = ImGui::GetIO();
+     const float font = Layer::get().font_size();
+-    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+-    ImGui::SetNextWindowSize({std::min(io.DisplaySize.x * 0.9f, font * 26.0f), 0.0f}, ImGuiCond_Always);
++    // Beside the menu's column, in the space on the right where the descriptions go, when the menu has one; else in the middle.
++    float space_left = 0.0f, space_right = 0.0f;
++    if (game_menu_right_space(space_left, space_right)) {
++        const float width = std::min(space_right - space_left, font * 26.0f);
++        ImGui::SetNextWindowPos({space_left + (space_right - space_left - width) * 0.5f, font * 4.6f + io.DisplaySize.y * 0.03f},
++                                ImGuiCond_Always, {0.0f, 0.0f});
++        ImGui::SetNextWindowSize({width, 0.0f}, ImGuiCond_Always);
++    } else {
++        ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
++        ImGui::SetNextWindowSize({std::min(io.DisplaySize.x * 0.9f, font * 26.0f), 0.0f}, ImGuiCond_Always);
++    }
+     bool keep_open = true;
+     confirm_opened_ = false;
+     if (ImGui::BeginPopupModal("##confirm", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings)) {
+@@ -2446,6 +2463,7 @@ void note_menu_opened(bool paused) {
+ }
+ 
+ void note_menu_closed(bool quit) {
++    sound::play(sound::Cue::Back);
+     const double seconds = std::chrono::duration<double>(Clock::now() - menu_opened_at()).count();
+     char text[64];
+     std::snprintf(text, sizeof(text), "%.1f", seconds);
+diff --git a/host/ui/ui_sound.cpp b/host/ui/ui_sound.cpp
+new file mode 100644
+index 0000000..275de96
+--- /dev/null
++++ b/host/ui/ui_sound.cpp
+@@ -0,0 +1,85 @@
++#include "ui/ui_sound.hpp"
++
++#include <SDL3/SDL.h>
++
++#include <array>
++#include <cstdint>
++#include <iostream>
++#include <utility>
++#include <vector>
++
++namespace portablekit::ui::sound {
++namespace {
++
++struct Clip {
++    std::vector<std::uint8_t> data;
++    SDL_AudioSpec spec{};
++    SDL_AudioStream *stream = nullptr;  // opened on the first play, in the clip's own format
++    std::uint64_t last_played = 0;
++};
++
++std::array<Clip, 5> &clips() {
++    static std::array<Clip, 5> list;
++    return list;
++}
++
++bool (*g_enabled)() = nullptr;
++
++Clip &clip(Cue cue) { return clips()[static_cast<std::size_t>(cue)]; }
++
++} // namespace
++
++bool set(Cue cue, const std::filesystem::path &file) {
++    Clip &c = clip(cue);
++    if (c.stream != nullptr) {
++        SDL_DestroyAudioStream(c.stream);
++        c.stream = nullptr;
++    }
++    c.data.clear();
++    SDL_AudioSpec spec{};
++    std::uint8_t *buffer = nullptr;
++    std::uint32_t length = 0;
++    if (!SDL_LoadWAV(file.string().c_str(), &spec, &buffer, &length)) return false;
++    c.data.assign(buffer, buffer + length);
++    SDL_free(buffer);
++    c.spec = spec;
++    return !c.data.empty();
++}
++
++void load_folder(const std::filesystem::path &folder) {
++    std::error_code ec;
++    const std::filesystem::path navigate = folder / "navigate.wav", back = folder / "back.wav";
++    if (std::filesystem::exists(navigate, ec) && set(Cue::Navigate, navigate)) std::cout << "[ui] menu sound: " << navigate.string() << "\n";
++    if (std::filesystem::exists(back, ec) && set(Cue::Back, back)) std::cout << "[ui] menu sound: " << back.string() << "\n";
++    const std::filesystem::path confirm = folder / "confirm.wav";
++    if (std::filesystem::exists(confirm, ec) && set(Cue::Confirm, confirm)) std::cout << "[ui] menu sound: " << confirm.string() << std::endl;
++    const std::filesystem::path on = folder / "toggle_on.wav", off = folder / "toggle_off.wav";
++    if (std::filesystem::exists(on, ec) && set(Cue::ToggleOn, on)) std::cout << "[ui] menu sound: " << on.string() << "\n";
++    if (std::filesystem::exists(off, ec) && set(Cue::ToggleOff, off)) std::cout << "[ui] menu sound: " << off.string() << "\n";
++    if (clip(Cue::ToggleOff).data.empty() && !clip(Cue::Back).data.empty()) {  // no file of its own: the back sound
++        clip(Cue::ToggleOff).data = clip(Cue::Back).data;
++        clip(Cue::ToggleOff).spec = clip(Cue::Back).spec;
++    }
++}
++
++void set_enabled_source(bool (*enabled)()) { g_enabled = enabled; }
++
++void play(Cue cue) {
++    Clip &c = clip(cue);
++    if (c.data.empty() || (g_enabled != nullptr && !g_enabled())) return;
++    const std::uint64_t now = SDL_GetTicks();
++    if (now - c.last_played < 120u) return;
++    c.last_played = now;
++    if (c.stream == nullptr) {
++        c.stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &c.spec, nullptr, nullptr);
++        if (c.stream == nullptr) {
++            c.data.clear();  // no output: stay silent rather than try on every move
++            return;
++        }
++        SDL_ResumeAudioStreamDevice(c.stream);
++    }
++    SDL_ClearAudioStream(c.stream);
++    SDL_PutAudioStreamData(c.stream, c.data.data(), static_cast<int>(c.data.size()));
++}
++
++} // namespace portablekit::ui::sound
+diff --git a/host/ui/ui_sound.hpp b/host/ui/ui_sound.hpp
+new file mode 100644
+index 0000000..5dbe0f0
+--- /dev/null
++++ b/host/ui/ui_sound.hpp
+@@ -0,0 +1,21 @@
++#pragma once
++
++#include <filesystem>
++
++// The menu's own sounds: a short click when the cursor moves to another row, another when the menu is closed or a screen is left, and one each for a switch turned on and off.
++// Each is a WAV file kept in a folder beside the game's data (the port ships none: with no file, a cue is silent). They play on a stream
++// of their own on the default output, over the game's audio.
++namespace portablekit::ui::sound {
++
++enum class Cue { Navigate, Back, ToggleOn, ToggleOff, Confirm };
++
++// Reads `file` for `cue`; false when it cannot be read as a WAV (the cue stays silent).
++bool set(Cue cue, const std::filesystem::path &file);
++// Reads navigate.wav, back.wav, toggle_on.wav, toggle_off.wav and confirm.wav from `folder`, each if it is there (toggle_off falls back to back).
++// `enabled` (the settings' "menu sounds"), when given, is asked before every cue: false keeps them all silent.
++void set_enabled_source(bool (*enabled)());
++void load_folder(const std::filesystem::path &folder);
++// Plays the cue from its start. The same cue twice within 120 ms plays once, so one action asking from two places is heard once.
++void play(Cue cue);
++
++} // namespace portablekit::ui::sound
+diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
+index b59d864..77927f6 100644
+--- a/host/ui/widgets.cpp
++++ b/host/ui/widgets.cpp
+@@ -1,6 +1,7 @@
+ #include "ui/widgets.hpp"
+ 
+ #include "ui/layer.hpp"
++#include "ui/ui_sound.hpp"
+ 
+ #include "gpu/vulkan_renderer.hpp"
+ 
+@@ -58,6 +59,15 @@ void draw_triangle(ImDrawList *draw, ImVec2 center, float size, bool right, ImU3
+                                 {center.x - h * 0.8f, center.y}, color);
+ }
+ 
++// The pointing hand (set_pointer_image): its texture, and the part of it that is not transparent.
++// True while the game menu is drawn (begin_panel with the game behind it): its descriptions go on the right of the screen.
++bool game_menu = false;
++float game_menu_space_left = 0.0f, game_menu_space_right = 0.0f;
++double pointer_since = 0.0;  // when the focus last moved to another row: the hand's animation starts over from there
++ImTextureData *pointer_texture = nullptr;
++ImVec2 pointer_uv0{0, 0}, pointer_uv1{1, 1};
++float pointer_aspect = 1.0f;  // width over height of that part
++
+ struct Row {
+     ImVec2 min;
+     ImVec2 max;
+@@ -77,15 +87,47 @@ Row row(const char *label, const RowOptions &options, ImU32 color = colors::kTex
+     take_focus();
+     result.focused = ImGui::IsItemFocused();
+     result.hovered = ImGui::IsItemHovered();
++    if (result.focused) {
++        // The cursor moved to another row while one was focused a moment ago (not when a screen opens): the menu's click.
++        static ImGuiID last_focused = 0;
++        static int last_frame = -100;
++        const ImGuiID id = ImGui::GetItemID();
++        if (id != last_focused) pointer_since = ImGui::GetTime();
++        if (id != last_focused && ImGui::GetFrameCount() - last_frame <= 2) sound::play(sound::Cue::Navigate);
++        last_focused = id;
++        last_frame = ImGui::GetFrameCount();
++    }
+ 
+     ImDrawList *draw = ImGui::GetWindowDrawList();
+-    const float rounding = px(6.0f);
++    // A row has no box: a blue line under it. The focused row's is brighter and thicker, with the pointing hand in the margin on its left.
+     if (result.focused) {
+-        draw->AddRectFilled(result.min, result.max, colors::kRowFocus, rounding);
+-        draw->AddRectFilled(result.min, {result.min.x + px(4.0f), result.max.y}, colors::kAccent, rounding,
+-                            ImDrawFlags_RoundCornersLeft);
+-    } else if (result.hovered) {
+-        draw->AddRectFilled(result.min, result.max, colors::kRowHover, rounding);
++        // The focused row's background, a little darker; it starts at the line of the row above, across the gap between rows.
++        draw->AddRectFilled({result.min.x, result.min.y - ImGui::GetStyle().ItemSpacing.y}, result.max, IM_COL32(2, 8, 30, 120));
++        const float line = px(2.5f);
++        draw->AddRectFilledMultiColor({result.min.x, result.max.y - line}, result.max, colors::kAccent, IM_COL32(74, 170, 255, 90),
++                                      IM_COL32(74, 170, 255, 90), colors::kAccent);
++        const float mid = (result.min.y + result.max.y) * 0.5f, size = font() * 0.34f;
++        // Drawn on the foreground list: it lies outside the scrolling area, which would clip it away.
++        ImDrawList *front = ImGui::GetForegroundDrawList();
++        if (pointer_texture != nullptr) {
++            const float hand_height = font() * 1.3f, hand_width = hand_height * pointer_aspect;
++            // The hand points at the row: right and back, right and back (two beats), then a 2 second pause, over and over.
++            const double beat = 0.20, gap = 0.04, moving = 2.0 * beat, cycle = moving + 2.0;
++            const double into_cycle = std::fmod(ImGui::GetTime() - pointer_since, cycle);
++            const float shift = into_cycle < moving
++                                    ? static_cast<float>(std::sin(3.14159265358979 * std::fmod(into_cycle, beat) / beat)) * font() * 0.3f
++                                    : 0.0f;
++            front->AddImage(pointer_texture->GetTexRef(),
++                            {result.min.x - px(6.0f) - hand_width + shift, mid - hand_height * 0.5f + px(3.0f)},
++                            {result.min.x - px(6.0f) + shift, mid + hand_height * 0.5f + px(3.0f)}, pointer_uv0, pointer_uv1);
++        } else {
++            front->AddTriangleFilled({result.min.x - px(20.0f), mid - size}, {result.min.x - px(20.0f), mid + size},
++                                     {result.min.x - px(20.0f) + size * 1.6f, mid}, colors::kAccentBright);
++        }
++    } else {
++        const float line = px(1.5f);
++        draw->AddRectFilled({result.min.x, result.max.y - line}, result.max,
++                            result.hovered ? IM_COL32(100, 170, 255, 190) : IM_COL32(60, 130, 215, 120));
+     }
+     const float text_y = result.min.y + (height - font()) * 0.5f;
+     draw->AddText({result.min.x + px(16.0f), text_y}, options.disabled ? colors::kTextDisabled : color, label,
+@@ -209,6 +251,34 @@ const char *select_name() {
+ 
+ } // namespace
+ 
++bool game_menu_right_space(float &left, float &right) {
++    left = game_menu_space_left;
++    right = game_menu_space_right;
++    return game_menu && right > left;
++}
++
++void set_pointer_image(const std::uint8_t *rgba, std::uint32_t width, std::uint32_t height) {
++    if (pointer_texture != nullptr || rgba == nullptr || width == 0u || height == 0u) return;
++    // The part with any opacity: the image has a wide transparent border.
++    std::uint32_t x0 = width, y0 = height, x1 = 0, y1 = 0;
++    for (std::uint32_t y = 0; y < height; ++y)
++        for (std::uint32_t x = 0; x < width; ++x)
++            if (rgba[(static_cast<std::size_t>(y) * width + x) * 4u + 3u] > 8u) {
++                x0 = std::min(x0, x);
++                y0 = std::min(y0, y);
++                x1 = std::max(x1, x + 1u);
++                y1 = std::max(y1, y + 1u);
++            }
++    if (x1 <= x0 || y1 <= y0) return;
++    pointer_texture = IM_NEW(ImTextureData)();
++    pointer_texture->Create(ImTextureFormat_RGBA32, static_cast<int>(width), static_cast<int>(height));
++    std::memcpy(pointer_texture->Pixels, rgba, static_cast<std::size_t>(width) * height * 4u);
++    ImGui::RegisterUserTexture(pointer_texture);
++    pointer_uv0 = {static_cast<float>(x0) / static_cast<float>(width), static_cast<float>(y0) / static_cast<float>(height)};
++    pointer_uv1 = {static_cast<float>(x1) / static_cast<float>(width), static_cast<float>(y1) / static_cast<float>(height)};
++    pointer_aspect = static_cast<float>(x1 - x0) / static_cast<float>(y1 - y0);
++}
++
+ ImGuiStyle make_style(float scale, float font_size) {
+     ImGuiStyle style;
+     ImGui::StyleColorsDark(&style);
+@@ -221,9 +291,9 @@ ImGuiStyle make_style(float scale, float font_size) {
+     style.PopupBorderSize = 1.5f;
+     style.WindowPadding = {26.0f, 20.0f};
+     style.FramePadding = {12.0f, 7.0f};
+-    style.ItemSpacing = {10.0f, 4.0f};
+-    style.ScrollbarSize = 10.0f;
+-    style.ScrollbarRounding = 5.0f;
++    style.ItemSpacing = {10.0f, 8.0f};
++    style.ScrollbarSize = 5.0f;
++    style.ScrollbarRounding = 3.0f;
+     style.ScaleAllSizes(scale);
+     style.FontSizeBase = font_size;
+ 
+@@ -241,9 +311,9 @@ ImGuiStyle make_style(float scale, float font_size) {
+     c[ImGuiCol_FrameBgActive] = rgba(colors::kRowFocus);
+     c[ImGuiCol_TextSelectedBg] = rgba(IM_COL32(74, 170, 255, 110));
+     c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
+-    c[ImGuiCol_ScrollbarGrab] = rgba(IM_COL32(40, 100, 180, 160));
+-    c[ImGuiCol_ScrollbarGrabHovered] = rgba(IM_COL32(60, 130, 210, 200));
+-    c[ImGuiCol_ScrollbarGrabActive] = rgba(colors::kAccent);
++    c[ImGuiCol_ScrollbarGrab] = rgba(IM_COL32(110, 170, 255, 0));
++    c[ImGuiCol_ScrollbarGrabHovered] = rgba(IM_COL32(130, 190, 255, 0));
++    c[ImGuiCol_ScrollbarGrabActive] = rgba(IM_COL32(130, 190, 255, 0));
+     c[ImGuiCol_Separator] = rgba(IM_COL32(40, 100, 180, 120));
+     // Rows draw their own focus; ImGui's rectangle would double it.
+     c[ImGuiCol_NavCursor] = ImVec4(0, 0, 0, 0);
+@@ -252,18 +322,41 @@ ImGuiStyle make_style(float scale, float font_size) {
+ 
+ void begin_panel(const char *id, const std::string &title, const std::string &subtitle, bool dim_game) {
+     const ImGuiIO &io = ImGui::GetIO();
+-    if (dim_game) ImGui::GetBackgroundDrawList()->AddRectFilled({0, 0}, io.DisplaySize, colors::kBackdrop);
+     const float margin = std::round(std::min(io.DisplaySize.x, io.DisplaySize.y) * 0.03f);
+-    const ImVec2 size{std::min(io.DisplaySize.x - 2.0f * margin, font() * 46.0f),
+-                      std::min(io.DisplaySize.y - 2.0f * margin, font() * 31.0f)};
+-    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
+-    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+-    ImGui::Begin(id, nullptr,
+-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+-
++    game_menu = dim_game;
++    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
++                             ImGuiWindowFlags_NoBringToFrontOnFocus;
++    if (dim_game) {
++        // A screen of the game's own menu: a column down the left edge, the game showing to its right through a scrim that fades out.
++        ImDrawList *back = ImGui::GetBackgroundDrawList();
++        back->AddRectFilled({0, 0}, io.DisplaySize, colors::kBackdrop);
++        const float column = std::clamp(io.DisplaySize.x * 0.40f, font() * 24.0f, io.DisplaySize.x - 2.0f * margin);
++        const float edge = std::min(io.DisplaySize.x, column + margin * 2.0f + font() * 6.0f);
++        back->AddRectFilledMultiColor({0, 0}, {edge, io.DisplaySize.y}, colors::kScrim, IM_COL32(4, 10, 32, 0),
++                                      IM_COL32(4, 10, 32, 0), colors::kScrim);
++        ImGui::SetNextWindowPos({margin + font() * 2.6f, margin}, ImGuiCond_Always);  // room on its left for the hand
++        // the column stops above the footer band, which has the whole bottom of the screen to itself (begin_footer)
++        ImGui::SetNextWindowSize({column, io.DisplaySize.y - margin - font() * 3.4f}, ImGuiCond_Always);
++        game_menu_space_left = margin + font() * 2.6f + column + margin * 2.0f;
++        game_menu_space_right = io.DisplaySize.x - margin;
++        flags |= ImGuiWindowFlags_NoBackground;
++        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
++    } else {
++        const ImVec2 size{std::min(io.DisplaySize.x - 2.0f * margin, font() * 46.0f),
++                          std::min(io.DisplaySize.y - 2.0f * margin, font() * 31.0f)};
++        ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f}, ImGuiCond_Always, {0.5f, 0.5f});
++        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
++    }
++    ImGui::Begin(id, nullptr, flags);
++    if (dim_game) ImGui::PopStyleVar();
+     ImDrawList *draw = ImGui::GetWindowDrawList();
+-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.45f);
++    // The title is set smaller when it would run into the subtitle (a long game name in a narrow column).
++    float title_size = ImGui::GetStyle().FontSizeBase * 1.45f;
++    const float title_room = ImGui::GetContentRegionAvail().x - (subtitle.empty() ? 0.0f : ImGui::CalcTextSize(subtitle.c_str()).x + px(24.0f));
++    while (title_size > ImGui::GetStyle().FontSizeBase * 0.95f &&
++           ImGui::GetFont()->CalcTextSizeA(title_size, FLT_MAX, 0.0f, title.c_str()).x > title_room)
++        title_size -= 1.0f;
++    ImGui::PushFont(nullptr, title_size);
+     const ImVec2 title_at = ImGui::GetCursorScreenPos();
+     ImGui::PushStyleColor(ImGuiCol_Text, colors::kAccentBright);
+     ImGui::TextUnformatted(title.c_str());
+@@ -284,7 +377,7 @@ void begin_panel(const char *id, const std::string &title, const std::string &su
+ }
+ 
+ void begin_content() {
+-    const float footer = std::round(font() * 4.3f);
++    const float footer = std::round(font() * (game_menu ? 1.0f : 4.3f));
+     const float content = std::max(font() * 3.0f, ImGui::GetContentRegionAvail().y - footer);
+     ImGui::BeginChild("content", {0.0f, content}, ImGuiChildFlags_NavFlattened);
+ }
+@@ -292,7 +385,16 @@ void begin_content() {
+ void touch_scroll() {
+     ImGuiIO &io = ImGui::GetIO();
+     if (io.MouseSource != ImGuiMouseSource_TouchScreen) return;
+-    if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
++    // In the game menu the right of the screen (beside the column, where the description is) scrolls the list too: a drag that started
++    // there, with a thumb that has no row under it.
++    bool in_free_space = false;
++    if (game_menu) {
++        ImGuiWindow *window = ImGui::GetCurrentWindow();
++        const ImGuiWindow *column = window->ParentWindow != nullptr ? window->ParentWindow : window;
++        in_free_space = io.MouseClickedPos[0].x > column->Rect().Max.x;
++    }
++    if (!in_free_space &&
++        !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+         return;
+     if (!ImGui::IsMouseDragging(ImGuiMouseButton_Left, font() * 0.4f)) return;
+     ImGui::SetScrollY(ImGui::GetScrollY() - io.MouseDelta.y);
+@@ -303,6 +405,22 @@ void touch_scroll() {
+ 
+ void begin_footer() {
+     touch_scroll();
++    // The scrollbar's thumb, strongest in the middle and fading out at both ends. ImGui's own thumb is made invisible (make_style): it
++    // only takes the drag.
++    if (ImGui::GetScrollMaxY() > 0.0f) {
++        ImGuiWindow *window = ImGui::GetCurrentWindow();
++        const float visible = window->InnerRect.GetHeight();
++        const float total = visible + ImGui::GetScrollMaxY();
++        const float thumb = std::max(font() * 2.0f, visible * visible / total);
++        const float top = window->InnerRect.Min.y + (visible - thumb) * (ImGui::GetScrollY() / ImGui::GetScrollMaxY());
++        const float x1 = window->Pos.x + window->Size.x - px(1.0f), x0 = x1 - ImGui::GetStyle().ScrollbarSize;
++        const float mid = top + thumb * 0.5f;
++        const ImU32 strong = IM_COL32(110, 175, 255, 130), none = IM_COL32(110, 175, 255, 0);
++        window->DrawList->PushClipRect(window->Pos, {window->Pos.x + window->Size.x, window->Pos.y + window->Size.y}, false);
++        window->DrawList->AddRectFilledMultiColor({x0, top}, {x1, mid}, none, none, strong, strong);
++        window->DrawList->AddRectFilledMultiColor({x0, mid}, {x1, top + thumb}, strong, strong, none, none);
++        window->DrawList->PopClipRect();
++    }
+     ImGui::EndChild();
+     ImDrawList *draw = ImGui::GetWindowDrawList();
+     const ImVec2 line = ImGui::GetCursorScreenPos();
+@@ -310,8 +428,23 @@ void begin_footer() {
+     draw->AddLine({line.x, line.y + px(4.0f)}, {line.x + width, line.y + px(4.0f)}, IM_COL32(40, 100, 180, 90),
+                   px(1.0f));
+     ImGui::Dummy({0.0f, px(10.0f)});
+-    // Two lines for the description, whatever it holds, so the hints stay put.
+-    const float description_height = font() * 2.4f;
++    // Two lines for the description, whatever it holds, so the hints stay put. In the game menu the description is on the right of the
++    // screen instead, in a box of its own, and the column keeps only a short gap.
++    if (game_menu) {
++        const ImGuiIO &io = ImGui::GetIO();
++        const std::string &text = Layer::get().description();
++        const float margin = std::round(std::min(io.DisplaySize.x, io.DisplaySize.y) * 0.03f);
++        const float left = ImGui::GetWindowPos().x + ImGui::GetWindowSize().x + margin * 2.0f;
++        const float box_width = std::min(io.DisplaySize.x - left - margin, font() * 24.0f);
++        const bool window_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);  // a confirmation uses this space
++        if (!window_open && !text.empty() && box_width > font() * 8.0f) {
++            ImDrawList *front = ImGui::GetForegroundDrawList();
++            const float text_size = ImGui::GetStyle().FontSizeBase * 0.95f;
++            const ImVec2 at{left, ImGui::GetWindowPos().y + font() * 4.6f};
++            front->AddText(ImGui::GetFont(), text_size, at, IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, box_width);
++        }
++    }
++    const float description_height = game_menu ? font() * 0.6f : font() * 2.4f;
+     const ImVec2 at = ImGui::GetCursorScreenPos();
+     // A description that would wrap past its two lines (a narrow or a very
+     // wide window) is set smaller rather than run into the hints below.
+@@ -321,17 +454,40 @@ void begin_footer() {
+     while (size > smallest &&
+            ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, width, description.c_str()).y > description_height)
+         size -= 1.0f;
+-    ImGui::PushFont(nullptr, size);
+-    ImGui::PushStyleColor(ImGuiCol_Text, colors::kTextDim);
+-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+-    ImGui::TextUnformatted(description.c_str());
+-    ImGui::PopTextWrapPos();
+-    ImGui::PopStyleColor();
+-    ImGui::PopFont();
++    if (!game_menu) {
++        ImGui::PushFont(nullptr, size);
++        ImGui::PushStyleColor(ImGuiCol_Text, colors::kTextDim);
++        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
++        ImGui::TextUnformatted(description.c_str());
++        ImGui::PopTextWrapPos();
++        ImGui::PopStyleColor();
++        ImGui::PopFont();
++    }
+     ImGui::SetCursorScreenPos({at.x, at.y + description_height});
++    if (game_menu) {
++        // The button hints get a footer of their own across the whole bottom of the screen, not the column's width: the column's window
++        // ends here and a full-width one begins, which end_panel() then ends. ImGui wants an item after the cursor was moved before a window
++        // ends (SetCursorScreenPos above), or it reports an error: a Dummy of no size is that item.
++        ImGui::Dummy({0.0f, 0.0f});
++        ImGui::End();
++        const ImGuiIO &io = ImGui::GetIO();
++        const float margin = std::round(std::min(io.DisplaySize.x, io.DisplaySize.y) * 0.03f);
++        const float band = font() * 3.4f;
++        ImGui::GetBackgroundDrawList()->AddRectFilledMultiColor({0.0f, io.DisplaySize.y - band * 1.4f}, io.DisplaySize, IM_COL32(3, 10, 36, 0),
++                                                               IM_COL32(3, 10, 36, 0), IM_COL32(3, 10, 36, 210), IM_COL32(3, 10, 36, 210));
++        ImGui::SetNextWindowPos({0.0f, io.DisplaySize.y - band}, ImGuiCond_Always);
++        ImGui::SetNextWindowSize({io.DisplaySize.x, band}, ImGuiCond_Always);
++        ImGui::Begin("##footer", nullptr,
++                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
++                         ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav);
++        ImGui::SetCursorScreenPos({margin + font() * 2.6f, io.DisplaySize.y - band + font() * 1.1f});
++    }
+ }
+ 
+-void end_panel() { ImGui::End(); }
++void end_panel() {
++    if (game_menu) ImGui::Dummy({0.0f, 0.0f});  // after the footer's cursor was placed (begin_footer), as ImGui requires
++    ImGui::End();
++}
+ 
+ bool tab_bar(const char *const *labels, int count, int &selected) {
+     const int before = selected;
+@@ -341,42 +497,53 @@ bool tab_bar(const char *const *labels, int count, int &selected) {
+     if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || (!typing && ImGui::IsKeyPressed(ImGuiKey_W, false)))
+         selected = (selected + 1) % count;
+ 
++    // A band across the column with the current section's name, a dot for each section and the switch buttons at its right end; a
++    // click on its left half goes back one section, on its right half forward, on a dot straight to that section.
+     ImDrawList *draw = ImGui::GetWindowDrawList();
+     const bool pad = Layer::get().input_device() == InputDevice::Gamepad;
+     const float height = font() * 1.9f;
+     const ImVec2 start = ImGui::GetCursorScreenPos();
+     const float width = ImGui::GetContentRegionAvail().x;
+-    // The switch buttons at both ends.
+-    const float cap_left = draw_cap(draw, {start.x, start.y + (height - font()) * 0.5f},
+-                                    pad ? shoulder_name(false) : "Q", false);
+-    const float cap_right_width = ImGui::CalcTextSize(pad ? shoulder_name(true) : "W").x + font() * 0.7f;
+-    draw_cap(draw, {start.x + width - std::max(font() * 1.15f, cap_right_width), start.y + (height - font()) * 0.5f},
+-             pad ? shoulder_name(true) : "W", false);
+-
+-    const float inner_left = start.x + cap_left + px(14.0f);
+-    const float inner_width = width - cap_left - std::max(font() * 1.15f, cap_right_width) - px(28.0f);
+-    const float tab_width = inner_width / static_cast<float>(count);
+-    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
++    const ImVec2 end{start.x + width, start.y + height};
++    const float mid_y = start.y + height * 0.5f;
++    draw->AddRectFilledMultiColor(start, end, IM_COL32(40, 100, 200, 235), IM_COL32(40, 100, 200, 50), IM_COL32(40, 100, 200, 50),
++                                  IM_COL32(40, 100, 200, 235));
++    draw->AddRect(start, end, IM_COL32(120, 180, 255, 90), 0.0f, 0, px(1.0f));
++    draw_triangle(draw, {start.x + px(20.0f), mid_y}, font() * 0.55f, true, colors::kAccentBright);
++    draw->AddText({start.x + px(38.0f), start.y + (height - font()) * 0.5f}, colors::kText, labels[selected]);
++
++    const char *left_name = pad ? shoulder_name(false) : "Q";
++    const char *right_name = pad ? shoulder_name(true) : "W";
++    const float right_cap = draw_cap(nullptr, {0, 0}, right_name, false);
++    const float left_cap = draw_cap(nullptr, {0, 0}, left_name, false);
++    const float gap = font() * 0.75f;
++    const float right_x = end.x - px(12.0f) - right_cap;
++    const float dots_right = right_x - px(12.0f);
++    const float dots_left = dots_right - gap * static_cast<float>(count);
++    draw_cap(draw, {right_x, start.y + (height - font()) * 0.5f}, right_name, false, colors::kAccentBright, colors::kText);
++    draw_cap(draw, {dots_left - px(12.0f) - left_cap, start.y + (height - font()) * 0.5f}, left_name, false, colors::kAccentBright,
++             colors::kText);
+     for (int i = 0; i < count; ++i) {
+-        const ImVec2 min{inner_left + tab_width * static_cast<float>(i), start.y};
+-        const ImVec2 max{min.x + tab_width, start.y + height};
+-        ImGui::SetCursorScreenPos(min);
+-        ImGui::PushID(i);
+-        if (ImGui::InvisibleButton("tab", {tab_width, height})) selected = i;
+-        const bool hovered = ImGui::IsItemHovered();
+-        ImGui::PopID();
+-        const bool active = i == selected;
+-        if (hovered && !active) draw->AddRectFilled(min, max, colors::kRowHover, px(6.0f));
+-        const ImVec2 size = ImGui::CalcTextSize(labels[i]);
+-        draw->AddText({min.x + (tab_width - size.x) * 0.5f, min.y + (height - size.y) * 0.5f},
+-                      active ? colors::kAccentBright : colors::kTextDim, labels[i]);
+-        if (active)
+-            draw->AddRectFilled({min.x + tab_width * 0.18f, max.y - px(3.0f)}, {max.x - tab_width * 0.18f, max.y},
+-                                colors::kAccent, px(2.0f));
++        const ImVec2 centre{dots_left + gap * (static_cast<float>(i) + 0.5f), mid_y};
++        if (i == selected) draw->AddCircleFilled(centre, font() * 0.2f, colors::kAccentBright);
++        else draw->AddCircle(centre, font() * 0.14f, IM_COL32(190, 226, 255, 170), 0, px(1.5f));
++    }
++    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
++    if (ImGui::InvisibleButton("sections", {width, height})) {
++        const float mouse_x = ImGui::GetIO().MousePos.x;
++        const float label_end = dots_left - px(12.0f) - left_cap;
++        if (mouse_x >= dots_left && mouse_x < dots_right) {
++            selected = std::clamp(static_cast<int>((mouse_x - dots_left) / gap), 0, count - 1);
++        } else if (mouse_x < label_end * 0.5f + start.x * 0.5f) {
++            selected = (selected + count - 1) % count;
++        } else {
++            selected = (selected + 1) % count;
++        }
+     }
+     ImGui::PopItemFlag();
+-    ImGui::SetCursorScreenPos({start.x, start.y + height + px(8.0f)});
++    ImGui::SetCursorScreenPos({start.x, start.y + height + px(12.0f)});
+     ImGui::Dummy({0.0f, 0.0f});
++    if (selected != before) sound::play(sound::Cue::Navigate);  // as the hand moving
+     return selected != before;
+ }
+ 
+@@ -419,6 +586,7 @@ bool toggle_row(const char *label, bool value, const RowOptions &options) {
+     const ImVec2 max{r.max.x - px(16.0f), mid_y + height * 0.5f};
+     const ImVec2 min{max.x - width, mid_y - height * 0.5f};
+     const bool on = toggled ? !value : value;
++    if (toggled) sound::play(on ? sound::Cue::ToggleOn : sound::Cue::ToggleOff);
+     const ImU32 track = options.disabled ? colors::kTrack : on ? colors::kAccent : colors::kTrack;
+     draw->AddRectFilled(min, max, track, height * 0.5f);
+     const float knob = height * 0.5f - px(3.0f);
+diff --git a/host/ui/widgets.hpp b/host/ui/widgets.hpp
+index 6a16f80..27f9eb3 100644
+--- a/host/ui/widgets.hpp
++++ b/host/ui/widgets.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include "imgui.h"
+ 
++#include <cstdint>
+ #include <initializer_list>
+ #include <string>
+ 
+@@ -13,9 +14,12 @@ namespace portablekit::ui {
+ // Colours from the project's logo: dark brown, bronze and gold.
+ namespace colors {
+ inline constexpr ImU32 kBackdrop = IM_COL32(3, 8, 24, 120);
++inline constexpr ImU32 kScrim = IM_COL32(3, 10, 36, 225);  // the left edge of the game menu, fading out to the right
+ inline constexpr ImU32 kPanel = IM_COL32(8, 22, 66, 205);
+ inline constexpr ImU32 kPanelEdge = IM_COL32(70, 140, 225, 255);
+ inline constexpr ImU32 kRow = IM_COL32(190, 220, 255, 10);
++inline constexpr ImU32 kRowBox = IM_COL32(6, 18, 56, 150);    // a row's box, and its outline
++inline constexpr ImU32 kRowEdge = IM_COL32(50, 110, 190, 150);
+ inline constexpr ImU32 kRowHover = IM_COL32(110, 170, 255, 34);
+ inline constexpr ImU32 kRowFocus = IM_COL32(60, 130, 230, 92);
+ inline constexpr ImU32 kAccent = IM_COL32(74, 170, 255, 255);
+@@ -48,6 +52,14 @@ inline constexpr ImU32 kSelectEdge = IM_COL32(255, 255, 255, 150);
+ 
+ ImGuiStyle make_style(float scale, float font_size);
+ 
++// While the game menu is drawn (a column on the left, begin_panel with the game behind it): the part of the screen to its right, from
++// `left` to `right` in pixels, where its descriptions and its confirmation windows go. False when there is no such column.
++[[nodiscard]] bool game_menu_right_space(float &left, float &right);
++
++// The pointing hand drawn in the margin left of the focused row (the game's own, from its texture pack): RGBA8 pixels, rows packed.
++// The transparent border is cropped away. Until this is called (or when the pack has no hand) a small triangle is drawn instead.
++void set_pointer_image(const std::uint8_t *rgba, std::uint32_t width, std::uint32_t height);
++
+ // The panel every screen sits in, centred in the window: title and optional
+ // subtitle, then fixed parts such as tabs, then the scrolling content from
+ // begin_content(), then a footer with the focused row's description and the
+-- 
+2.54.0.windows.1
+
