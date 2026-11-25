@@ -1,0 +1,243 @@
+From fc4f4ff682086e0f9fb228b47eddb4ae76c160df Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Wed, 25 Nov 2026 21:13:38 +0100
+Subject: [PATCH] Linux updater: the install is safe to cut short, and the game
+ finishes one that was
+
+The script that puts an unpacked update over the game's folder deleted overlays first and copied the rest in place. When it was ended
+midway (Steam's Gaming Mode ends everything a game started once the game closes) the folder was left without overlays or with a mix of
+old and new files, and update_staging stayed behind.
+
+The install is now a script of its own (install.sh, kept in update_staging with a .unpacked marker once the unpack is whole): files are put
+in place by rename, overlays and lib are swapped as a whole with the old one kept until the new one is in, and it can be run again over a
+half-done install. If the helper is ended, the game runs it at its next start (updater::finish_pending_update, called first thing in
+main) and starts again to run the new files. Not on macOS (a whole .app is swapped there).
+---
+ host/main.cpp       |  11 +++++
+ host/ui/updater.cpp | 107 ++++++++++++++++++++++++++++++++++++++------
+ host/ui/updater.hpp |   6 +++
+ 3 files changed, 111 insertions(+), 13 deletions(-)
+
+diff --git a/host/main.cpp b/host/main.cpp
+index e06627e..bc57c58 100644
+--- a/host/main.cpp
++++ b/host/main.cpp
+@@ -18,6 +18,7 @@
+ #include "gpu/ge_state.hpp"
+ #include "kernel/iso_image.hpp"
+ #include "kernel/kernel.hpp"
++#include "ui/updater.hpp"
+ #include "save_data/param_sfo.hpp"
+ 
+ #include "psprecomp/common.hpp"
+@@ -346,6 +347,16 @@ int main(int argc, char **argv) {
+ #endif
+ #if defined(__linux__) && !defined(PORTABLEKIT_ANDROID_APP)
+     ensure_main_stack(argv);
++    // An update that was unpacked but never put in place (its script was ended first, by Steam's Gaming Mode for one) is finished before
++    // anything is loaded, and the program starts again to run the new files.
++    if (portablekit::ui::updater::finish_pending_update()) {
++        const std::filesystem::path self = portablekit::executable_path();
++        if (!self.empty()) {
++            execv(self.c_str(), argv);
++            std::cerr << "cannot start again after finishing the update; start the game once more\n";
++            return 1;
++        }
++    }
+ #endif
+     // A build compiled for AVX ends with no message at all on a CPU without it: say so first.
+ #if defined(__AVX2__) || defined(__AVX__)
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 5d370c2..350f195 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -678,8 +678,8 @@ std::filesystem::path g_progress_path;
+ 
+ const char *kHelperScript = R"SH(#!/bin/sh
+ # Unpacks the update while the game runs, then installs it once the game has closed, and starts the game again.
+-# $1 game's process id, $2 the .tar.gz, $3 the game's folder, $4 the game's executable, $5 progress file
+-PID="$1"; PKG="$2"; TARGET="$3"; EXE="$4"; PROGRESS="$5"
++# $1 game's process id, $2 the .tar.gz, $3 the game's folder, $4 the game's executable, $5 progress file, $6 the install script
++PID="$1"; PKG="$2"; TARGET="$3"; EXE="$4"; PROGRESS="$5"; INSTALLER="$6"
+ LOG="${TMPDIR:-/tmp}/d012_update.log"
+ STAGE="$TARGET/update_staging"
+ # Run from inside a macOS .app (X.app, Contents, MacOS, the executable): the whole .app is replaced, never written into, so the unpacking
+@@ -705,6 +705,13 @@ tar -xzvf "$PKG" -C "$STAGE" 2>&1 | while IFS= read -r line; do
+   [ $((COUNT % 5)) -eq 0 ] && report "$COUNT/$TOTAL"
+ done
+ [ -f "$STAGE/${PREFIX}$NAME" ] || fail "the update could not be unpacked"
++# From here update_staging holds a whole unpack, marked as such and with its install script beside it. If this script is ended before the
++# install is finished (Steam's Gaming Mode ends everything the game started once the game closes), the game itself finishes the install at its
++# next start (updater::finish_pending_update), so a cut-short update never leaves the game folder half replaced for good.
++if [ -z "$APPDIR" ]; then
++  cp "$INSTALLER" "$STAGE/install.sh" 2>>"$LOG" || fail "the install script could not be kept"
++  echo "$PREFIX" > "$STAGE/.unpacked"
++fi
+ report "unpacked"
+ 
+ # Unpacked while the game ran. Once it has closed, the new files go over the game's own.
+@@ -726,17 +733,53 @@ if [ -n "$APPDIR" ]; then
+   nohup open "$APPDIR" >/dev/null 2>&1 &
+   exit 0
+ fi
++# Put in place by the install script, which can also be run again by the game if this is cut short (see above).
++sh "$STAGE/install.sh" "$TARGET" "$EXE" "$PREFIX" "$PKG" "$LOG" >> "$LOG" 2>&1 || echo "the install did not finish: the game finishes it at its next start" >> "$LOG"
++cd "$TARGET" || exit 1
++# run.sh sets the library and Vulkan paths; without it the executable is started as it is
++if [ -x ./run.sh ]; then nohup ./run.sh >/dev/null 2>&1 & else nohup "$EXE" >/dev/null 2>&1 & fi
++)SH";
++
++// Puts an unpacked update (update_staging) over the game's own files. The helper runs it once the game has closed; the game runs it at its
++// start when a helper was ended before it did. It can be run again over a half-done install, and it never writes into a file in use:
++// files are put in place by rename, and the folders that must match the new files exactly (overlays, lib) are swapped as a whole, the old
++// one kept until the new one is in place.
++// $1 the game's folder, $2 its executable, $3 the package's folder prefix, $4 the downloaded package, $5 the log
++const char *kInstallScript = R"SH(#!/bin/sh
++TARGET="$1"; EXE="$2"; PREFIX="$3"; PKG="$4"; LOG="$5"
++STAGE="$TARGET/update_staging"
++[ -f "$STAGE/.unpacked" ] || exit 1
++LOCK="$STAGE/.lock"
++if ! mkdir "$LOCK" 2>/dev/null; then
++  OLD="$(cat "$LOCK/pid" 2>/dev/null)"
++  if [ -n "$OLD" ] && kill -0 "$OLD" 2>/dev/null; then exit 2; fi
++  rm -rf "$LOCK"; mkdir "$LOCK" || exit 1
++fi
++echo "$$" > "$LOCK/pid"
+ SRC="$STAGE/${PREFIX%/}"
+ [ -n "$PREFIX" ] || SRC="$STAGE"
+-# The overlays are replaced as a whole: a library of an older version left beside the new ones would be loaded with them.
+-[ -d "$SRC/overlays" ] && rm -rf "$TARGET/overlays"
++swap_dir() {
++  name="$1"
++  rm -rf "$TARGET/$name.old"
++  if [ -e "$TARGET/$name" ]; then mv "$TARGET/$name" "$TARGET/$name.old" || return 1; fi
++  if mv "$SRC/$name" "$TARGET/$name"; then rm -rf "$TARGET/$name.old"; return 0; fi
++  rm -rf "$TARGET/$name"
++  if [ -e "$TARGET/$name.old" ]; then mv "$TARGET/$name.old" "$TARGET/$name"; fi
++  return 1
++}
+ (
+   cd "$SRC" || exit 1
+   # everything except the player's own folders
+   for item in * .[!.]*; do
+-    [ -e "$item" ] || continue
++    [ -e "$item" ] || [ -L "$item" ] || continue
+     case "$item" in game|data|update_staging) continue ;; esac
+-    cp -Rp "$item" "$TARGET/" || exit 1
++    if [ -d "$item" ] && { [ "$item" = overlays ] || [ "$item" = lib ]; }; then
++      swap_dir "$item" || exit 1
++    elif [ -d "$item" ]; then
++      cp -Rp "$item" "$TARGET/" || exit 1
++    else
++      cp -pP "$item" "$TARGET/$item.d012new" && mv -f "$TARGET/$item.d012new" "$TARGET/$item" || exit 1
++    fi
+   done
+   # data/fonts: replaced. data/textures: only pictures that are new; textures.ini is always replaced.
+   if [ -d data/fonts ]; then mkdir -p "$TARGET/data/fonts" && cp -Rp data/fonts/. "$TARGET/data/fonts/"; fi
+@@ -747,14 +790,12 @@ SRC="$STAGE/${PREFIX%/}"
+       fi
+     done
+   fi
+-) >> "$LOG" 2>&1 || printf 'copy failed\n' >> "$LOG"
++) >> "$LOG" 2>&1 || { echo "copy failed: the update stays in update_staging and is finished at the game's next start" >> "$LOG"; rm -rf "$LOCK"; exit 1; }
+ chmod +x "$EXE" "$TARGET/run.sh" 2>/dev/null
+ rm -rf "$STAGE"
+ case "$PKG" in "${TMPDIR:-/tmp}/"?*) rm -f "$PKG" ;; esac
+-printf 'installed\n' >> "$LOG"
+-cd "$TARGET" || exit 1
+-# run.sh sets the library and Vulkan paths; without it the executable is started as it is
+-if [ -x ./run.sh ]; then nohup ./run.sh >/dev/null 2>&1 & else nohup "$EXE" >/dev/null 2>&1 & fi
++echo "installed" >> "$LOG"
++exit 0
+ )SH";
+ 
+ std::string read_text(const std::filesystem::path &path) {
+@@ -780,13 +821,23 @@ bool start_helper(const std::filesystem::path &package, std::string &error) {
+             return false;
+         }
+     }
++    const std::filesystem::path installer = temp / "d012_install.sh";
++    {
++        std::ofstream out(installer, std::ios::trunc);
++        out << kInstallScript;
++        if (!out) {
++            error = "the installer script could not be written";
++            return false;
++        }
++    }
+     const std::filesystem::path exe = portablekit::executable_path();
+     if (exe.empty()) {
+         error = "the game's own path is not known";
+         return false;
+     }
+     const std::string script_text = script.string(), package_text = package.string(), target = exe.parent_path().string(),
+-                      exe_text = exe.string(), progress = g_progress_path.string(), pid_text = std::to_string(getpid());
++                      exe_text = exe.string(), progress = g_progress_path.string(), pid_text = std::to_string(getpid()),
++                      installer_text = installer.string();
+     const pid_t pid = fork();
+     if (pid < 0) {
+         error = "cannot start the installer";
+@@ -801,7 +852,7 @@ bool start_helper(const std::filesystem::path &package, std::string &error) {
+             dup2(null, STDERR_FILENO);
+         }
+         execl("/bin/sh", "sh", script_text.c_str(), pid_text.c_str(), package_text.c_str(), target.c_str(), exe_text.c_str(),
+-              progress.c_str(), static_cast<char *>(nullptr));
++              progress.c_str(), installer_text.c_str(), static_cast<char *>(nullptr));
+         _exit(127);
+     }
+     g_helper = pid;
+@@ -963,4 +1014,34 @@ bool launch_installer() {
+ #endif
+ }
+ 
++bool finish_pending_update() {
++#if defined(PK_UPDATER) && !defined(_WIN32) && defined(__linux__)
++    std::error_code ec;
++    const std::filesystem::path exe = portablekit::executable_path();
++    if (exe.empty()) return false;
++    const std::filesystem::path target = exe.parent_path(), stage = target / "update_staging";
++    if (!std::filesystem::exists(stage / ".unpacked", ec) || !std::filesystem::exists(stage / "install.sh", ec)) return false;
++    std::string prefix;
++    {
++        std::ifstream in(stage / ".unpacked");
++        std::getline(in, prefix);
++    }
++    std::cout << "[updater] an update was left unfinished in " << stage.string() << ": finishing it" << std::endl;
++    const std::string script = (stage / "install.sh").string(), target_text = target.string(), exe_text = exe.string(),
++                      log = (std::filesystem::temp_directory_path(ec) / "d012_update.log").string();
++    const pid_t pid = fork();
++    if (pid < 0) return false;
++    if (pid == 0) {
++        execl("/bin/sh", "sh", script.c_str(), target_text.c_str(), exe_text.c_str(), prefix.c_str(), "", log.c_str(),
++              static_cast<char *>(nullptr));
++        _exit(127);
++    }
++    int wait_status = 0;
++    if (waitpid(pid, &wait_status, 0) != pid) return false;
++    return WIFEXITED(wait_status) && WEXITSTATUS(wait_status) == 0;
++#else
++    return false;
++#endif
++}
++
+ } // namespace portablekit::ui::updater
+diff --git a/host/ui/updater.hpp b/host/ui/updater.hpp
+index b5534c1..5421248 100644
+--- a/host/ui/updater.hpp
++++ b/host/ui/updater.hpp
+@@ -32,6 +32,12 @@ void start_download();
+ // quits straight after. False when there is nothing ready.
+ bool launch_installer();
+ 
++// Linux: finishes an update that was unpacked into update_staging beside the game but never put in place, because the script that does
++// it was ended first (Steam's Gaming Mode ends everything a game started once it closes). Call it first thing at start. True when it put
++// an update in place: the program's own files changed, so the caller starts it again (execv). False when there is nothing to finish, on
++// other systems, or when finishing failed (the game then starts as it is).
++[[nodiscard]] bool finish_pending_update();
++
+ [[nodiscard]] std::string local_version();
+ 
+ // A file of the latest release: where to download it, how long it is and its "updated_at" stamp (changes when the file is replaced).
+-- 
+2.54.0.windows.1
+

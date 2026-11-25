@@ -1,0 +1,309 @@
+From 7eb3359b10a63bf01a45bfdd4f6040d73928acc7 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Wed, 25 Nov 2026 21:22:38 +0100
+Subject: [PATCH] Texture quality: Off, Low, Medium and High replace the
+ Quality preset
+
+The menu's Quality row set the resolution, the HD textures and the HD text together. It is gone: Resolution and the HD text have rows of
+their own, and "Texture quality" sets how big the HD pack's images are, against the game's own textures (1x): Off draws the game's own
+textures, Low the HD ones at 1x, Medium at 2x, High as the pack stores them.
+
+It is done in the game, with no extra files: a bundle image (BC7, with its smaller sizes stored in it) starts at the smallest stored size
+that is still as big as asked, a PNG is halved as often as that allows, and a GPU without BC7 decodes that level. Nothing is made larger,
+nor smaller than asked. The setting is video.texture_size (1, 2, or 0 as stored; the environment variable <PREFIX>_TEXTURE_SIZE). Changing
+it loads the images again.
+---
+ host/gpu/texture_pack.cpp    | 56 ++++++++++++++++++++++++++++++++----
+ host/gpu/texture_pack.hpp    |  7 +++++
+ host/gpu/vulkan_renderer.cpp |  1 +
+ host/settings/settings.cpp   | 48 ++-----------------------------
+ host/settings/settings.hpp   |  8 +-----
+ host/ui/menu.cpp             | 36 +++++++++++++----------
+ 6 files changed, 84 insertions(+), 72 deletions(-)
+
+diff --git a/host/gpu/texture_pack.cpp b/host/gpu/texture_pack.cpp
+index 56ccccd..afcef27 100644
+--- a/host/gpu/texture_pack.cpp
++++ b/host/gpu/texture_pack.cpp
+@@ -735,7 +735,38 @@ void TexturePack::loader_main() {
+     }
+ }
+ 
++// Halves an RGBA8 image in each direction: every pixel is the mean of the (up to) four it covers.
++static void halve_rgba(std::vector<std::uint8_t> &pixels, std::uint32_t &width, std::uint32_t &height) {
++    const std::uint32_t new_width = std::max(width / 2u, 1u), new_height = std::max(height / 2u, 1u);
++    std::vector<std::uint8_t> out(static_cast<std::size_t>(new_width) * new_height * 4u);
++    for (std::uint32_t y = 0; y < new_height; ++y)
++        for (std::uint32_t x = 0; x < new_width; ++x) {
++            const std::uint32_t x0 = std::min(x * 2u, width - 1u), x1 = std::min(x * 2u + 1u, width - 1u);
++            const std::uint32_t y0 = std::min(y * 2u, height - 1u), y1 = std::min(y * 2u + 1u, height - 1u);
++            for (std::uint32_t c = 0; c < 4u; ++c) {
++                const std::uint32_t sum = pixels[(static_cast<std::size_t>(y0) * width + x0) * 4u + c] +
++                                          pixels[(static_cast<std::size_t>(y0) * width + x1) * 4u + c] +
++                                          pixels[(static_cast<std::size_t>(y1) * width + x0) * 4u + c] +
++                                          pixels[(static_cast<std::size_t>(y1) * width + x1) * 4u + c];
++                out[(static_cast<std::size_t>(y) * new_width + x) * 4u + c] = static_cast<std::uint8_t>((sum + 2u) / 4u);
++            }
++        }
++    pixels = std::move(out);
++    width = new_width;
++    height = new_height;
++}
++
+ void TexturePack::decode(Replacement &replacement, PendingBake &bake) {
++    // How many times to halve an image of this size so it is as close to the asked size (a multiple of the game's own texture) as halving
++    // gets without going under it; 0 when no size is asked, the game's size is not known, or it is already that small.
++    const auto drop_for = [&](std::uint32_t width, std::uint32_t height, std::uint32_t most) {
++        const std::uint32_t multiple = size_limit_.load(std::memory_order_relaxed);
++        if (multiple == 0u || replacement.texture_width == 0u || replacement.texture_height == 0u) return 0u;
++        const std::uint32_t want_width = multiple * replacement.texture_width, want_height = multiple * replacement.texture_height;
++        std::uint32_t drop = 0u;
++        while (drop < most && (width >> (drop + 1u)) >= want_width && (height >> (drop + 1u)) >= want_height) ++drop;
++        return drop;
++    };
+     texpack_perf::Scope timer(texpack_perf::Stage::Decode, replacement.name);
+     // The shipped bundle: ready BC7 with mips, one read and one inflate. A file of the same name in the folder wins, and an
+     // image that covers only part of its texture (a [hashranges] entry) needs the padding the PNG path below does.
+@@ -750,11 +781,13 @@ void TexturePack::decode(Replacement &replacement, PendingBake &bake) {
+         texture_cache::Image image;
+         if (bundle_.read(replacement.name, image) && bundle_decoded_.load(std::memory_order_relaxed)) {
+             // No BC7 on this GPU: the first level becomes RGBA8, and the renderer builds the mips as it does for a PNG.
+-            std::vector<std::uint8_t> pixels(static_cast<std::size_t>(image.width) * image.height * 4u);
+-            if (image.width != 0u && image.height != 0u && !image.data.empty()) {
+-                bc7::decode_level(image.data.data(), image.width, image.height, pixels.data());
+-                replacement.width = image.width;
+-                replacement.height = image.height;
++            const std::uint32_t drop = drop_for(image.width, image.height, image.levels > 0u ? image.levels - 1u : 0u);
++            const std::uint32_t level_width = std::max(image.width >> drop, 1u), level_height = std::max(image.height >> drop, 1u);
++            std::vector<std::uint8_t> pixels(static_cast<std::size_t>(level_width) * level_height * 4u);
++            if (image.width != 0u && image.height != 0u && !image.data.empty() && drop < image.level_offsets.size()) {
++                bc7::decode_level(image.data.data() + image.level_offsets[drop], level_width, level_height, pixels.data());
++                replacement.width = level_width;
++                replacement.height = level_height;
+                 {
+                     std::lock_guard lock(mutex_);
+                     decoded_bytes_ += pixels.size();
+@@ -767,6 +800,17 @@ void TexturePack::decode(Replacement &replacement, PendingBake &bake) {
+                 return;
+             }
+         } else if (!image.data.empty()) {
++            // Texture quality: start at the smallest stored level that is still as big as asked (the larger ones are cut off the front).
++            const std::uint32_t drop = drop_for(image.width, image.height, image.levels > 0u ? image.levels - 1u : 0u);
++            if (drop > 0u && drop < image.level_offsets.size()) {
++                const std::uint64_t cut = image.level_offsets[drop];
++                image.data.erase(image.data.begin(), image.data.begin() + static_cast<std::ptrdiff_t>(cut));
++                image.level_offsets.erase(image.level_offsets.begin(), image.level_offsets.begin() + static_cast<std::ptrdiff_t>(drop));
++                for (std::uint64_t &offset : image.level_offsets) offset -= cut;
++                image.width = std::max(image.width >> drop, 1u);
++                image.height = std::max(image.height >> drop, 1u);
++                image.levels -= drop;
++            }
+             replacement.width = image.width;
+             replacement.height = image.height;
+             replacement.levels = image.levels;
+@@ -844,6 +888,8 @@ void TexturePack::decode(Replacement &replacement, PendingBake &bake) {
+                     image + static_cast<std::size_t>(row) * static_cast<std::size_t>(width) * 4u,
+                     static_cast<std::size_t>(std::min<std::uint32_t>(static_cast<std::uint32_t>(width), full_width)) * 4u);
+     stbi_image_free(image);
++    // Texture quality: halved while it stays at least as big as asked (a multiple of the game's own texture).
++    for (std::uint32_t times = drop_for(full_width, full_height, 4u); times > 0u; --times) halve_rgba(pixels, full_width, full_height);
+ 
+     replacement.width = full_width;
+     replacement.height = full_height;
+diff --git a/host/gpu/texture_pack.hpp b/host/gpu/texture_pack.hpp
+index bb8f115..09e0d02 100644
+--- a/host/gpu/texture_pack.hpp
++++ b/host/gpu/texture_pack.hpp
+@@ -220,6 +220,12 @@ public:
+     // goes through the same path as a PNG, mip chain included.
+     void set_bundle_decoded(bool decoded) noexcept { bundle_decoded_.store(decoded, std::memory_order_relaxed); }
+ 
++    // The size the pack's images are loaded at, as a multiple of the texture of the game each one replaces (the menu's Texture quality:
++    // 1 Low, 2 Medium); 0 leaves them as they are stored (High). A bundle image (BC7 with its smaller sizes inside) starts at the smallest
++    // stored size that is still at least that big; a PNG is halved as often as that allows. An image is never made larger, nor smaller than
++    // asked. Set before the images load; it does not change images already loaded.
++    void set_size_limit(std::uint32_t multiple) noexcept { size_limit_.store(multiple > 8u ? 8u : multiple, std::memory_order_relaxed); }
++
+     [[nodiscard]] const std::filesystem::path &directory() const noexcept { return directory_; }
+     [[nodiscard]] const TexturePackOptions &options() const noexcept { return options_; }
+     [[nodiscard]] std::size_t entry_count() const noexcept { return entries_.size(); }
+@@ -256,6 +262,7 @@ private:
+     std::atomic<bool> cache_enabled_{false};
+     std::atomic<bool> bundle_enabled_{false};
+     std::atomic<bool> bundle_decoded_{false};
++    std::atomic<std::uint32_t> size_limit_{0u};
+ 
+     std::filesystem::path directory_;
+     // hd.bundle in the pack folder (texture_bundle.hpp): the images a folder does not have itself.
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 428b2e7..298b8db 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5864,6 +5864,7 @@ void VulkanRenderer::Impl::apply_texture_pack() {
+     // The shipped pack is only the bundle (no PNGs beside it): a GPU that cannot sample BC7 decodes it on the CPU instead of going without.
+     pack->set_bundle(true);
+     pack->set_bundle_decoded(!bc7_supported);
++    pack->set_size_limit(settings::current().texture_size);  // the menu's Texture quality: Low 1x, Medium 2x the game's own size, High as stored
+     // The stamp table travels in the bundle; <prefix>_NO_STAMP=1 leaves it unread, so every texture is found by its hash as before.
+     if (bc7_supported && portablekit::env("NO_STAMP") == nullptr) {
+         const std::vector<std::uint8_t> blob = pack->bundle_blob("@stamp");
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 96e5cb3..a69eff8 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -202,6 +202,9 @@ const std::vector<Field> &fields() {
+          [](const Settings &s) { return std::string(s.texture_pack ? "1" : "0"); },
+          // 0/off/no/false turn it off; anything else, a folder included, on.
+          [](Settings &s, const char *t) { s.texture_pack = variable_flag(t); }},
++        {"video.texture_size", "TEXTURE_SIZE",
++         [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 8u, s.texture_size); },
++         [](const Settings &s) { return std::to_string(s.texture_size); }, nullptr},
+         {"video.texture_pack_folder", nullptr,
+          [](Settings &s, const std::string &t) {
+              s.texture_pack_folder = t;
+@@ -601,51 +604,6 @@ bool first_run() {
+     return s.first_run;
+ }
+ 
+-Quality quality_of(const Settings &s) {
+-    if (s.internal_scale == 1u && !s.texture_pack && !s.hd_text) return Quality::Low;
+-    if (s.internal_scale == 2u && s.texture_pack && !s.hd_text) return Quality::Medium;
+-    if (s.internal_scale == 4u && s.texture_pack && s.hd_text) return Quality::High;
+-    if (s.internal_scale == 6u && s.texture_pack && s.hd_text) return Quality::Ultra;
+-    return Quality::Custom;
+-}
+-
+-void apply_quality(Settings &s, Quality quality) {
+-    switch (quality) {
+-    case Quality::Low:
+-        s.internal_scale = 1u;
+-        s.texture_pack = false;  // only the Low preset turns the HD textures off
+-        s.hd_text = false;
+-        break;
+-    case Quality::Medium:
+-        s.internal_scale = 2u;
+-        s.texture_pack = true;
+-        s.hd_text = false;
+-        break;
+-    case Quality::High:  // 1920x1088
+-        s.internal_scale = 4u;
+-        s.texture_pack = true;
+-        s.hd_text = true;
+-        break;
+-    case Quality::Ultra:  // 2880x1632
+-        s.internal_scale = 6u;
+-        s.texture_pack = true;
+-        s.hd_text = true;
+-        break;
+-    case Quality::Custom: break;
+-    }
+-}
+-
+-const char *quality_name(Quality quality) {
+-    switch (quality) {
+-    case Quality::Low: return "Low";
+-    case Quality::Medium: return "Medium";
+-    case Quality::High: return "High";
+-    case Quality::Ultra: return "Ultra";
+-    case Quality::Custom: break;
+-    }
+-    return "Custom";
+-}
+-
+ std::string game_default_name() {
+     const char *name = game().default_player_name;
+     return name != nullptr ? name : "";
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 09fa8d9..fe4f903 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -52,6 +52,7 @@ struct Settings {
+     bool sharp_screen{};               // nearest instead of linear scaling to the window
+     bool sharp_textures{};             // nearest instead of linear texture sampling
+     bool texture_pack{true};           // draw an installed HD texture pack's images instead of the game's
++    std::uint32_t texture_size{0u};    // the HD pack's image size as a multiple of the game's own texture, set as they load: 1 Low, 2 Medium, 0 as stored (High)
+     std::string texture_pack_folder;   // a pack used where it is instead of textures/<disc id>; empty: none
+     bool unthrottled{};                // let emulated time run ahead of real time
+     std::uint32_t game_speed{1};       // 1, 2, 4 or 8 times real time (never online; see adhoc_game_speed)
+@@ -194,13 +195,6 @@ inline constexpr Platform kPlatform = Platform::Desktop;
+ // variables at what the file had. Failures are reported on the console.
+ void save();
+ 
+-// Quality presets: the three options that cost the most on a slow machine, set together. Low draws at the PSP's own size with no HD
+-// textures and no HD text; Medium draws at twice that, still with neither; High is the default: twice the size with the HD texture pack
+-// and HD text. A set of options that matches none of them is Custom. Nothing else is changed.
+-enum class Quality { Low, Medium, High, Ultra, Custom };
+-[[nodiscard]] Quality quality_of(const Settings &s);
+-void apply_quality(Settings &s, Quality quality);
+-[[nodiscard]] const char *quality_name(Quality quality);
+ // True when there was no settings.ini when the settings were first read: the first run of this installation.
+ [[nodiscard]] bool first_run();
+ 
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 7be06c0..56cb8f3 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -661,25 +661,29 @@ void Menu::video() {
+         }
+     }
+     {
+-        // The three options that cost the most on a slow machine, set together (settings::Quality).
++        // How big the HD pack's images are, against the game's own textures (1x): Off draws the game's own textures, Low the HD ones at the
++        // same size (1x), Medium at twice that, High as the pack stores them. Nothing more is shipped for it: the images are brought down to
++        // the asked size in the game as they load.
+         RowOptions o;
+-        o.description = "Low: the PSP's own size (480x272), no HD textures, no HD text. Medium: twice that size (960x544) with the HD "
+-                        "textures. High: four times (1920x1088) with the HD textures and HD text. Ultra: six times (2880x1632). "
+-                        "Changing any of those yourself shows Custom.";
+-        if (!settings::overridden_by("video.internal_scale").empty() || !settings::overridden_by("video.texture_pack").empty()) {
++        o.description = "Off: the game's own textures. Low: the HD textures at the game's own texture size. Medium: twice that size. "
++                        "High: the HD textures at the full size they are stored in.";
++        if (!settings::overridden_by("video.texture_pack").empty() || !settings::overridden_by("video.texture_size").empty()) {
+             o.disabled = true;
+             o.note = "set by an environment variable";
+         }
+-        const settings::Quality now = settings::quality_of(s);
+-        if (const int delta = choice_row("Quality", settings::quality_name(now), o)) {
+-            static const settings::Quality order[4] = {settings::Quality::Low, settings::Quality::Medium, settings::Quality::High,
+-                                                       settings::Quality::Ultra};
+-            int index = delta > 0 ? 0 : 3;  // from Custom: the first on the way up, the last on the way down
+-            for (int i = 0; i < 4; ++i)
+-                if (order[i] == now) index = cycle(i, delta, 4);
+-            settings::apply_quality(s, order[index]);
+-            renderer().set_internal_scale(s.internal_scale);
+-            renderer().set_texture_pack(s.texture_pack);
++        // 0 Off, 1 Low, 2 Medium, 3 High; a size of 3 or more times (from a settings file) counts as Medium.
++        const int now = !s.texture_pack ? 0 : s.texture_size == 0u ? 3 : s.texture_size == 1u ? 1 : 2;
++        static const char *const names[] = {"Off", "Low", "Medium", "High"};
++        if (const int delta = choice_row("Texture quality", names[now], o)) {
++            const int next = cycle(now, delta, 4);
++            const bool was_on = s.texture_pack;
++            const std::uint32_t was_size = s.texture_size;
++            s.texture_pack = next != 0;
++            if (next == 1) s.texture_size = 1u;
++            if (next == 2) s.texture_size = 2u;
++            if (next == 3) s.texture_size = 0u;
++            if (s.texture_pack != was_on) renderer().set_texture_pack(s.texture_pack);
++            if (s.texture_pack && s.texture_size != was_size) renderer().reload_texture_pack();
+             settings::save();
+         }
+     }
+@@ -893,6 +897,7 @@ void Menu::video() {
+         restore("video.sharp_screen", s.sharp_screen, d.sharp_screen);
+         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
+         restore("video.texture_pack", s.texture_pack, d.texture_pack);
++        restore("video.texture_size", s.texture_size, d.texture_size);
+         restore("video.present_mode", s.present_mode, d.present_mode);
+         restore("video.frame_rate", s.frame_rate, d.frame_rate);
+         restore("video.frame_rate_auto", s.frame_rate_auto, d.frame_rate_auto);
+@@ -906,6 +911,7 @@ void Menu::video() {
+         renderer().set_sharp_screen(s.sharp_screen);
+         renderer().set_sharp_textures(s.sharp_textures);
+         renderer().set_texture_pack(s.texture_pack);
++        renderer().reload_texture_pack();  // the images load again at the restored Texture quality
+         renderer().set_present_mode(s.present_mode);
+         renderer().set_frame_rate(s.frame_rate);
+         renderer().set_frame_rate_auto(s.frame_rate_auto);
+-- 
+2.54.0.windows.1
+
