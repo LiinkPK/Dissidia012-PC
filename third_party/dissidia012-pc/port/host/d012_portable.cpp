@@ -43,9 +43,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -88,6 +90,75 @@ void set(const char *name, const std::string &value) {
     setenv(name, value.c_str(), 0);
 #endif
 }
+
+#if defined(__linux__) && !defined(__ANDROID__)
+// Linux only (Windows and Android are left as they are). Up to v1.1.0 a program folder without game/EBOOT.ELF (everyone who set the game up
+// on the first-run screen) kept its data in the user's data folder (~/.local/share/Dissidia012/D012); from v1.1.1 it is always <folder>/data, and
+// nothing moved what was already there: the game asked for the disc image again and the saves seemed gone. This puts that data where the
+// game now looks. Nothing is ever deleted or overwritten.
+std::filesystem::path legacy_data_folder() {
+    const char *xdg = std::getenv("XDG_DATA_HOME");
+    const char *home = std::getenv("HOME");
+    if (xdg != nullptr && *xdg != '\0') return std::filesystem::path(xdg) / "Dissidia012" / "D012";
+    return home != nullptr && *home != '\0' ? std::filesystem::path(home) / ".local" / "share" / "Dissidia012" / "D012"
+                                            : std::filesystem::path();
+}
+
+// Moves `from` to `to`: by rename when it can (the same disk), else by copying and removing. A folder is merged into the one already
+// there, entry by entry; a file that is already there stays as it is and the old one stays where it was (counted in `kept`).
+void move_into(const std::filesystem::path &from, const std::filesystem::path &to, unsigned &moved, unsigned &kept) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(from, ec)) {
+        if (std::filesystem::exists(to, ec) && !std::filesystem::is_directory(to, ec)) {
+            ++kept;
+            return;
+        }
+        std::filesystem::create_directories(to, ec);
+        std::vector<std::filesystem::path> children;
+        for (const auto &entry : std::filesystem::directory_iterator(from, ec)) children.push_back(entry.path());
+        for (const std::filesystem::path &child : children) move_into(child, to / child.filename(), moved, kept);
+        std::filesystem::remove(from, ec);  // only when it is empty now
+        return;
+    }
+    if (std::filesystem::exists(to, ec)) {
+        ++kept;
+        return;
+    }
+    std::filesystem::rename(from, to, ec);
+    if (ec) {  // another disk: copy, then remove
+        ec.clear();
+        std::filesystem::copy_file(from, to, std::filesystem::copy_options::none, ec);
+        if (ec) {
+            std::filesystem::remove(to, ec);
+            ++kept;
+            return;
+        }
+        std::filesystem::remove(from, ec);
+    }
+    ++moved;
+}
+
+void migrate_legacy_data(const std::filesystem::path &data) {
+    std::error_code ec;
+    const std::filesystem::path legacy = legacy_data_folder();
+    if (legacy.empty() || !std::filesystem::is_directory(legacy, ec)) return;
+    // Only when the game was set up there and not here: the set-up leaves EBOOT.ELF in the data folder.
+    if (!std::filesystem::exists(legacy / "EBOOT.ELF", ec) || std::filesystem::exists(data / "EBOOT.ELF", ec)) return;
+    std::cout << "[portable] moving the data of an older version from " << utf8(legacy) << " to " << utf8(data) << std::endl;
+    // A settings.ini made by a first start here holds only defaults: the old one (the disc image, the controls) replaces it, which is kept.
+    if (std::filesystem::exists(legacy / "settings.ini", ec) && std::filesystem::exists(data / "settings.ini", ec))
+        std::filesystem::rename(data / "settings.ini", data / "settings.ini.before-move", ec);
+    unsigned moved = 0, kept = 0;
+    std::vector<std::filesystem::path> entries;
+    for (const auto &entry : std::filesystem::directory_iterator(legacy, ec)) entries.push_back(entry.path());
+    for (const std::filesystem::path &entry : entries) move_into(entry, data / entry.filename(), moved, kept);
+    std::cout << "[portable] " << moved << " files moved, " << kept << " left where they were (a file of that name was already there)"
+              << std::endl;
+    std::ofstream note(legacy / "MOVED.txt");
+    note << "The data of this folder was moved to " << utf8(data) << ".\n"
+         << "Files that were already there were not replaced; any still in this folder are the older copies.\n";
+}
+#endif
 
 #if defined(D012_INSTALLER_BUILD) && defined(_WIN32)
 // A windowed program started from a shortcut has no standard output: keep
@@ -140,9 +211,14 @@ struct PortableLayout {
         if (!portable) return;
 
         if (game_folder && !is_set(kGameDir)) set(kGameDir, utf8(folder / "game"));
-        if (!is_set(kDataDir)) set(kDataDir, utf8(folder / "data"));
+        const bool data_folder_is_default = !is_set(kDataDir);
+        if (data_folder_is_default) set(kDataDir, utf8(folder / "data"));
         const std::string data = std::getenv(kDataDir);
         std::filesystem::create_directories(std::filesystem::path(std::u8string(data.begin(), data.end())), ec);
+#if defined(__linux__) && !defined(__ANDROID__)
+        // The player did not choose the data folder (D012_DATA_DIR): put the data of an older version where the game looks now.
+        if (data_folder_is_default) migrate_legacy_data(std::filesystem::path(std::u8string(data.begin(), data.end())));
+#endif
 #if defined(D012_INSTALLER_BUILD) && defined(_WIN32)
         log_to_file_without_console(std::filesystem::path(std::u8string(data.begin(), data.end())) / "logs");
 #endif
