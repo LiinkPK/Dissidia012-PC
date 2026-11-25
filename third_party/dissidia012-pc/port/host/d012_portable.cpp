@@ -142,11 +142,17 @@ void migrate_legacy_data(const std::filesystem::path &data) {
     std::error_code ec;
     const std::filesystem::path legacy = legacy_data_folder();
     if (legacy.empty() || !std::filesystem::is_directory(legacy, ec)) return;
-    // Only when the game was set up there and not here: the set-up leaves EBOOT.ELF in the data folder.
-    if (!std::filesystem::exists(legacy / "EBOOT.ELF", ec) || std::filesystem::exists(data / "EBOOT.ELF", ec)) return;
+    // Once only (MOVED.txt says it was done), and only for a folder that holds a game's data: the set-up there, settings or saves.
+    if (std::filesystem::exists(legacy / "MOVED.txt", ec)) return;
+    if (!std::filesystem::exists(legacy / "EBOOT.ELF", ec) && !std::filesystem::exists(legacy / "settings.ini", ec) &&
+        !std::filesystem::exists(legacy / "ms0", ec))
+        return;
     std::cout << "[portable] moving the data of an older version from " << utf8(legacy) << " to " << utf8(data) << std::endl;
-    // A settings.ini made by a first start here holds only defaults: the old one (the disc image, the controls) replaces it, which is kept.
-    if (std::filesystem::exists(legacy / "settings.ini", ec) && std::filesystem::exists(data / "settings.ini", ec))
+    // Not set up here yet (the set-up leaves EBOOT.ELF in the data folder): a settings.ini made by a first start here holds only
+    // defaults, so the old one (the disc image, the controls) replaces it, and the new one is kept beside it. Once the player has set the
+    // game up here again, the settings of this folder stay.
+    const bool set_up_here = std::filesystem::exists(data / "EBOOT.ELF", ec);
+    if (!set_up_here && std::filesystem::exists(legacy / "settings.ini", ec) && std::filesystem::exists(data / "settings.ini", ec))
         std::filesystem::rename(data / "settings.ini", data / "settings.ini.before-move", ec);
     unsigned moved = 0, kept = 0;
     std::vector<std::filesystem::path> entries;
