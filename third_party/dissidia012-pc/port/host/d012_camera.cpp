@@ -688,6 +688,25 @@ void install(portablekit::HleRegistrar &hle) {
         g_assist_bar.store(shortcut_live && gauges.valid && gauges.assist >= 4999.0f, std::memory_order_relaxed);
         g_assist_full.store(shortcut_live && gauges.valid && gauges.assist >= 9999.0f, std::memory_order_relaxed);
         g_summon_ready.store(shortcut_live && summon_ready_now, std::memory_order_relaxed);
+        // What the on-screen move buttons wait for, logged when it changes (at most 60 lines), to see on a device why a button stays
+        // hidden: whether a battle is "live", whether the gauge chain reads as a fighter's, and what it reads.
+        {
+            static int last_key = -1, logged = 0;
+            const int key = (shortcut_live ? 1 : 0) | (ex_state + 1) << 1 | (gauges.valid ? 1 : 0) << 4 |
+                            (gauges.assist >= 9999.0f ? 2 : gauges.assist >= 4999.0f ? 1 : 0) << 5 |
+                            (summon_ready_now ? 1 : 0) << 7;
+            if (key != last_key && logged < 60) {
+                last_key = key;
+                ++logged;
+                std::printf("[buttons] live %d (camera %d, fed %d, battle %d), EX state %d, gauges valid %d, assist %g, summon flag %u out %u, "
+                            "ready: EX %d BRV %d HP %d summon %d\n",
+                            shortcut_live, live, p.reads - p.fed_read <= kLiveReads, p.reads - p.battle_read <= kLiveReads, ex_state,
+                            gauges.valid, gauges.assist, gauges.summon_flag, gauges.summon_out, ex_state == 1 && shortcut_live,
+                            gauges.valid && gauges.assist >= 4999.0f && shortcut_live,
+                            gauges.valid && gauges.assist >= 9999.0f && shortcut_live, shortcut_live && summon_ready_now);
+                std::fflush(stdout);
+            }
+        }
         if (shortcut_live && options().shortcuts) {
             const std::uint32_t extra = ext::extra_buttons();
             static bool announced = false;
