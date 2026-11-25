@@ -1,0 +1,64 @@
+From 5e2f177c18faa5ac1adf9f4fddf0dc7c3dfbdb41 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Wed, 25 Nov 2026 22:33:33 +0100
+Subject: [PATCH] Lower when behind is the player's choice online too
+
+It was forced on while playing online, and the menu showed it greyed out. It stayed forced whenever the relay was selected in the settings,
+even with no session running, which left a player who had it off on the slower frame rate path for good. It follows the setting now.
+Fast loading is held off online as before (kernel/fast_loading.cpp).
+---
+ host/gpu/vulkan_renderer.cpp | 4 ++--
+ host/settings/settings.cpp   | 4 ++--
+ host/ui/menu.cpp             | 6 +-----
+ 3 files changed, 5 insertions(+), 9 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 5dd5a05..3bb996c 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -12254,8 +12254,8 @@ bool VulkanRenderer::present(std::uint32_t display_address,
+     Impl &impl = *impl_;
+     if (!impl.ready) return false;
+     const Impl::Guard guard(impl);
+-    // Lower when behind is the player's choice, but it is on while playing online, so online players never disagree on it.
+-    impl.governor.set_automatic(settings::current().frame_rate_auto || adhoc_online_mode());
++    // Lower when behind is the player's choice, online or not.
++    impl.governor.set_automatic(settings::current().frame_rate_auto);
+     census::note_frame(display_address);
+     if (!impl.recording) begin_frame();
+     impl.end_pass();
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index a69eff8..19f34fa 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -526,8 +526,8 @@ void enforce_fixed_settings(Settings &values) {
+     values.sharp_screen = false;
+     values.sharp_textures = false;
+     values.menu_pause_multiplayer = false;
+-    // Lower when behind and Fast loading are the player's to set again (they default to on). Online they are applied as on whatever they
+-    // are set to (vulkan_renderer.cpp, kernel/fast_loading.cpp), so online players never disagree on them.
++    // Lower when behind and Fast loading are the player's to set (they default to on), online or not. Only Fast loading is held off online
++    // (kernel/fast_loading.cpp): running ahead of real time would put two machines out of step.
+     values.unthrottled = false;  // no Unlimited: Game speed is Normal, 2x, 4x or 8x
+ }
+ 
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 56cb8f3..dfc4a0d 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -826,11 +826,7 @@ void Menu::video() {
+                                    "On lowers the frame rate by itself when presenting that often would slow the "
+                                    "game. Off keeps the chosen rate, and the game may then run below full speed.");
+         if (s.unthrottled || s.frame_rate == settings::FrameRate::Fps30) o.disabled = true;
+-        if (adhoc_online_mode()) {
+-            o.disabled = true;
+-            o.note = "On while you play online";
+-        }
+-        if (choice_row("Lower when behind", (s.frame_rate_auto || adhoc_online_mode()) ? "On" : "Off", o)) {
++        if (choice_row("Lower when behind", s.frame_rate_auto ? "On" : "Off", o)) {
+             s.frame_rate_auto = !s.frame_rate_auto;
+             renderer().set_frame_rate_auto(s.frame_rate_auto);
+             settings::save();
+-- 
+2.54.0.windows.1
+

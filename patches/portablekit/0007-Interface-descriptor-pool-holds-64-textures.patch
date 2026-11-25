@@ -1,0 +1,32 @@
+From a12736bce70e80250732ef25d48ec9f660aa6bff Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Wed, 25 Nov 2026 22:23:41 +0100
+Subject: [PATCH] Menu: the interface's descriptor pool holds 64 textures, not
+ 8
+
+ImGui_ImplVulkan took the minimum pool of 8 sampled-image descriptor sets. The font atlas, the menu's pointing hand and the section icons
+(each created the first time it is drawn) are more than that: once the pool was used up a texture got no descriptor set, and the next draw
+with it crashed the driver (a null descriptor in vkCmdBindDescriptorSets), on Android after cycling through the menu's sections.
+---
+ host/gpu/vulkan_renderer.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 298b8db..5dd5a05 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -8356,7 +8356,10 @@ bool VulkanRenderer::initialize_ui(std::string &error) {
+     info.Device = impl.device;
+     info.QueueFamily = impl.queue_family;
+     info.Queue = impl.queue;
+-    info.DescriptorPoolSize = IMGUI_IMPL_VULKAN_MINIMUM_SAMPLED_IMAGE_POOL_SIZE;
++    // One descriptor set per texture the interface uses: the font atlas, the menu's pointing hand and the section icons (each created when
++    // first drawn) outgrew the minimum of 8, and a draw with a texture that got no set crashed the driver (null descriptor in
++    // vkCmdBindDescriptorSets) after the player had cycled through the menu's sections.
++    info.DescriptorPoolSize = 64;
+     info.MinImageCount = impl.swapchain_min_images;
+     // ImGui keeps this many vertex and index buffers and writes the next one
+     // for each draw of the interface. Two frames in flight and two presents
+-- 
+2.54.0.windows.1
+
