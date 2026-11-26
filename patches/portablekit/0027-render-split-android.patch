@@ -1,0 +1,66 @@
+From 87c2fadd2d445aa779d799964825b88bf8252c73 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 22:12:53 +0100
+Subject: [PATCH] Render split on a phone: profile.txt turns it on, and it goes
+ to logcat
+
+---
+ host/perf/frame_stats.cpp | 25 +++++++++++++++++++++----
+ 1 file changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/host/perf/frame_stats.cpp b/host/perf/frame_stats.cpp
+index 90477cb..27dd6dc 100644
+--- a/host/perf/frame_stats.cpp
++++ b/host/perf/frame_stats.cpp
+@@ -17,7 +17,10 @@
+ #endif
+ #endif
+ 
++#include "install/user_data.hpp"
++
+ #include <algorithm>
++#include <filesystem>
+ #include <array>
+ #if defined(__ANDROID__)
+ #include <android/log.h>
+@@ -381,19 +384,33 @@ void report_split(double frames) {
+     const double lists = ms(Split::Lists), decode = ms(Split::Decode), draw = ms(Split::Draw);
+     const double texture = ms(Split::Texture), record = ms(Split::Record), summary = ms(Split::Summary);
+     const double replay = ms(Split::Replay);
+-    std::printf("[render-split] ms per game frame: lists %.2f = parse %.2f + decode %.2f + draw %.2f (host %.2f, "
+-                "texture %.2f, record %.2f, summary %.2f) | interp %.2f replay %.2f present %.2f writeback %.2f\n",
++    char text[320];
++    std::snprintf(text, sizeof text,"[render-split] ms per game frame: lists %.2f = parse %.2f + decode %.2f + draw %.2f (host %.2f, "
++                "texture %.2f, record %.2f, summary %.2f) | interp %.2f replay %.2f present %.2f writeback %.2f",
+                 lists, std::max(0.0, lists - decode - draw), decode, draw,
+                 std::max(0.0, draw - texture - record - summary), texture, record, summary, ms(Split::Interp),
+                 replay, std::max(0.0, ms(Split::Present) - replay), ms(Split::Writeback));
+-    std::fflush(stdout);
++    emit_line(text);
+     split.ticks = {};
+ }
+ 
+ } // namespace
+ 
++// A phone has no environment to set: a file named profile.txt in the data folder (or the app's shared folder) turns the split on.
++static bool profile_file_present() noexcept {
++#if defined(__ANDROID__)
++    try {
++        std::error_code ec;
++        for (const std::filesystem::path &folder : {portablekit::install::user_data_directory(), portablekit::install::shared_data_directory()})
++            if (!folder.empty() && std::filesystem::exists(folder / "profile.txt", ec)) return true;
++    } catch (...) {
++    }
++#endif
++    return false;
++}
++
+ bool split_enabled() noexcept {
+-    static const bool enabled = portablekit::env("TRACE_RENDER") != nullptr;
++    static const bool enabled = portablekit::env("TRACE_RENDER") != nullptr || profile_file_present();
+     return enabled;
+ }
+ 
+-- 
+2.54.0.windows.1
+
