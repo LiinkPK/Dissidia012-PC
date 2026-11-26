@@ -235,6 +235,8 @@ void pin_all_threads(const std::vector<int> &cores) {
 // Settings for a test run from a file: a line KEY=VALUE per variable in env.txt (the app's shared folder, which adb can write to:
 // /sdcard/Android/data/<app>/files), set before the game starts, as a computer's environment would. A phone has no way to set them.
 // Lines starting with # are skipped. Nothing happens when the file is not there.
+void forward_output_to_logcat();
+
 void load_env_file() {
     // This runs while the library loads, before Java is ready: no JNI here, so the folder is built from the app's own name.
     std::string app;
@@ -255,6 +257,32 @@ void load_env_file() {
         ++count;
     }
     __android_log_print(ANDROID_LOG_INFO, "D012", "env.txt: %d variables set", count);
+    if (const char *forward = std::getenv("D012_STDOUT_LOGCAT"); forward != nullptr && *forward == '1') forward_output_to_logcat();
+}
+
+// D012_STDOUT_LOGCAT=1 (in env.txt): everything the game prints to standard output and error goes to logcat too (tag D012out), so the
+// TRACE_ variables can be read from a phone: adb logcat -s D012out. Off, a phone's standard output goes nowhere.
+void forward_output_to_logcat() {
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    dup2(fds[1], 1);
+    dup2(fds[1], 2);
+    const int reader = fds[0];
+    std::thread([reader] {
+        std::string pending;
+        char block[4096];
+        for (;;) {
+            const ssize_t got = read(reader, block, sizeof block);
+            if (got <= 0) return;
+            pending.append(block, static_cast<std::size_t>(got));
+            std::size_t newline;
+            while ((newline = pending.find('\n')) != std::string::npos) {
+                __android_log_print(ANDROID_LOG_INFO, "D012out", "%s", pending.substr(0, newline).c_str());
+                pending.erase(0, newline + 1);
+            }
+        }
+    }).detach();
 }
 
 void prefer_fast_cores() {
