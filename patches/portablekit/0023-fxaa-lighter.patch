@@ -1,0 +1,31 @@
+From cfbce667a20cd48c95ef2cc23949eaf480dde849 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 19:22:11 +0100
+Subject: [PATCH] FXAA: early exit on flat areas and a shorter blur
+
+---
+ host/gpu/shaders/level.frag | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/host/gpu/shaders/level.frag b/host/gpu/shaders/level.frag
+index 0f388e3..44d9041 100644
+--- a/host/gpu/shaders/level.frag
++++ b/host/gpu/shaders/level.frag
+@@ -36,10 +36,13 @@ vec3 fxaa(vec2 uv) {
+     float l_nw = dot(nw, luma), l_ne = dot(ne, luma), l_sw = dot(sw, luma), l_se = dot(se, luma), l_m = dot(m, luma);
+     float l_min = min(l_m, min(min(l_nw, l_ne), min(l_sw, l_se)));
+     float l_max = max(l_m, max(max(l_nw, l_ne), max(l_sw, l_se)));
++    // Flat areas, and edges too faint to show, are left as they are (the usual FXAA early exit): most pixels cost five reads, not nine,
++    // and nothing soft is blurred further.
++    if (l_max - l_min < max(0.0312, l_max * 0.125)) return m;
+     vec2 dir = vec2(-((l_nw + l_ne) - (l_sw + l_se)), (l_nw + l_sw) - (l_ne + l_se));
+     float reduce = max((l_nw + l_ne + l_sw + l_se) * (0.25 * (1.0 / 8.0)), 1.0 / 128.0);
+     float rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+-    dir = clamp(dir * rcp, vec2(-8.0), vec2(8.0)) * px;
++    dir = clamp(dir * rcp, vec2(-4.0), vec2(4.0)) * px;  // the blur reaches at most 4 texels along an edge
+     vec3 a = 0.5 * (texture(frame, clamp(uv + dir * (1.0 / 3.0 - 0.5), low, high)).rgb +
+                     texture(frame, clamp(uv + dir * (2.0 / 3.0 - 0.5), low, high)).rgb);
+     vec3 b = a * 0.5 + 0.25 * (texture(frame, clamp(uv + dir * -0.5, low, high)).rgb +
+-- 
+2.54.0.windows.1
+

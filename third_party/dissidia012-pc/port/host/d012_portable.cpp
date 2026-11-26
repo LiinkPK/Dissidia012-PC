@@ -49,6 +49,17 @@
 #include <system_error>
 #include <vector>
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#include <dirent.h>
+#include <sched.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <chrono>
+#include <thread>
+#endif
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -182,6 +193,62 @@ void log_to_file_without_console(const std::filesystem::path &logs) {
 }
 #endif
 
+#if defined(__ANDROID__)
+// Phone chips have slow "little" cores and fast "big" ones, and the scheduler keeps the game's main thread on a little one: measured on
+// a Mate 9 (Kirin 960) in a battle, the main thread sat on CPU 1 (a 1.84 GHz Cortex-A53) at 70 to 90% of it while the four 2.36 GHz
+// Cortex-A73 cores idled at 900 MHz, and the game ran at 6 frames a second. Every thread of the game is held to the fastest cores
+// instead. Nothing about the picture changes. D012_NO_BIG_CORES=1 leaves the scheduler alone.
+std::vector<int> fast_cores() {
+    std::vector<long> top_speed;
+    for (int core = 0; core < 16; ++core) {
+        std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(core) + "/cpufreq/cpuinfo_max_freq");
+        long value = 0;
+        file >> value;
+        top_speed.push_back(file ? value : 0);
+    }
+    long fastest = 0, slowest = 0;
+    for (long value : top_speed) {
+        if (value <= 0) continue;
+        fastest = std::max(fastest, value);
+        slowest = slowest == 0 ? value : std::min(slowest, value);
+    }
+    if (fastest == 0 || fastest * 100 < slowest * 115) return {};  // one kind of core only: nothing to choose between
+    std::vector<int> cores;
+    for (int core = 0; core < static_cast<int>(top_speed.size()); ++core)
+        if (top_speed[static_cast<std::size_t>(core)] * 100 >= fastest * 95) cores.push_back(core);
+    return cores.size() >= 2 ? cores : std::vector<int>{};
+}
+
+void pin_all_threads(const std::vector<int> &cores) {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int core : cores) CPU_SET(core, &set);
+    if (DIR *tasks = opendir("/proc/self/task")) {
+        while (const dirent *entry = readdir(tasks)) {
+            const int tid = std::atoi(entry->d_name);
+            if (tid > 0) sched_setaffinity(static_cast<pid_t>(tid), sizeof(set), &set);
+        }
+        closedir(tasks);
+    }
+}
+
+void prefer_fast_cores() {
+    if (is_set("D012_NO_BIG_CORES")) return;
+    const std::vector<int> cores = fast_cores();
+    if (cores.empty()) return;
+    std::string list;
+    for (int core : cores) list += (list.empty() ? "" : ",") + std::to_string(core);
+    __android_log_print(ANDROID_LOG_INFO, "D012", "game threads held to the fast cores: %s", list.c_str());
+    // Again every few seconds: the game starts more threads while it loads, and they would begin on any core.
+    std::thread([cores] {
+        for (;;) {
+            pin_all_threads(cores);
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+        }
+    }).detach();
+}
+#endif
+
 struct PortableLayout {
     PortableLayout() {
         try {
@@ -197,6 +264,9 @@ struct PortableLayout {
         // closed with Alt+F4, killed or crashed leaves an empty or short file. Written line by line, the log has everything up to the end.
         if (const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE); out != nullptr && out != INVALID_HANDLE_VALUE && GetFileType(out) == FILE_TYPE_DISK)
             std::setvbuf(stdout, nullptr, _IONBF, 0);
+#endif
+#if defined(__ANDROID__)
+        prefer_fast_cores();
 #endif
         const std::filesystem::path folder = portablekit::executable_directory();
         std::error_code ec;

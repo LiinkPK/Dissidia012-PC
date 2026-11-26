@@ -1,0 +1,62 @@
+From 78be87676a02df09b3417727921e6136fcef3c1a Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 19:26:08 +0100
+Subject: [PATCH] Performance mode: 3x, the dynamic floor is 2x, sharper
+ upscaling
+
+---
+ host/gpu/vulkan_renderer.cpp |  4 ++--
+ host/ui/menu.cpp             | 11 ++++++-----
+ 2 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 6728c73..a399c8c 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -3094,7 +3094,7 @@ void VulkanRenderer::Impl::dynamic_resolution_sample(double gpu_ms) {
+     dynamic.gpu_ms = 0.0;
+     if (elapsed > 6000.0) return;  // a stall (a loading screen, the window moved): not a measure of the picture
+     const std::uint32_t ceiling = requested_scale;
+-    const std::uint32_t floor_scale = std::min<std::uint32_t>(upscale ? 1u : 2u, ceiling);
++    const std::uint32_t floor_scale = std::min<std::uint32_t>(2u, ceiling);  // below 2x the text and the interface are too soft
+     const std::uint32_t current = std::clamp(dynamic.scale != 0u ? dynamic.scale : ceiling, floor_scale, ceiling);
+     const double since_change = std::chrono::duration<double>(now - dynamic.last_change).count();
+     std::uint32_t next = current;
+@@ -4576,7 +4576,7 @@ void VulkanRenderer::Impl::record_level(VkCommandBuffer commands, std::uint32_t
+                            width / height,
+                            fxaa ? 1.0f : 0.0f,
+                            upscale ? 1.0f : 0.0f,
+-                           0.5f,  // the upscaler's sharpening, 0 to 1
++                           0.7f,  // the upscaler's sharpening, 0 to 1
+                            0.0f};
+     const VkClearValue black{{{0.0f, 0.0f, 0.0f, 1.0f}}};
+     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 197a0ab..27d0831 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -715,15 +715,16 @@ void Menu::video() {
+     }
+ #endif
+     {
+-        // One step for a slow computer or a phone: the game is drawn at 2x and made sharp again by the upscaler, with FXAA over it, which
+-        // costs a fraction of drawing 4x. Turning it off goes back to 4x with neither.
+-        const bool performance = s.internal_scale == 2u && s.upscale && s.fxaa && s.dynamic_resolution;
++        // One step for a slow computer or a phone: the game is drawn at 3x and made sharp again by the upscaler, with FXAA over it, which
++        // costs about half of drawing 4x. Turning it off goes back to 4x with neither. (2x is too soft: the text and the interface are
++        // drawn into the picture, so they keep only that detail.)
++        const bool performance = s.internal_scale == 3u && s.upscale && s.fxaa && s.dynamic_resolution;
+         if (choice_row("Performance mode", performance ? "On" : "Off",
+                        options_for("video.internal_scale",
+-                                   "Draws the game at 2x (lower by itself when the graphics card still cannot keep up) and scales it up with a "
++                                   "Draws the game at 3x (a step lower, down to 2x, when the graphics card still cannot keep up) and scales it up with a "
+                                    "sharp upscaler and FXAA: much lighter on the graphics card, and it still looks clean. Sets "
+                                    "Resolution, Dynamic resolution, Anti-aliasing and Upscaling together; you can change each afterwards."))) {
+-            s.internal_scale = performance ? 4u : 2u;
++            s.internal_scale = performance ? 4u : 3u;
+             s.upscale = !performance;
+             s.fxaa = !performance;
+             s.dynamic_resolution = !performance;
+-- 
+2.54.0.windows.1
+
