@@ -1,0 +1,51 @@
+From 363a751020ace373e1384e0d5368df5259eda927 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 17:33:22 +0100
+Subject: [PATCH] System: Save the log... on Windows, Linux and macOS
+
+---
+ host/ui/menu.cpp | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 8d715d5..b258ddd 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -2120,6 +2120,34 @@ void Menu::system() {
+     if (button_row("Open the data folder", {false, {}, std::string("Show ") + portablekit::game().project_name + "'s data folder in the file manager."})) {
+         open_folder(install::path_from_utf8(data_dir));
+     }
++    {
++        // The logs on a computer are in the data folder's logs folder (Windows writes them there by itself; the other systems when the
++        // output is sent there). One folder with a copy of them, opened, is what a problem report needs.
++        static std::string saved;
++        if (button_row("Save the log...", {false, {}, "Copies the logs (this run's and the previous run's) into a new folder in the data "
++                                                       "folder and opens it, to send with a problem report."})) {
++            std::fflush(stdout);
++            std::fflush(stderr);
++            std::error_code ec;
++            const std::filesystem::path data = install::path_from_utf8(data_dir);
++            const std::filesystem::path logs = data / "logs";
++            if (!std::filesystem::is_directory(logs, ec)) {
++                saved = "There is no log yet: " + install::path_to_utf8(logs) + " does not exist.";
++            } else {
++                const std::filesystem::path copy = data / "transfer" / (std::string(portablekit::game().project_name) + " log " +
++                                                                        savedata::timestamp_for_path(std::chrono::system_clock::now()));
++                std::filesystem::create_directories(copy, ec);
++                std::filesystem::copy(logs, copy, std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
++                if (ec) {
++                    saved = "Not saved: " + ec.message();
++                } else {
++                    saved = install::path_to_utf8(copy);
++                    open_folder(copy);
++                }
++            }
++        }
++        if (!saved.empty()) info_row("Log", saved);
++    }
+ #endif
+     if (button_row("Set up game data again...",
+                    {false, {}, "Choose the disc image again, for example after moving it. The game closes first."}))
+-- 
+2.54.0.windows.1
+
