@@ -1,8 +1,8 @@
-From 48649014642871d204ab69ae85183f7a956b71c5 Mon Sep 17 00:00:00 2001
+From 0c17f1e2b649bceea6298f49cf907680119d57c1 Mon Sep 17 00:00:00 2001
 From: x <x@x>
-Date: Thu, 26 Nov 2026 11:57:49 +0100
+Date: Thu, 26 Nov 2026 12:01:56 +0100
 Subject: [PATCH] Menu: the hand follows text boxes; Video page can download
- the editable texture PNGs into textures_png (profile png_pack_url)
+ the PNG package into textures_png (profile png_pack_url)
 
 ---
  host/profile.hpp                |   3 +
@@ -39,7 +39,7 @@ index dfc4a0d..0f6ddf6 100644
          std::string description = o.description;
          if (!o.note.empty()) description += "\n" + o.note;
 diff --git a/host/ui/texture_pack_screen.cpp b/host/ui/texture_pack_screen.cpp
-index 5866ef9..47ef6d4 100644
+index 5866ef9..78b68df 100644
 --- a/host/ui/texture_pack_screen.cpp
 +++ b/host/ui/texture_pack_screen.cpp
 @@ -3,6 +3,7 @@
@@ -189,9 +189,9 @@ index 5866ef9..47ef6d4 100644
 +            char text[96];
 +            if (total > 0.0) std::snprintf(text, sizeof(text), "%.0f of %.0f MB", done, total);
 +            else std::snprintf(text, sizeof(text), "%.0f MB", done);
-+            info_row("Downloading the editable textures", text);
++            info_row("Downloading the PNG package", text);
 +        } else {
-+            info_row("Editable textures", "Unpacking...");
++            info_row("PNG package", "Unpacking...");
 +        }
 +        return;
 +    }
@@ -201,11 +201,11 @@ index 5866ef9..47ef6d4 100644
 +            const std::lock_guard<std::mutex> lock(job->mutex);
 +            message = job->message;
 +        }
-+        info_row(phase == 3 ? "Editable textures" : "Editable textures: failed", message);
++        info_row(phase == 3 ? "PNG package" : "PNG package: failed", message);
 +    }
-+    if (button_row("Download the editable textures (PNG)...",
++    if (button_row("Download the PNG package...",
 +                   {false, {},
-+                    "Downloads the texture pack's original pictures (about 2.5 GB) into the data folder's textures_png folder, to edit. "
++                    "Only for those who want to customize their textures: the game does not need it. Downloads the texture pack's original pictures (about 2.5 GB) into the data folder's textures_png folder. "
 +                    "Files you already have there are not overwritten. The game reads only the textures folder: copy the ones you "
 +                    "edit into it, with the same folder structure."})) {
 +        job->phase = 1;
