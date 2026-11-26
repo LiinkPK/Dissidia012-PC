@@ -19,7 +19,9 @@ REL="${REL_DIR:-$ROOT/dist}"
 API="${MIN_API:-26}"   # the oldest Android it installs on; the native code is built against this level's system libraries
 APP_ID="${APP_ID:-io.github.liinkpk.d012hd}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu)}"
-GEN_OPT="${GEN_OPT:-1}"
+# Generated code at -O2: the game's own code runs on one thread and is what limits a phone (a Mate 9 measured in a battle: the main thread
+# at 70 to 90% of a core, the GPU nearly idle). It compiles slower than -O1; GEN_OPT=1 gives the quick build back for a test.
+GEN_OPT="${GEN_OPT:-2}"
 if [ -r /proc/meminfo ]; then RAM_GIB=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1048576 )); else RAM_GIB=$(( $(sysctl -n hw.memsize) / 1073741824 )); fi
 GEN_JOBS="${GEN_JOBS:-$(( RAM_GIB / 3 < 1 ? 1 : RAM_GIB / 3 ))}"
 
