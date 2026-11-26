@@ -34,8 +34,10 @@ namespace {
 constexpr std::uint32_t kDepth = 128;
 std::atomic<std::uint32_t> g_function[kDepth];  // the translated function entered at each depth of the chain
 std::atomic<std::uint32_t> g_top{0};            // the depth of the one running now
+std::atomic<psprecomp::Runtime *> g_runtime{nullptr};  // seen by the first hook: the host's side is timed through it
 
-void entering(psprecomp::Runtime &, psprecomp::AllegrexContext &, std::uint32_t target_pc, std::uint32_t depth) {
+void entering(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &, std::uint32_t target_pc, std::uint32_t depth) {
+    if (g_runtime.load(std::memory_order_relaxed) == nullptr) g_runtime.store(&runtime, std::memory_order_relaxed);
     const std::uint32_t at = depth < kDepth ? depth : kDepth - 1u;
     g_function[at].store(target_pc, std::memory_order_relaxed);
     g_top.store(at, std::memory_order_relaxed);
@@ -72,6 +74,7 @@ void sample_forever() {
     using Clock = std::chrono::steady_clock;
     std::unordered_map<std::uint32_t, std::uint32_t> self, inclusive;
     std::uint32_t samples = 0;
+    bool timing = false;
     Clock::time_point window = Clock::now();
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -91,6 +94,25 @@ void sample_forever() {
         if (Clock::now() - window >= std::chrono::seconds(1)) {
             report("[guest-profile] " + std::to_string(samples) + " looks. self:" + top_list(self, samples, 10));
             report("[guest-profile] inclusive:" + top_list(inclusive, samples, 14));
+            // The host's side: how long each system call the game made took in this second (the time inside the flip, the waits, the
+            // graphics list calls), and how many calls. The total is of the calls, which may overlap with waits for another thread.
+            if (psprecomp::Runtime *runtime = g_runtime.load(std::memory_order_relaxed)) {
+                if (!timing) {
+                    runtime->set_hle_timing(true);
+                    timing = true;
+                } else {
+                    std::string host;
+                    std::size_t shown = 0;
+                    for (const psprecomp::Runtime::HleTime &call : runtime->take_hle_times()) {
+                        if (shown++ >= 8) break;
+                        char entry[160];
+                        std::snprintf(entry, sizeof entry, " %s %.0fms/%llu", call.name.c_str(), call.milliseconds,
+                                      static_cast<unsigned long long>(call.calls));
+                        host += entry;
+                    }
+                    report("[guest-profile] host calls (ms spent / calls):" + host);
+                }
+            }
             self.clear();
             inclusive.clear();
             samples = 0;

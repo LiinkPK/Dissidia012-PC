@@ -1,0 +1,131 @@
+From d4dfbcb2dc355edee04e3cac341f82bbcbbaf1e0 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 21:16:56 +0100
+Subject: [PATCH] Runtime: optional per-import timing (set_hle_timing,
+ take_hle_times)
+
+---
+ include/psprecomp/runtime.hpp | 12 +++++++
+ src/runtime.cpp               | 59 +++++++++++++++++++++++++++++++++--
+ 2 files changed, 69 insertions(+), 2 deletions(-)
+
+diff --git a/include/psprecomp/runtime.hpp b/include/psprecomp/runtime.hpp
+index 778b35c..9b2852d 100644
+--- a/include/psprecomp/runtime.hpp
++++ b/include/psprecomp/runtime.hpp
+@@ -165,6 +165,15 @@ public:
+     // apart from a wait loop the host never satisfies.
+     [[nodiscard]] std::vector<std::pair<std::string, std::uint64_t>> hle_histogram() const;
+     void report_hle_histogram(std::size_t limit = 25u) const;
++    // Per-import timing, for a profile of the host's side of the game's calls: switched on, every HLE import adds its time. take_hle_times()
++    // returns what was added since the last call, longest first, and starts again. Costs a little on every call while it is on.
++    struct HleTime {
++        std::string name;
++        std::uint64_t calls{};
++        double milliseconds{};
++    };
++    void set_hle_timing(bool enabled) noexcept { hle_timing_ = enabled; }
++    [[nodiscard]] std::vector<HleTime> take_hle_times();
+ 
+ private:
+     friend struct RuntimeCorpusHost;
+@@ -185,6 +194,9 @@ private:
+     using HleLibrary = std::unordered_map<std::uint32_t, HleFunction>;
+ 
+     static std::string hle_key(std::string_view library, std::uint32_t nid);
++    // The time each HLE import takes (set_hle_timing): off until switched on. The totals are kept in runtime.cpp.
++    bool hle_timing_{};
++    void note_hle_time(std::string_view library, std::uint32_t nid, std::uint64_t nanoseconds);
+     [[nodiscard]] RecompiledFunction lookup_function(std::uint32_t address) const noexcept;
+     // Dense unit lookup for the production outer dispatcher.  Unlike
+     // lookup_function(), this touches a 512-entry table rather than the
+diff --git a/src/runtime.cpp b/src/runtime.cpp
+index 4f1ed7b..76ded60 100644
+--- a/src/runtime.cpp
++++ b/src/runtime.cpp
+@@ -4,6 +4,8 @@
+ #include "psprecomp/interpreter.hpp"
+ 
+ #include <algorithm>
++#include <chrono>
++#include <mutex>
+ #include <array>
+ #include <cstdlib>
+ #include <cstring>
+@@ -1391,7 +1393,14 @@ void Runtime::invoke_import_cached(std::uint32_t slot, std::string_view library,
+     }
+ 
+     if (hle_first_calls_) note_first_hle_call(library, nid, ctx);
+-    (*bound)(*this, ctx);
++    if (hle_timing_) {
++        const auto started = std::chrono::steady_clock::now();
++        (*bound)(*this, ctx);
++        note_hle_time(library, nid, static_cast<std::uint64_t>(
++                                        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count()));
++    } else {
++        (*bound)(*this, ctx);
++    }
+     if (!stopped_ && g_post_import_hook != nullptr) g_post_import_hook(*this, ctx);
+ }
+ 
+@@ -1411,10 +1420,56 @@ void Runtime::invoke_import(std::string_view library, std::uint32_t nid, Allegre
+         return;
+     }
+     if (hle_first_calls_) note_first_hle_call(library, nid, ctx);
+-    function_it->second(*this, ctx);
++    if (hle_timing_) {
++        const auto started = std::chrono::steady_clock::now();
++        function_it->second(*this, ctx);
++        note_hle_time(library, nid, static_cast<std::uint64_t>(
++                                        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count()));
++    } else {
++        function_it->second(*this, ctx);
++    }
+     if (!stopped_ && g_post_import_hook != nullptr) g_post_import_hook(*this, ctx);
+ }
+ 
++namespace {
++struct HleTimeEntry {
++    std::string library;
++    std::uint32_t nid{};
++    std::uint64_t calls{};
++    std::uint64_t nanoseconds{};
++};
++std::mutex g_hle_time_mutex;
++std::unordered_map<std::uint64_t, HleTimeEntry> g_hle_time;
++} // namespace
++
++void Runtime::note_hle_time(std::string_view library, std::uint32_t nid, std::uint64_t nanoseconds) {
++    const std::uint64_t key = (static_cast<std::uint64_t>(std::hash<std::string_view>{}(library)) << 32u) ^ nid;
++    const std::lock_guard<std::mutex> lock(g_hle_time_mutex);
++    HleTimeEntry &entry = g_hle_time[key];
++    if (entry.library.empty()) {
++        entry.library = std::string(library);
++        entry.nid = nid;
++    }
++    ++entry.calls;
++    entry.nanoseconds += nanoseconds;
++}
++
++std::vector<Runtime::HleTime> Runtime::take_hle_times() {
++    std::unordered_map<std::uint64_t, HleTimeEntry> taken;
++    {
++        const std::lock_guard<std::mutex> lock(g_hle_time_mutex);
++        taken.swap(g_hle_time);
++    }
++    std::vector<HleTime> result;
++    for (const auto &[key, entry] : taken) {
++        (void)key;
++        const std::string name = entry.library + "::" + nids_.resolve(entry.library, entry.nid).value_or(hex32(entry.nid));
++        result.push_back({name, entry.calls, static_cast<double>(entry.nanoseconds) / 1.0e6});
++    }
++    std::sort(result.begin(), result.end(), [](const HleTime &a, const HleTime &b) { return a.milliseconds > b.milliseconds; });
++    return result;
++}
++
+ AllegrexContext &Runtime::cpu() noexcept { return cpu_; }
+ const AllegrexContext &Runtime::cpu() const noexcept { return cpu_; }
+ 
+-- 
+2.54.0.windows.1
+
