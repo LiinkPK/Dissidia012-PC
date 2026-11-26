@@ -1,0 +1,47 @@
+From 0646926817145fea971069e7a9f56b2c2325c85d Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 19:09:52 +0100
+Subject: [PATCH] Menu: when it opens, the first row is asked for the cursor
+ until it takes it
+
+---
+ host/ui/widgets.cpp | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
+index 4372696..d82082f 100644
+--- a/host/ui/widgets.cpp
++++ b/host/ui/widgets.cpp
+@@ -347,6 +347,18 @@ void begin_panel(const char *id, const std::string &title, const std::string &su
+     const ImGuiIO &io = ImGui::GetIO();
+     const float margin = std::round(std::min(io.DisplaySize.x, io.DisplaySize.y) * 0.03f);
+     game_menu = dim_game;
++    if (dim_game) {
++        // The menu has just opened (no frame of it in the last two): no row has the cursor yet, and one is asked for until it takes. A
++        // window that appears is given the keyboard's focus a frame later than the first row asks for it, which dropped that first request.
++        static int last_panel_frame = -1000;
++        const int frame = ImGui::GetFrameCount();
++        if (frame - last_panel_frame > 2) {
++            row_last_focused = 0;
++            rows_unfocused_frames = 0;
++            focus_next = true;
++        }
++        last_panel_frame = frame;
++    }
+     ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                              ImGuiWindowFlags_NoBringToFrontOnFocus;
+     if (dim_game) {
+@@ -467,6 +479,10 @@ void begin_footer() {
+             ImGui::SetFocusID(row_last_focused, ImGui::GetCurrentWindow());
+             ImGui::GetCurrentContext()->NavCursorVisible = true;
+         }
++    } else if (game_menu && row_last_focused == 0 && !ImGui::GetIO().WantTextInput &&
++               !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
++        focus_next = true;  // no row has had the cursor since the menu opened: the first one is asked again
++        ImGui::GetCurrentContext()->NavCursorVisible = true;
+     } else {
+         rows_unfocused_frames = 0;
+     }
+-- 
+2.54.0.windows.1
+

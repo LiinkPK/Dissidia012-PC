@@ -1,0 +1,87 @@
+From 811515ae1d5333efefb72e21b7d700f7234bc51e Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 19:08:33 +0100
+Subject: [PATCH] Video: Performance mode, Dynamic resolution, Upscaling and
+ Anti-aliasing rows are shown (they were inside the hidden block)
+
+---
+ host/ui/menu.cpp | 56 ++++++++++++++++++++++++------------------------
+ 1 file changed, 28 insertions(+), 28 deletions(-)
+
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index e4a4816..197a0ab 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -714,34 +714,6 @@ void Menu::video() {
+         }
+     }
+ #endif
+-    // Aspect ratio, Scaling filter and Texture filter are fixed (Stretch, Smooth, Smooth: see settings.cpp
+-    // enforce_fixed_settings). Their rows are kept here, hidden, in case they come back.
+-    constexpr bool kShowFixedVideoRows = false;
+-    if (kShowFixedVideoRows) {
+-    {
+-        static const char *const kAspects[] = {"Original", "Stretch", "Fill"};
+-        // Fill is offered only to a game that can widen its own view.
+-        const bool fill = gpu::VulkanRenderer::supports_fill();
+-        const int current = static_cast<int>(gpu::VulkanRenderer::usable_aspect(s.aspect));
+-        const std::string description =
+-            std::string("Original keeps the PSP's shape with black bars at the sides or top. Stretch fills the "
+-                        "window by stretching the picture.") +
+-            (fill ? " Fill widens (or narrows) the game's view to the window's shape, keeping its height, and "
+-                    "keeps the interface in the PSP's proportions."
+-                  : "");
+-        if (const int delta = choice_row("Aspect ratio", kAspects[current], options_for("video.aspect", description))) {
+-            s.aspect = static_cast<settings::Aspect>(cycle(current, delta, fill ? 3 : 2));
+-            renderer().set_aspect(s.aspect);
+-            settings::save();
+-        }
+-    }
+-    if (choice_row("Scaling filter", s.sharp_screen ? "Sharp" : "Smooth",
+-                   options_for("video.sharp_screen", "How the finished picture is scaled to the window: smooth "
+-                                                     "(bilinear) or sharp (nearest pixel)."))) {
+-        s.sharp_screen = !s.sharp_screen;
+-        renderer().set_sharp_screen(s.sharp_screen);
+-        settings::save();
+-    }
+     {
+         // One step for a slow computer or a phone: the game is drawn at 2x and made sharp again by the upscaler, with FXAA over it, which
+         // costs a fraction of drawing 4x. Turning it off goes back to 4x with neither.
+@@ -785,6 +757,34 @@ void Menu::video() {
+         renderer().set_fxaa(s.fxaa);
+         settings::save();
+     }
++    // Aspect ratio, Scaling filter and Texture filter are fixed (Stretch, Smooth, Smooth: see settings.cpp
++    // enforce_fixed_settings). Their rows are kept here, hidden, in case they come back.
++    constexpr bool kShowFixedVideoRows = false;
++    if (kShowFixedVideoRows) {
++    {
++        static const char *const kAspects[] = {"Original", "Stretch", "Fill"};
++        // Fill is offered only to a game that can widen its own view.
++        const bool fill = gpu::VulkanRenderer::supports_fill();
++        const int current = static_cast<int>(gpu::VulkanRenderer::usable_aspect(s.aspect));
++        const std::string description =
++            std::string("Original keeps the PSP's shape with black bars at the sides or top. Stretch fills the "
++                        "window by stretching the picture.") +
++            (fill ? " Fill widens (or narrows) the game's view to the window's shape, keeping its height, and "
++                    "keeps the interface in the PSP's proportions."
++                  : "");
++        if (const int delta = choice_row("Aspect ratio", kAspects[current], options_for("video.aspect", description))) {
++            s.aspect = static_cast<settings::Aspect>(cycle(current, delta, fill ? 3 : 2));
++            renderer().set_aspect(s.aspect);
++            settings::save();
++        }
++    }
++    if (choice_row("Scaling filter", s.sharp_screen ? "Sharp" : "Smooth",
++                   options_for("video.sharp_screen", "How the finished picture is scaled to the window: smooth "
++                                                     "(bilinear) or sharp (nearest pixel)."))) {
++        s.sharp_screen = !s.sharp_screen;
++        renderer().set_sharp_screen(s.sharp_screen);
++        settings::save();
++    }
+     if (choice_row("Texture filter", s.sharp_textures ? "Sharp" : "Smooth",
+                    options_for("video.sharp_textures", "How the game's textures are sampled: smooth (bilinear) or "
+                                                        "sharp (nearest texel)."))) {
+-- 
+2.54.0.windows.1
+
