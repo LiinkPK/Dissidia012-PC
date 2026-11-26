@@ -1,0 +1,330 @@
+From 1c6311b9290e865a707f5d14992cc89af20f4fec Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 17:56:14 +0100
+Subject: [PATCH] Video: Upscaling (bicubic with sharpening, from the game's
+ own resolution) and Performance mode
+
+---
+ host/gpu/shaders/level.frag  | 59 ++++++++++++++++++++++++++++++++++--
+ host/gpu/vulkan_renderer.cpp | 50 +++++++++++++++++++++---------
+ host/gpu/vulkan_renderer.hpp |  2 ++
+ host/settings/settings.cpp   |  1 +
+ host/settings/settings.hpp   |  1 +
+ host/ui/menu.cpp             | 28 +++++++++++++++++
+ 6 files changed, 124 insertions(+), 17 deletions(-)
+
+diff --git a/host/gpu/shaders/level.frag b/host/gpu/shaders/level.frag
+index 2a64241..0f388e3 100644
+--- a/host/gpu/shaders/level.frag
++++ b/host/gpu/shaders/level.frag
+@@ -13,7 +13,8 @@ layout(push_constant) uniform Level {
+     // cos and sin of the turn (anticlockwise on screen), the zoom, and the
+     // picture's width over its height.
+     vec4 turn;
+-    // x: 1 when the picture is smoothed (FXAA).
++    // x: 1 when the picture is smoothed (FXAA). y: 1 when it is upscaled (the frame image is then the game's own size, not the
++    // window's). z: the upscaler's sharpening, 0 to 1.
+     vec4 options;
+ } level;
+ 
+@@ -47,6 +48,53 @@ vec3 fxaa(vec2 uv) {
+     return (l_b < l_min || l_b > l_max) ? a : b;
+ }
+ 
++// Bicubic (Catmull-Rom) sample in five bilinear taps: sharper than the plain bilinear stretch of a picture drawn smaller than
++// the window.
++vec3 catmull(vec2 uv) {
++    vec2 size = vec2(textureSize(frame, 0));
++    vec2 position = uv * size;
++    vec2 centre = floor(position - 0.5) + 0.5;
++    vec2 f = position - centre;
++    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
++    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
++    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
++    vec2 w3 = f * f * (-0.5 + 0.5 * f);
++    vec2 w12 = w1 + w2;
++    vec2 offset12 = w2 / w12;
++    vec2 p0 = (centre - 1.0) / size;
++    vec2 p3 = (centre + 2.0) / size;
++    vec2 p12 = (centre + offset12) / size;
++    vec3 result = vec3(0.0);
++    result += texture(frame, vec2(p0.x, p0.y)).rgb * (w0.x * w0.y);
++    result += texture(frame, vec2(p12.x, p0.y)).rgb * (w12.x * w0.y);
++    result += texture(frame, vec2(p3.x, p0.y)).rgb * (w3.x * w0.y);
++    result += texture(frame, vec2(p0.x, p12.y)).rgb * (w0.x * w12.y);
++    result += texture(frame, vec2(p12.x, p12.y)).rgb * (w12.x * w12.y);
++    result += texture(frame, vec2(p3.x, p12.y)).rgb * (w3.x * w12.y);
++    result += texture(frame, vec2(p0.x, p3.y)).rgb * (w0.x * w3.y);
++    result += texture(frame, vec2(p12.x, p3.y)).rgb * (w12.x * w3.y);
++    result += texture(frame, vec2(p3.x, p3.y)).rgb * (w3.x * w3.y);
++    return clamp(result, 0.0, 1.0);
++}
++
++// Contrast adaptive sharpening (AMD FidelityFX CAS, MIT), the cross-shaped form: each pixel is sharpened as much as its neighbourhood
++// can take without overshooting, so flat areas stay clean and edges gain bite.
++vec3 sharpen(vec2 uv, vec3 e, float amount) {
++    vec2 dx = dFdx(uv), dy = dFdy(uv);
++    vec2 px_step = vec2(abs(dx.x) + abs(dy.x), abs(dx.y) + abs(dy.y));
++    vec3 b = texture(frame, uv + vec2(0.0, -px_step.y)).rgb;
++    vec3 d = texture(frame, uv + vec2(-px_step.x, 0.0)).rgb;
++    vec3 f = texture(frame, uv + vec2(px_step.x, 0.0)).rgb;
++    vec3 h = texture(frame, uv + vec2(0.0, px_step.y)).rgb;
++    vec3 low = min(min(min(d, e), min(f, b)), h);
++    vec3 high = max(max(max(d, e), max(f, b)), h);
++    vec3 amp = sqrt(clamp(min(low, 1.0 - high) / max(high, vec3(1e-4)), 0.0, 1.0));
++    float peak = -1.0 / mix(8.0, 5.0, clamp(amount, 0.0, 1.0));
++    vec3 w = amp * peak;
++    vec3 weight = 1.0 / (1.0 + 4.0 * w);
++    return clamp((b * w + d * w + f * w + h * w + e) * weight, 0.0, 1.0);
++}
++
+ void main() {
+     // Centred, in units of the picture's height, y down as on screen.
+     vec2 point = (picture - 0.5) * vec2(level.turn.w, 1.0);
+@@ -57,5 +105,12 @@ void main() {
+     vec2 source = vec2(c * point.x - s * point.y, s * point.x + c * point.y) / level.turn.z;
+     vec2 uv = source / vec2(level.turn.w, 1.0) + 0.5;
+     vec2 frame_uv = level.rect.xy + clamp(uv, 0.0, 1.0) * level.rect.zw;
+-    color = level.options.x > 0.5 ? vec4(fxaa(frame_uv), 1.0) : texture(frame, frame_uv);
++    if (level.options.x > 0.5 || level.options.y > 0.5) {
++        // Smoothed (FXAA), or upscaled (bicubic); the upscaler also sharpens whichever of the two it starts from.
++        vec3 base = level.options.x > 0.5 ? fxaa(frame_uv) : catmull(frame_uv);
++        if (level.options.y > 0.5 && level.options.z > 0.0) base = sharpen(frame_uv, base, level.options.z);
++        color = vec4(base, 1.0);
++    } else {
++        color = texture(frame, frame_uv);
++    }
+ }
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index cb6661f..33cfa25 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1324,6 +1324,8 @@ struct VulkanRenderer::Impl {
+     std::array<std::uint32_t, 2> display_addresses{};
+     bool sharp_screen{};
+     bool fxaa{};  // the finished picture goes through the level pass with FXAA on
++    bool upscale{};  // ... and with the bicubic upscaler on: the pass then reads the picture at the game's own resolution
++    VkExtent2D level_extent{};  // the size of the level images
+     bool sharp_textures{};
+     std::string device_name;
+ 
+@@ -2813,7 +2815,7 @@ struct VulkanRenderer::Impl {
+     }
+ #endif
+     bool create_ui_framebuffers(std::string &error);
+-    void record_game_blit(VkCommandBuffer commands, VkImage source, VkImage destination);
++    void record_game_blit(VkCommandBuffer commands, VkImage source, VkImage destination, bool copy_only = false);
+     // Target size for the current settings and window.
+     [[nodiscard]] VkExtent2D wanted_target_extent() const;
+     // Rebuilds every target at `extent`, its picture scaled into it. Not while
+@@ -3076,6 +3078,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+     impl.aspect = usable_aspect(player.aspect);
+     impl.sharp_screen = player.sharp_screen;
+     impl.fxaa = player.fxaa;
++    impl.upscale = player.upscale;
+     impl.sharp_textures = player.sharp_textures;
+     impl.trace_interpolation = portablekit::env("TRACE_INTERPOLATION") != nullptr;
+     impl.capture_blended_only = portablekit::env("CAPTURE_BLENDED") != nullptr;
+@@ -4399,7 +4402,14 @@ bool VulkanRenderer::Impl::create_level_pipeline(std::string &error) {
+ // A failure is reported once, and the picture is then simply not turned.
+ bool VulkanRenderer::Impl::ensure_level_images() {
+     if (level_failed) return false;
++    // The pass reads the picture at the game's own resolution when it upscales, at the window's otherwise.
++    const VkExtent2D wanted = upscale ? target_extent : swapchain_extent;
++    if (!level_images.empty() && (level_extent.width != wanted.width || level_extent.height != wanted.height)) {
++        device_wait_idle();
++        destroy_level_images();
++    }
+     if (!level_images.empty() && level_images.size() == swapchain_images.size()) return true;
++    level_extent = wanted;
+     std::string error;
+     const auto fail = [&] {
+         std::cout << "[render] cannot turn the picture for the level horizon: " << error << std::endl;
+@@ -4411,7 +4421,7 @@ bool VulkanRenderer::Impl::ensure_level_images() {
+     level_images.resize(swapchain_images.size());
+     for (std::size_t i = 0; i < level_images.size(); ++i) {
+         LevelImage &level = level_images[i];
+-        if (!create_image(swapchain_extent.width, swapchain_extent.height, swapchain_format,
++        if (!create_image(wanted.width, wanted.height, swapchain_format,
+                           VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, level.image, level.memory,
+                           level.view, VK_IMAGE_ASPECT_COLOR_BIT, error))
+             return fail();
+@@ -4494,17 +4504,18 @@ void VulkanRenderer::Impl::record_level(VkCommandBuffer commands, std::uint32_t
+     const float c = std::cos(radians);
+     const float s = std::fabs(std::sin(radians));
+     const float zoom = std::max(c + height / width * s, c + width / height * s);
+-    const float push[12] = {static_cast<float>(picture_low.x) / static_cast<float>(swapchain_extent.width),
+-                           static_cast<float>(picture_low.y) / static_cast<float>(swapchain_extent.height),
+-                           width / static_cast<float>(swapchain_extent.width),
+-                           height / static_cast<float>(swapchain_extent.height),
++    // The picture lies in the frame image at the window's size (the plain blit), or fills it (the upscaling copy).
++    const float push[12] = {upscale ? 0.0f : static_cast<float>(picture_low.x) / static_cast<float>(swapchain_extent.width),
++                           upscale ? 0.0f : static_cast<float>(picture_low.y) / static_cast<float>(swapchain_extent.height),
++                           upscale ? 1.0f : width / static_cast<float>(swapchain_extent.width),
++                           upscale ? 1.0f : height / static_cast<float>(swapchain_extent.height),
+                            c,
+                            std::sin(radians),
+                            zoom,
+                            width / height,
+                            fxaa ? 1.0f : 0.0f,
+-                           0.0f,
+-                           0.0f,
++                           upscale ? 1.0f : 0.0f,
++                           0.5f,  // the upscaler's sharpening, 0 to 1
+                            0.0f};
+     const VkClearValue black{{{0.0f, 0.0f, 0.0f, 1.0f}}};
+     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+@@ -4555,7 +4566,9 @@ bool VulkanRenderer::Impl::create_ui_framebuffers(std::string &error) {
+ // Scales the game frame onto the swapchain image, which is in TRANSFER_DST
+ // layout: stretched over the whole window, or at the PSP's aspect ratio with
+ // black bars. Fill's target already has the window's shape.
+-void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage source, VkImage destination) {
++// `copy_only`: the picture goes into `destination` whole and unscaled (a level image at the game's resolution); only picture_low and
++// picture_high are worked out, for the pass that draws it into the window.
++void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage source, VkImage destination, bool copy_only) {
+     const auto width = static_cast<std::int32_t>(content_rect.extent.width);
+     const auto height = static_cast<std::int32_t>(content_rect.extent.height);
+     const std::int32_t x0 = content_rect.offset.x;
+@@ -4575,7 +4588,7 @@ void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage so
+         }
+         low = {x0 + (width - shown_width) / 2, y0 + (height - shown_height) / 2, 0};
+         high = {low.x + shown_width, low.y + shown_height, 1};
+-        if (partial || shown_width < width || shown_height < height) {
++        if (!copy_only && (partial || shown_width < width || shown_height < height)) {
+             const VkClearColorValue black{{0.0f, 0.0f, 0.0f, 1.0f}};
+             const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+             vkCmdClearColorImage(commands, destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1u, &range);
+@@ -4591,10 +4604,11 @@ void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage so
+     blit.srcOffsets[1] = {static_cast<std::int32_t>(target_extent.width),
+                           static_cast<std::int32_t>(target_extent.height), 1};
+     blit.dstSubresource = blit.srcSubresource;
+-    blit.dstOffsets[0] = low;
+-    blit.dstOffsets[1] = high;
++    blit.dstOffsets[0] = copy_only ? VkOffset3D{0, 0, 0} : low;
++    blit.dstOffsets[1] = copy_only ? VkOffset3D{static_cast<std::int32_t>(target_extent.width), static_cast<std::int32_t>(target_extent.height), 1} : high;
+     vkCmdBlitImage(commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination,
+-                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, sharp_screen ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
++                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit,
++                   copy_only || sharp_screen ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+     perf::count_target_copy();
+ }
+ 
+@@ -4680,10 +4694,10 @@ bool VulkanRenderer::Impl::record_window(VkCommandBuffer commands, const std::ui
+             // it (the overlay, the interface) stays upright.
+             const float level = input::motion::level_degrees();
+             // The level pass also does FXAA, so it runs for that alone too (turned by nothing then).
+-            if ((std::fabs(level) > 0.01f || fxaa) && ensure_level_images() && image_index < level_images.size()) {
++            if ((std::fabs(level) > 0.01f || fxaa || upscale) && ensure_level_images() && image_index < level_images.size()) {
+                 transition(commands, level_images[image_index].image, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+-                record_game_blit(commands, source, level_images[image_index].image);
++                record_game_blit(commands, source, level_images[image_index].image, upscale);
+                 record_level(commands, image_index, level);
+             } else {
+                 record_game_blit(commands, source, target);
+@@ -8244,6 +8258,12 @@ void VulkanRenderer::set_sharp_screen(bool sharp) {
+     impl_->sharp_screen = sharp;
+ }
+ 
++void VulkanRenderer::set_upscale(bool enabled) {
++    if (!impl_) return;
++    const Impl::Guard guard(*impl_);
++    impl_->upscale = enabled;
++}
++
+ void VulkanRenderer::set_fxaa(bool enabled) {
+     if (!impl_) return;
+     const Impl::Guard guard(*impl_);
+diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
+index 70d1ab3..01f5c3c 100644
+--- a/host/gpu/vulkan_renderer.hpp
++++ b/host/gpu/vulkan_renderer.hpp
+@@ -270,6 +270,8 @@ public:
+     void set_sharp_screen(bool sharp);
+     // FXAA anti-aliasing of the finished picture (the pass that also turns it for the level horizon).
+     void set_fxaa(bool enabled);
++    // Bicubic upscaling with sharpening of the picture to the window, in the same pass (a lower internal resolution looks sharper).
++    void set_upscale(bool enabled);
+     void set_sharp_textures(bool sharp);
+     // Draws an installed HD texture pack's images instead of the game's own
+     // textures (texture_pack.hpp). Takes effect from the next frame; off
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 06291c4..b496248 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -197,6 +197,7 @@ const std::vector<Field> &fields() {
+          [](const Settings &s) { return kAspects.format(s.aspect); }, nullptr},
+         BOOL_FIELD("video.sharp_screen", sharp_screen),
+         BOOL_FIELD("video.fxaa", fxaa),
++        BOOL_FIELD("video.upscale", upscale),
+         BOOL_FIELD("video.sharp_textures", sharp_textures),
+         {"video.texture_pack", "TEXTURE_PACK",
+          [](Settings &s, const std::string &t) { return parse_bool(t, s.texture_pack); },
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 26949e0..5f31bb4 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -50,6 +50,7 @@ struct Settings {
+     PresentMode present_mode{PresentMode::Fifo};
+     Aspect aspect{Aspect::Stretch};
+     bool sharp_screen{};               // nearest instead of linear scaling to the window
++    bool upscale{};                    // draw the (lower resolution) picture to the window with a sharper upscaler than the plain bilinear one
+     bool fxaa{};                       // FXAA anti-aliasing of the finished picture, at the window's resolution
+     bool sharp_textures{};             // nearest instead of linear texture sampling
+     bool texture_pack{true};           // draw an installed HD texture pack's images instead of the game's
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index b258ddd..100bbde 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -742,6 +742,32 @@ void Menu::video() {
+         renderer().set_sharp_screen(s.sharp_screen);
+         settings::save();
+     }
++    {
++        // One step for a slow computer or a phone: the game is drawn at 2x and made sharp again by the upscaler, with FXAA over it, which
++        // costs a fraction of drawing 4x. Turning it off goes back to 4x with neither.
++        const bool performance = s.internal_scale == 2u && s.upscale && s.fxaa;
++        if (choice_row("Performance mode", performance ? "On" : "Off",
++                       options_for("video.internal_scale",
++                                   "Draws the game at 2x and scales it up with a sharp upscaler and FXAA: much lighter on the graphics card, "
++                                   "and it still looks clean. Sets Resolution, Anti-aliasing and Upscaling together; you can change "
++                                   "each afterwards."))) {
++            s.internal_scale = performance ? 4u : 2u;
++            s.upscale = !performance;
++            s.fxaa = !performance;
++            renderer().set_internal_scale(s.internal_scale);
++            renderer().set_upscale(s.upscale);
++            renderer().set_fxaa(s.fxaa);
++            settings::save();
++        }
++    }
++    if (choice_row("Upscaling", s.upscale ? "Sharp" : "Off",
++                   options_for("video.upscale", "How the picture is scaled to the window when the Resolution is lower than the window: Off is "
++                                                "the plain smooth stretch; Sharp is a bicubic scale with light sharpening, which keeps "
++                                                "edges crisp."))) {
++        s.upscale = !s.upscale;
++        renderer().set_upscale(s.upscale);
++        settings::save();
++    }
+     if (choice_row("Anti-aliasing", s.fxaa ? "FXAA" : "Off",
+                    options_for("video.fxaa", "Smooths jagged edges on the finished picture. FXAA is light on the graphics card "
+                                              "(it costs a little more on a phone); Off draws the picture as it is."))) {
+@@ -899,6 +925,7 @@ void Menu::video() {
+         restore("video.aspect", s.aspect, d.aspect);
+         restore("video.sharp_screen", s.sharp_screen, d.sharp_screen);
+         restore("video.fxaa", s.fxaa, d.fxaa);
++        restore("video.upscale", s.upscale, d.upscale);
+         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
+         restore("video.texture_pack", s.texture_pack, d.texture_pack);
+         restore("video.texture_size", s.texture_size, d.texture_size);
+@@ -914,6 +941,7 @@ void Menu::video() {
+         renderer().set_aspect(s.aspect);
+         renderer().set_sharp_screen(s.sharp_screen);
+         renderer().set_fxaa(s.fxaa);
++        renderer().set_upscale(s.upscale);
+         renderer().set_sharp_textures(s.sharp_textures);
+         renderer().set_texture_pack(s.texture_pack);
+         renderer().reload_texture_pack();  // the images load again at the restored Texture quality
+-- 
+2.54.0.windows.1
+

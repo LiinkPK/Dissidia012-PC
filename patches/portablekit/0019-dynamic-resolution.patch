@@ -1,0 +1,241 @@
+From 9fd7755400c6ac95235da220bb0a3ebd9995f257 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 17:59:38 +0100
+Subject: [PATCH] Video: Dynamic resolution (steps the Resolution down and up
+ by the GPU's busy share) and it joins Performance mode
+
+---
+ host/gpu/vulkan_renderer.cpp | 77 ++++++++++++++++++++++++++++++++++--
+ host/gpu/vulkan_renderer.hpp |  3 ++
+ host/settings/settings.cpp   |  1 +
+ host/settings/settings.hpp   |  1 +
+ host/ui/menu.cpp             | 20 ++++++++--
+ 5 files changed, 95 insertions(+), 7 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 33cfa25..e544e63 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1326,6 +1326,21 @@ struct VulkanRenderer::Impl {
+     bool fxaa{};  // the finished picture goes through the level pass with FXAA on
+     bool upscale{};  // ... and with the bicubic upscaler on: the pass then reads the picture at the game's own resolution
+     VkExtent2D level_extent{};  // the size of the level images
++    // Dynamic resolution: the scale in use now (0: the Resolution setting), changed by dynamic_resolution_sample from the GPU time of
++    // each frame. Every two seconds the share of that time the GPU was busy decides: nearly always busy, a step down; with room to
++    // spare for two windows in a row, a step up, if the busier picture would still fit (a step costs the square of its scale).
++    bool dynamic_resolution{};
++    struct DynamicResolution {
++        std::uint32_t scale{};
++        perf::Clock::time_point window_start{};
++        perf::Clock::time_point last_change{};
++        double gpu_ms{};
++        int calm_windows{};
++    } dynamic;
++    void dynamic_resolution_sample(double gpu_ms);
++    [[nodiscard]] std::uint32_t scale_in_use() const {
++        return dynamic_resolution && dynamic.scale != 0u && requested_scale != 0u ? std::min(dynamic.scale, requested_scale) : requested_scale;
++    }
+     bool sharp_textures{};
+     std::string device_name;
+ 
+@@ -3054,7 +3069,52 @@ void VulkanRenderer::Impl::collect_gpu_time(std::uint32_t from) {
+         ticks += (end[0] - begin[0]) & gpu_timer_mask;
+         any = true;
+     }
+-    if (any) perf::add_gpu_time(static_cast<double>(ticks) * gpu_timer_ns_per_tick / 1.0e6);
++    if (any) {
++        const double milliseconds = static_cast<double>(ticks) * gpu_timer_ns_per_tick / 1.0e6;
++        perf::add_gpu_time(milliseconds);
++        dynamic_resolution_sample(milliseconds);
++    }
++}
++
++void VulkanRenderer::Impl::dynamic_resolution_sample(double gpu_ms) {
++    if (!dynamic_resolution || requested_scale == 0u || holding) {
++        dynamic.window_start = {};
++        return;
++    }
++    const perf::Clock::time_point now = perf::Clock::now();
++    if (dynamic.window_start == perf::Clock::time_point{}) {
++        dynamic.window_start = now;
++        dynamic.gpu_ms = 0.0;
++    }
++    dynamic.gpu_ms += gpu_ms;
++    const double elapsed = std::chrono::duration<double, std::milli>(now - dynamic.window_start).count();
++    if (elapsed < 2000.0) return;
++    const double busy = dynamic.gpu_ms / elapsed;
++    dynamic.window_start = now;
++    dynamic.gpu_ms = 0.0;
++    if (elapsed > 6000.0) return;  // a stall (a loading screen, the window moved): not a measure of the picture
++    const std::uint32_t ceiling = requested_scale;
++    const std::uint32_t floor_scale = std::min<std::uint32_t>(upscale ? 1u : 2u, ceiling);
++    const std::uint32_t current = std::clamp(dynamic.scale != 0u ? dynamic.scale : ceiling, floor_scale, ceiling);
++    const double since_change = std::chrono::duration<double>(now - dynamic.last_change).count();
++    std::uint32_t next = current;
++    if (busy > 0.85 && current > floor_scale && since_change >= 4.0) {
++        next = current - 1u;
++        dynamic.calm_windows = 0;
++    } else if (busy < 0.45 && current < ceiling) {
++        const double predicted = busy * static_cast<double>((current + 1u) * (current + 1u)) / static_cast<double>(current * current);
++        if (++dynamic.calm_windows >= 2 && predicted < 0.8 && since_change >= 6.0) {
++            next = current + 1u;
++            dynamic.calm_windows = 0;
++        }
++    } else {
++        dynamic.calm_windows = 0;
++    }
++    if (next == current) return;
++    dynamic.scale = next;
++    dynamic.last_change = now;
++    resize_now = true;  // applied by follow_window when the frame ends
++    std::cout << "[render] dynamic resolution: GPU busy " << static_cast<int>(busy * 100.0) << "%, resolution x" << current << " -> x" << next << std::endl;
+ }
+ 
+ VulkanRenderer::VulkanRenderer() : impl_(std::make_unique<Impl>()) {}
+@@ -3079,6 +3139,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+     impl.sharp_screen = player.sharp_screen;
+     impl.fxaa = player.fxaa;
+     impl.upscale = player.upscale;
++    impl.dynamic_resolution = player.dynamic_resolution;
+     impl.sharp_textures = player.sharp_textures;
+     impl.trace_interpolation = portablekit::env("TRACE_INTERPOLATION") != nullptr;
+     impl.capture_blended_only = portablekit::env("CAPTURE_BLENDED") != nullptr;
+@@ -8046,7 +8107,7 @@ VkExtent2D VulkanRenderer::Impl::wanted_target_extent() const {
+     const double window_width = known ? content_rect.extent.width : static_cast<double>(target_extent.width);
+     const double window_height = known ? content_rect.extent.height : static_cast<double>(target_extent.height);
+     if (aspect != settings::Aspect::Fill) {
+-        std::uint32_t scale = requested_scale;
++        std::uint32_t scale = scale_in_use();
+         if (scale == 0u) {
+             // The smallest multiple that covers the picture on the window.
+             const double x = window_width / kPspWidth;
+@@ -8059,7 +8120,7 @@ VkExtent2D VulkanRenderer::Impl::wanted_target_extent() const {
+     }
+     // Fill: the window's shape, 272 lines per step or the window's own lines.
+     const double shape = std::clamp(window_width / std::max(window_height, 1.0), 0.25, 8.0);
+-    double lines = requested_scale != 0u ? static_cast<double>(kPspHeight * requested_scale)
++    double lines = requested_scale != 0u ? static_cast<double>(kPspHeight * scale_in_use())
+                                          : std::clamp(window_height, static_cast<double>(kPspHeight),
+                                                       static_cast<double>(kMaxAutoLines));
+     lines = std::min(lines, kMaxTargetWidth / shape);
+@@ -8180,6 +8241,7 @@ void VulkanRenderer::set_internal_scale(std::uint32_t scale) {
+     if (!impl_) return;
+     const Impl::Guard guard(*impl_);
+     impl_->requested_scale = std::min(scale, settings::kMaxInternalScale);
++    impl_->dynamic.scale = 0u;  // a new setting starts the adaptation again
+     impl_->resize_now = true;
+     impl_->follow_window();
+ }
+@@ -8258,6 +8320,15 @@ void VulkanRenderer::set_sharp_screen(bool sharp) {
+     impl_->sharp_screen = sharp;
+ }
+ 
++void VulkanRenderer::set_dynamic_resolution(bool enabled) {
++    if (!impl_) return;
++    const Impl::Guard guard(*impl_);
++    impl_->dynamic_resolution = enabled;
++    impl_->dynamic.scale = 0u;
++    impl_->dynamic.window_start = {};
++    impl_->resize_now = true;
++}
++
+ void VulkanRenderer::set_upscale(bool enabled) {
+     if (!impl_) return;
+     const Impl::Guard guard(*impl_);
+diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
+index 01f5c3c..69fc4da 100644
+--- a/host/gpu/vulkan_renderer.hpp
++++ b/host/gpu/vulkan_renderer.hpp
+@@ -272,6 +272,9 @@ public:
+     void set_fxaa(bool enabled);
+     // Bicubic upscaling with sharpening of the picture to the window, in the same pass (a lower internal resolution looks sharper).
+     void set_upscale(bool enabled);
++    // The Resolution steps down by itself while the GPU is busy nearly all the time, and back up when it has room again (never above
++    // the Resolution setting).
++    void set_dynamic_resolution(bool enabled);
+     void set_sharp_textures(bool sharp);
+     // Draws an installed HD texture pack's images instead of the game's own
+     // textures (texture_pack.hpp). Takes effect from the next frame; off
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index b496248..99d6d8a 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -198,6 +198,7 @@ const std::vector<Field> &fields() {
+         BOOL_FIELD("video.sharp_screen", sharp_screen),
+         BOOL_FIELD("video.fxaa", fxaa),
+         BOOL_FIELD("video.upscale", upscale),
++        BOOL_FIELD("video.dynamic_resolution", dynamic_resolution),
+         BOOL_FIELD("video.sharp_textures", sharp_textures),
+         {"video.texture_pack", "TEXTURE_PACK",
+          [](Settings &s, const std::string &t) { return parse_bool(t, s.texture_pack); },
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 5f31bb4..1ae2475 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -50,6 +50,7 @@ struct Settings {
+     PresentMode present_mode{PresentMode::Fifo};
+     Aspect aspect{Aspect::Stretch};
+     bool sharp_screen{};               // nearest instead of linear scaling to the window
++    bool dynamic_resolution{};         // lower the Resolution by itself while the graphics card cannot keep up, raise it again when it can
+     bool upscale{};                    // draw the (lower resolution) picture to the window with a sharper upscaler than the plain bilinear one
+     bool fxaa{};                       // FXAA anti-aliasing of the finished picture, at the window's resolution
+     bool sharp_textures{};             // nearest instead of linear texture sampling
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 100bbde..e4a4816 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -745,21 +745,31 @@ void Menu::video() {
+     {
+         // One step for a slow computer or a phone: the game is drawn at 2x and made sharp again by the upscaler, with FXAA over it, which
+         // costs a fraction of drawing 4x. Turning it off goes back to 4x with neither.
+-        const bool performance = s.internal_scale == 2u && s.upscale && s.fxaa;
++        const bool performance = s.internal_scale == 2u && s.upscale && s.fxaa && s.dynamic_resolution;
+         if (choice_row("Performance mode", performance ? "On" : "Off",
+                        options_for("video.internal_scale",
+-                                   "Draws the game at 2x and scales it up with a sharp upscaler and FXAA: much lighter on the graphics card, "
+-                                   "and it still looks clean. Sets Resolution, Anti-aliasing and Upscaling together; you can change "
+-                                   "each afterwards."))) {
++                                   "Draws the game at 2x (lower by itself when the graphics card still cannot keep up) and scales it up with a "
++                                   "sharp upscaler and FXAA: much lighter on the graphics card, and it still looks clean. Sets "
++                                   "Resolution, Dynamic resolution, Anti-aliasing and Upscaling together; you can change each afterwards."))) {
+             s.internal_scale = performance ? 4u : 2u;
+             s.upscale = !performance;
+             s.fxaa = !performance;
++            s.dynamic_resolution = !performance;
++            renderer().set_dynamic_resolution(s.dynamic_resolution);
+             renderer().set_internal_scale(s.internal_scale);
+             renderer().set_upscale(s.upscale);
+             renderer().set_fxaa(s.fxaa);
+             settings::save();
+         }
+     }
++    if (choice_row("Dynamic resolution", s.dynamic_resolution ? "On" : "Off",
++                   options_for("video.dynamic_resolution", "Lowers the Resolution by itself, one step at a time, while the graphics card is "
++                                                           "busy nearly all the time, and raises it again when it has room, never above "
++                                                           "the Resolution you chose. A step takes a moment to apply."))) {
++        s.dynamic_resolution = !s.dynamic_resolution;
++        renderer().set_dynamic_resolution(s.dynamic_resolution);
++        settings::save();
++    }
+     if (choice_row("Upscaling", s.upscale ? "Sharp" : "Off",
+                    options_for("video.upscale", "How the picture is scaled to the window when the Resolution is lower than the window: Off is "
+                                                 "the plain smooth stretch; Sharp is a bicubic scale with light sharpening, which keeps "
+@@ -926,6 +936,7 @@ void Menu::video() {
+         restore("video.sharp_screen", s.sharp_screen, d.sharp_screen);
+         restore("video.fxaa", s.fxaa, d.fxaa);
+         restore("video.upscale", s.upscale, d.upscale);
++        restore("video.dynamic_resolution", s.dynamic_resolution, d.dynamic_resolution);
+         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
+         restore("video.texture_pack", s.texture_pack, d.texture_pack);
+         restore("video.texture_size", s.texture_size, d.texture_size);
+@@ -942,6 +953,7 @@ void Menu::video() {
+         renderer().set_sharp_screen(s.sharp_screen);
+         renderer().set_fxaa(s.fxaa);
+         renderer().set_upscale(s.upscale);
++        renderer().set_dynamic_resolution(s.dynamic_resolution);
+         renderer().set_sharp_textures(s.sharp_textures);
+         renderer().set_texture_pack(s.texture_pack);
+         renderer().reload_texture_pack();  // the images load again at the restored Texture quality
+-- 
+2.54.0.windows.1
+
