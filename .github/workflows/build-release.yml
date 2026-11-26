@@ -10,6 +10,14 @@ on:
         description: "Skip macOS in this run"
         type: boolean
         default: false
+      macos_runner:
+        description: "macOS runner (when one pool has no free runner, try another: the build is universal on any of them)"
+        type: choice
+        options:
+          - macos-15
+          - macos-26
+          - macos-15-intel
+        default: macos-15
 
 permissions:
   contents: write
@@ -75,7 +83,7 @@ jobs:
   macos:
     needs: check
     if: ${{ !inputs.skip_macos }}
-    runs-on: macos-15
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     env:
       D012_RELAY_KEY: ${{ secrets.RELAY_KEY }}  # signs the online connections; builds without it cannot reach the relay
     timeout-minutes: 360
