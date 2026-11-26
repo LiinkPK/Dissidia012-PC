@@ -179,6 +179,7 @@ GameProfile build(const Release &r) {
         .param_sfo_path_on_disc = "PSP_GAME/PARAM.SFO",
         .release_name = r.name,
         .release_version = kReleaseVersion,
+        .png_pack_url = "https://github.com/LiinkPK/Dissidia012HDTextures/archive/refs/heads/master.tar.gz",
         .hud_scaled_by_game = true,  // the game marks its HUD layouts in the display list (d012_vk/d012_hud_layout.cpp)
         // SHA-256 of PSP_GAME/SYSDIR/EBOOT.BIN on the disc, and of its decryption.
         .encrypted_executable_sha256 = "0c0c12c0f46e9cc37adb0a649a761975fab92a20c8d2e9252f514ef29d1ca289",

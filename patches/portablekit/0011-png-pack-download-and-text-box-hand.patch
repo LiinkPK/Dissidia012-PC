@@ -1,0 +1,334 @@
+From 48649014642871d204ab69ae85183f7a956b71c5 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 11:57:49 +0100
+Subject: [PATCH] Menu: the hand follows text boxes; Video page can download
+ the editable texture PNGs into textures_png (profile png_pack_url)
+
+---
+ host/profile.hpp                |   3 +
+ host/ui/menu.cpp                |   1 +
+ host/ui/texture_pack_screen.cpp | 149 ++++++++++++++++++++++++++++++++
+ host/ui/widgets.cpp             |  62 ++++++++-----
+ host/ui/widgets.hpp             |   2 +
+ 5 files changed, 194 insertions(+), 23 deletions(-)
+
+diff --git a/host/profile.hpp b/host/profile.hpp
+index d8f6777..58db1fe 100644
+--- a/host/profile.hpp
++++ b/host/profile.hpp
+@@ -160,6 +160,9 @@ struct GameProfile {
+     // The version of this release of the port, as its GitHub tag ("v1.0.3"): what the update check compares with
+     // the newest release. Null: the build's git describe text.
+     const char *release_version = nullptr;
++    // Where the editable texture pictures (PNG) of the game's texture pack can be downloaded: a .tar.gz of a repository, whose top
++    // folder is dropped. Null: the menu has no download for them.
++    const char *png_pack_url = nullptr;
+     // The game moves its own battle HUD to the Battle HUD settings (host code in the profile's sources does it
+     // in the game's layouts), so the renderer must not also scale what it takes for the HUD by its place on the
+     // screen.
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index dfc4a0d..0f6ddf6 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -1025,6 +1025,7 @@ bool text_row(const char *id, const char *label, std::string &value, std::size_t
+         ImGui::FocusItem();
+     }
+     field.focused = ImGui::IsItemFocused();
++    focus_marker(start, {start.x + width, start.y + row_height});
+     if (ImGui::IsItemFocused() || ImGui::IsItemHovered()) {
+         std::string description = o.description;
+         if (!o.note.empty()) description += "\n" + o.note;
+diff --git a/host/ui/texture_pack_screen.cpp b/host/ui/texture_pack_screen.cpp
+index 5866ef9..47ef6d4 100644
+--- a/host/ui/texture_pack_screen.cpp
++++ b/host/ui/texture_pack_screen.cpp
+@@ -3,6 +3,7 @@
+ #include "ui/file_browser.hpp"
+ #include "ui/layer.hpp"
+ #include "ui/save_screen.hpp"
++#include "ui/updater.hpp"
+ #include "ui/widgets.hpp"
+ 
+ #include "gpu/texture_pack_import.hpp"
+@@ -13,16 +14,27 @@
+ 
+ #include "imgui.h"
+ 
++#if defined(_WIN32)
++#define WIN32_LEAN_AND_MEAN
++#define NOMINMAX
++#include <windows.h>
++#endif
++
++#include <atomic>
+ #include <chrono>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <future>
++#include <mutex>
+ #include <iostream>
+ #include <memory>
+ #include <optional>
+ #include <string>
+ #include <system_error>
++#include <thread>
+ #include <utility>
++#include <vector>
+ 
+ namespace portablekit::ui {
+ namespace {
+@@ -451,6 +463,140 @@ void tick() {
+     finish(std::move(outcome));
+ }
+ 
++// ---- The editable pictures (PNG) of the pack, downloaded from the profile's address into data/textures_png ----
++// Windows, Linux and macOS only (they have the updater's download and a tar that reads .tar.gz). The game does not read this folder: a
++// player copies the pictures they edit into the textures folder, with the same folder structure. Nothing already there is overwritten.
++#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__)) || (defined(__APPLE__) && !defined(__ANDROID__))
++#define PK_PNG_PACK 1
++#endif
++
++#if defined(PK_PNG_PACK)
++struct PngPackJob {
++    std::atomic<int> phase{0};  // 0 idle, 1 downloading, 2 unpacking, 3 done, 4 failed
++    std::atomic<std::uint64_t> done{0}, total{0};
++    std::mutex mutex;
++    std::string message;  // the result: where the pictures are, or why it failed
++};
++
++std::shared_ptr<PngPackJob> &png_job() {
++    static std::shared_ptr<PngPackJob> job = std::make_shared<PngPackJob>();
++    return job;
++}
++
++// Runs a command with no window and returns its exit code (-1 when it could not start).
++int run_hidden(const std::string &command) {
++#if defined(_WIN32)
++    std::vector<char> line(command.begin(), command.end());
++    line.push_back('\0');
++    STARTUPINFOA startup{};
++    startup.cb = sizeof(startup);
++    PROCESS_INFORMATION process{};
++    if (!CreateProcessA(nullptr, line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process)) return -1;
++    WaitForSingleObject(process.hProcess, INFINITE);
++    DWORD code = 1;
++    GetExitCodeProcess(process.hProcess, &code);
++    CloseHandle(process.hProcess);
++    CloseHandle(process.hThread);
++    return static_cast<int>(code);
++#else
++    return std::system(command.c_str());
++#endif
++}
++
++void png_pack_thread(std::shared_ptr<PngPackJob> job, std::string url, fs::path data) {
++    const auto fail = [&](const std::string &why) {
++        {
++            const std::lock_guard<std::mutex> lock(job->mutex);
++            job->message = why;
++        }
++        job->phase = 4;
++        std::cout << "[texpack] png pack: " << why << std::endl;
++    };
++    std::error_code ec;
++    const fs::path dest = data / "textures_png";
++    const fs::path archive = data / "textures_png_download.tar.gz";
++    fs::create_directories(dest, ec);
++    // The archive is about 2.5 GB and unpacks to as much again: say so before starting when the disk is too small.
++    const fs::space_info space = fs::space(data, ec);
++    if (!ec && space.available < (6ull << 30)) return fail("not enough free space (about 6 GB are needed while it downloads and unpacks)");
++    std::string error;
++    job->phase = 1;
++    if (!updater::download_file(url, archive, 0u,
++                                [&](std::uint64_t done, std::uint64_t total) {
++                                    job->done = done;
++                                    job->total = total;
++                                },
++                                error)) {
++        fs::remove(archive, ec);
++        return fail("the download failed: " + error);
++    }
++    job->phase = 2;
++    // tar reads .tar.gz everywhere (Windows 10 and later ship bsdtar). The repository's top folder is dropped; files that are already in
++    // the destination are skipped, never overwritten.
++    const std::string a = utf8(archive), d = utf8(dest);
++    if (a.find('"') != std::string::npos || d.find('"') != std::string::npos) return fail("the data folder's path has a quote in it");
++#if defined(_WIN32)
++    char system_dir[MAX_PATH]{};
++    GetSystemDirectoryA(system_dir, MAX_PATH);
++    const std::string tar = std::string("\"") + system_dir + "\\tar.exe\"";
++    const std::string skip = "-k";
++#elif defined(__APPLE__)
++    const std::string tar = "tar", skip = "-k";
++#else
++    const std::string tar = "tar", skip = "--skip-old-files";
++#endif
++    const std::string command = tar + " -xzf \"" + a + "\" -C \"" + d + "\" --strip-components=1 " + skip +
++                                " --exclude=\"*/.github\" --exclude=\"*/.gitignore\"";
++    const int code = run_hidden(command);
++    fs::remove(archive, ec);
++    if (code != 0) return fail("unpacking failed (tar exit code " + std::to_string(code) + ")");
++    {
++        const std::lock_guard<std::mutex> lock(job->mutex);
++        job->message = "The pictures are in " + utf8(dest) + ". Copy only the ones you edit into the textures folder, keeping their folder structure.";
++    }
++    job->phase = 3;
++    std::cout << "[texpack] png pack unpacked into " << utf8(dest) << std::endl;
++}
++
++void png_pack_rows() {
++    const char *url = portablekit::game().png_pack_url;
++    if (url == nullptr || *url == '\0') return;
++    const std::shared_ptr<PngPackJob> job = png_job();
++    const int phase = job->phase;
++    if (phase == 1 || phase == 2) {
++        if (phase == 1) {
++            const double done = static_cast<double>(job->done.load()) / (1024.0 * 1024.0);
++            const double total = static_cast<double>(job->total.load()) / (1024.0 * 1024.0);
++            char text[96];
++            if (total > 0.0) std::snprintf(text, sizeof(text), "%.0f of %.0f MB", done, total);
++            else std::snprintf(text, sizeof(text), "%.0f MB", done);
++            info_row("Downloading the editable textures", text);
++        } else {
++            info_row("Editable textures", "Unpacking...");
++        }
++        return;
++    }
++    if (phase == 3 || phase == 4) {
++        std::string message;
++        {
++            const std::lock_guard<std::mutex> lock(job->mutex);
++            message = job->message;
++        }
++        info_row(phase == 3 ? "Editable textures" : "Editable textures: failed", message);
++    }
++    if (button_row("Download the editable textures (PNG)...",
++                   {false, {},
++                    "Downloads the texture pack's original pictures (about 2.5 GB) into the data folder's textures_png folder, to edit. "
++                    "Files you already have there are not overwritten. The game reads only the textures folder: copy the ones you "
++                    "edit into it, with the same folder structure."})) {
++        job->phase = 1;
++        job->done = 0;
++        job->total = 0;
++        std::thread(png_pack_thread, job, std::string(url), install::user_data_directory()).detach();
++    }
++}
++#endif
++
+ } // namespace
+ 
+ void texture_pack_rows() {
+@@ -472,6 +618,9 @@ void texture_pack_rows() {
+         fs::remove_all(old_folder, removed);
+         renderer().reload_texture_pack();
+     }
++#if defined(PK_PNG_PACK)
++    png_pack_rows();
++#endif
+     if (!settings.texture_pack_folder.empty()) info_row("Pack used from", settings.texture_pack_folder);
+     if (!settings.texture_pack_folder.empty() &&
+         button_row("Stop using the pack folder",
+diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
+index cd78e44..fe24f33 100644
+--- a/host/ui/widgets.cpp
++++ b/host/ui/widgets.cpp
+@@ -72,6 +72,33 @@ ImTextureData *pointer_texture = nullptr;
+ ImVec2 pointer_uv0{0, 0}, pointer_uv1{1, 1};
+ float pointer_aspect = 1.0f;  // width over height of that part
+ 
++// The pointing hand in the margin at the left of a focused row (min and max are the row's corners).
++void draw_hand(ImVec2 min, ImVec2 max) {
++    const float mid = (min.y + max.y) * 0.5f, size = font() * 0.34f;
++    // Drawn on the foreground list: it lies outside the scrolling area, which would clip it away.
++    ImDrawList *front = ImGui::GetForegroundDrawList();
++    // The hand goes under the header and the footer with the rows: clipped to the list's height (and not to its width: the hand is in
++    // the margin beside it).
++    const ImGuiWindow *list = ImGui::GetCurrentWindow();
++    front->PushClipRect({0.0f, list->InnerClipRect.Min.y}, {ImGui::GetIO().DisplaySize.x, list->InnerClipRect.Max.y}, false);
++    if (pointer_texture != nullptr) {
++        const float hand_height = font() * 1.3f, hand_width = hand_height * pointer_aspect;
++        // The hand points at the row: right and back, right and back (two beats), then a 2 second pause, over and over.
++        const double beat = 0.20, gap = 0.04, moving = 2.0 * beat, cycle = moving + 1.7;
++        const double into_cycle = std::fmod(ImGui::GetTime() - pointer_since, cycle);
++        const float shift = into_cycle < moving
++                                ? static_cast<float>(std::sin(3.14159265358979 * std::fmod(into_cycle, beat) / beat)) * font() * 0.3f
++                                : 0.0f;
++        front->AddImage(pointer_texture->GetTexRef(),
++                        {min.x - px(6.0f) - hand_width + shift, mid - hand_height * 0.5f + px(3.0f)},
++                        {min.x - px(6.0f) + shift, mid + hand_height * 0.5f + px(3.0f)}, pointer_uv0, pointer_uv1);
++    } else {
++        front->AddTriangleFilled({min.x - px(20.0f), mid - size}, {min.x - px(20.0f), mid + size},
++                                 {min.x - px(20.0f) + size * 1.6f, mid}, colors::kAccentBright);
++    }
++    front->PopClipRect();
++}
++
+ struct Row {
+     ImVec2 min;
+     ImVec2 max;
+@@ -108,29 +135,7 @@ Row row(const char *label, const RowOptions &options, ImU32 color = colors::kTex
+         const float line = px(2.5f);
+         draw->AddRectFilledMultiColor({result.min.x, result.max.y - line}, result.max, colors::kAccent, IM_COL32(74, 170, 255, 90),
+                                       IM_COL32(74, 170, 255, 90), colors::kAccent);
+-        const float mid = (result.min.y + result.max.y) * 0.5f, size = font() * 0.34f;
+-        // Drawn on the foreground list: it lies outside the scrolling area, which would clip it away.
+-        ImDrawList *front = ImGui::GetForegroundDrawList();
+-        // The hand goes under the header and the footer with the rows: clipped to the list's height (and not to its width: the hand is in
+-        // the margin beside it).
+-        const ImGuiWindow *list = ImGui::GetCurrentWindow();
+-        front->PushClipRect({0.0f, list->InnerClipRect.Min.y}, {ImGui::GetIO().DisplaySize.x, list->InnerClipRect.Max.y}, false);
+-        if (pointer_texture != nullptr) {
+-            const float hand_height = font() * 1.3f, hand_width = hand_height * pointer_aspect;
+-            // The hand points at the row: right and back, right and back (two beats), then a 2 second pause, over and over.
+-            const double beat = 0.20, gap = 0.04, moving = 2.0 * beat, cycle = moving + 1.7;
+-            const double into_cycle = std::fmod(ImGui::GetTime() - pointer_since, cycle);
+-            const float shift = into_cycle < moving
+-                                    ? static_cast<float>(std::sin(3.14159265358979 * std::fmod(into_cycle, beat) / beat)) * font() * 0.3f
+-                                    : 0.0f;
+-            front->AddImage(pointer_texture->GetTexRef(),
+-                            {result.min.x - px(6.0f) - hand_width + shift, mid - hand_height * 0.5f + px(3.0f)},
+-                            {result.min.x - px(6.0f) + shift, mid + hand_height * 0.5f + px(3.0f)}, pointer_uv0, pointer_uv1);
+-        } else {
+-            front->AddTriangleFilled({result.min.x - px(20.0f), mid - size}, {result.min.x - px(20.0f), mid + size},
+-                                     {result.min.x - px(20.0f) + size * 1.6f, mid}, colors::kAccentBright);
+-        }
+-        front->PopClipRect();
++        draw_hand(result.min, result.max);
+     } else {
+         const float line = px(1.5f);
+         draw->AddRectFilled({result.min.x, result.max.y - line}, result.max,
+@@ -258,6 +263,17 @@ const char *select_name() {
+ 
+ } // namespace
+ 
++// For a row of another kind (a text box): the hand and the bookkeeping a Row does, for the item just drawn, when it has the cursor.
++void focus_marker(ImVec2 min, ImVec2 max) {
++    if (!ImGui::IsItemFocused()) return;
++    const ImGuiID id = ImGui::GetItemID();
++    if (id != row_last_focused) pointer_since = ImGui::GetTime();
++    if (id != row_last_focused && ImGui::GetFrameCount() - row_focus_frame <= 2) sound::play(sound::Cue::Navigate);
++    row_last_focused = id;
++    row_focus_frame = ImGui::GetFrameCount();
++    draw_hand(min, max);
++}
++
+ bool game_menu_right_space(float &left, float &right) {
+     left = game_menu_space_left;
+     right = game_menu_space_right;
+diff --git a/host/ui/widgets.hpp b/host/ui/widgets.hpp
+index 8659dca..2791bc4 100644
+--- a/host/ui/widgets.hpp
++++ b/host/ui/widgets.hpp
+@@ -110,6 +110,8 @@ void section(const char *title);
+ 
+ // Focuses the next row, e.g. the first row after switching tabs.
+ void focus_next_row();
++// For a row of another kind (a text box): draws the hand and does the bookkeeping for the item just drawn, when it has the cursor.
++void focus_marker(ImVec2 min, ImVec2 max);
+ 
+ // A wide button for the setup screens. Returns true when activated.
+ // `danger` fills the button red (a choice that ends something, such as Quit).
+-- 
+2.54.0.windows.1
+

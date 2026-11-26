@@ -1,0 +1,81 @@
+From 89e64d0c06fb44356cf98219d67c6b2a6ece621f Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 11:31:58 +0100
+Subject: [PATCH] Updater: hd.bundle and credits.txt are replaced on update; an
+ older pack's loose pictures move to data/textures_png, never overwriting
+
+---
+ host/ui/updater.cpp | 40 ++++++++++++++++++++++++++++++++++------
+ 1 file changed, 34 insertions(+), 6 deletions(-)
+
+diff --git a/host/ui/updater.cpp b/host/ui/updater.cpp
+index 350f195..848639a 100644
+--- a/host/ui/updater.cpp
++++ b/host/ui/updater.cpp
+@@ -520,10 +520,15 @@ try {
+       if ($relative -match '^game/' -or ($relative -match '^data/' -and $relative -notmatch '^data/(fonts|textures)/')) { continue }
+       $final = Join-Path $Target ($relative -replace '/', '\')
+       if ($relative -match '^data/textures/') {
+-        # The texture pack: only pictures that are new are written, straight into place; textures.ini, which lists them,
+-        # is always replaced.
+-        if ($relative -notmatch '(^|/)textures\.ini$' -and (Test-Path -LiteralPath $final)) { continue }
+-        $destination = $final
++        # The texture pack. hd.bundle, textures.ini and credits.txt are staged and replace the old ones once the game has closed (the
++        # game has hd.bundle open now). Any other picture (an old pack of loose PNGs) is only written when it is new, straight into place.
++        if ($relative -match '^data/textures/(hd\.bundle|textures\.ini|credits\.txt)$') {
++          $destination = Join-Path $stage ($relative -replace '/', '\')
++        } elseif (Test-Path -LiteralPath $final) {
++          continue
++        } else {
++          $destination = $final
++        }
+       } else {
+         $destination = Join-Path $stage ($relative -replace '/', '\')
+       }
+@@ -551,6 +556,16 @@ try {
+   Start-Sleep -Seconds 1
+   # The overlays are replaced as a whole: a library of an older version left beside the new ones would be loaded with them.
+   if (Test-Path -LiteralPath (Join-Path $stage 'overlays')) { Remove-Item -LiteralPath (Join-Path $Target 'overlays') -Recurse -Force -ErrorAction SilentlyContinue }
++  # An update that brings hd.bundle: the loose pictures of an older pack (they would win over the bundle, load slower and ignore the texture
++  # quality) go to data\textures_png, which the game does not read. Nothing is overwritten: a file already there stays, and the one in
++  # data\textures stays where it was.
++  if (Test-Path -LiteralPath (Join-Path $stage 'data\textures\hd.bundle')) {
++    $textures = Join-Path $Target 'data\textures'
++    if (Test-Path -LiteralPath $textures) {
++      robocopy $textures (Join-Path $Target 'data\textures_png') /E /MOVE /XF hd.bundle textures.ini credits.txt /XC /XN /XO /R:8 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
++      if ($LASTEXITCODE -ge 8) { throw ('moving the old textures failed: ' + $LASTEXITCODE) }
++    }
++  }
+   robocopy $stage $Target /E /MOVE /R:8 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+   if ($LASTEXITCODE -ge 8) { throw ('robocopy failed: ' + $LASTEXITCODE) }
+   Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+@@ -781,11 +796,24 @@ swap_dir() {
+       cp -pP "$item" "$TARGET/$item.d012new" && mv -f "$TARGET/$item.d012new" "$TARGET/$item" || exit 1
+     fi
+   done
+-  # data/fonts: replaced. data/textures: only pictures that are new; textures.ini is always replaced.
++  # An update that brings hd.bundle: the loose pictures of an older pack (they would win over the bundle) go to data/textures_png, which the
++  # game does not read. Nothing is overwritten: a file already there stays, and the one in data/textures stays where it was.
++  if [ -f data/textures/hd.bundle ] && [ -d "$TARGET/data/textures" ]; then
++    (
++      cd "$TARGET/data/textures" || exit 0
++      find . -type f ! -path ./hd.bundle ! -path ./textures.ini ! -path ./credits.txt | while IFS= read -r old; do
++        keep="$TARGET/data/textures_png/$old"
++        if [ ! -e "$keep" ]; then mkdir -p "$(dirname "$keep")" && mv "$old" "$keep"; fi
++      done
++      find . -mindepth 1 -type d -empty -delete
++    ) || true
++  fi
++  # data/fonts: replaced. data/textures: only pictures that are new; hd.bundle, textures.ini and credits.txt are always replaced.
+   if [ -d data/fonts ]; then mkdir -p "$TARGET/data/fonts" && cp -Rp data/fonts/. "$TARGET/data/fonts/"; fi
+   if [ -d data/textures ]; then
+     find data/textures -type f | while IFS= read -r file; do
+-      if [ ! -e "$TARGET/$file" ] || [ "$(basename "$file")" = "textures.ini" ]; then
++      case "$(basename "$file")" in hd.bundle|textures.ini|credits.txt) replace=1 ;; *) replace=0 ;; esac
++      if [ ! -e "$TARGET/$file" ] || [ "$replace" = 1 ]; then
+         mkdir -p "$(dirname "$TARGET/$file")" && cp -p "$file" "$TARGET/$file"
+       fi
+     done
+-- 
+2.54.0.windows.1
+
