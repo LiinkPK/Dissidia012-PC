@@ -97,6 +97,10 @@ if(WIN32)
     set_target_properties(d012_native PROPERTIES WIN32_EXECUTABLE TRUE)
     target_link_options(d012_native PRIVATE "/ENTRY:mainCRTStartup")
 endif()
+if(ANDROID)
+    # __android_log_print: the core pinning and the guest profile write to the Android log (adb logcat -s D012).
+    target_link_libraries(d012_native PRIVATE log)
+endif()
 # The game looks for its overlay libraries in an "overlays" folder next to the executable, while the build writes
 # them to bin/overlays/<config>. Without this copy, a rebuilt overlay never reaches the folder the game reads.
 file(GLOB D012_OVERLAY_META CONFIGURE_DEPENDS "${D012_WORK_DIR}/overlays/*/meta.txt")
