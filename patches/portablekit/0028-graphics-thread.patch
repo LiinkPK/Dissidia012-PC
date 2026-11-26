@@ -1,0 +1,490 @@
+From f252b40d90da1d1ecb11c59a18d62421df07631d Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 22:48:17 +0100
+Subject: [PATCH] Graphics thread: display lists run on a thread of their own
+ (setting Graphics thread, off by default)
+
+---
+ host/hle/hle_common.hpp    |   3 +
+ host/hle/hle_media.cpp     | 204 ++++++++++++++++++++++++++++++++-----
+ host/hle/hle_sysmem.cpp    |   1 +
+ host/kernel/kernel.cpp     |   5 +
+ host/kernel/kernel.hpp     |  19 ++++
+ host/perf/frame_stats.cpp  |   1 +
+ host/perf/frame_stats.hpp  |   1 +
+ host/settings/settings.cpp |   1 +
+ host/settings/settings.hpp |   1 +
+ host/ui/menu.cpp           |   8 ++
+ 10 files changed, 219 insertions(+), 25 deletions(-)
+
+diff --git a/host/hle/hle_common.hpp b/host/hle/hle_common.hpp
+index db62ae0..fe5898f 100644
+--- a/host/hle/hle_common.hpp
++++ b/host/hle/hle_common.hpp
+@@ -17,6 +17,9 @@ namespace portablekit {
+ 
+ using HleFunction = std::function<void(Runtime &, AllegrexContext &)>;
+ 
++// Waits for the display lists the graphics thread has been given (hle_media.cpp). Call it before reading or writing video memory.
++void wait_for_graphics_thread();
++
+ // PSP EABI argument registers: a0-a3 then t0-t3.
+ [[nodiscard]] inline std::uint32_t arg(const AllegrexContext &ctx, unsigned index) noexcept {
+     return index < 4u ? ctx.gpr[4u + index] : ctx.gpr[8u + (index - 4u)];
+diff --git a/host/hle/hle_media.cpp b/host/hle/hle_media.cpp
+index 93cf05b..24757ed 100644
+--- a/host/hle/hle_media.cpp
++++ b/host/hle/hle_media.cpp
+@@ -32,6 +32,10 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <chrono>
++#include <condition_variable>
++#include <deque>
++#include <mutex>
++#include <thread>
+ #include <filesystem>
+ #include <cmath>
+ #include <cstring>
+@@ -175,24 +179,61 @@ void block_transfer(Runtime &rt, const gpu::BlockTransfer &transfer) {
+ #endif
+ }
+ 
+-void run_ge_list(Runtime &rt, std::uint32_t id) {
+-    auto found = media().ge_lists.find(id);
+-    if (found == media().ge_lists.end()) return;
++// The graphics thread. A display list is run on a thread of its own, so the game's code goes on with the next frame while the list of
++// the last one is turned into draws (about 14 ms a frame in a battle on a phone, on top of the game's own 17). The game waits for it where
++// real hardware would make it wait: sceGeListSync, sceGeDrawSync, the flip, and a copy in or out of video memory. Its interrupts (signal
++// and finish callbacks) are handed to the kernel thread, which queues them; nothing here calls the kernel except to raise a flag.
++// Settings: Graphics thread.
++struct GeWorker {
++    std::mutex mutex;  // also guards media().ge_lists and media().ge_callbacks
++    std::condition_variable wake;
++    std::condition_variable idle;
++    std::deque<std::uint32_t> queue;  // list ids to run, in order
++    bool busy{};                      // a list is being run
++    bool started{};
++    std::vector<InterruptCall> interrupts;
++    Runtime *runtime{};
++};
++
++GeWorker &ge_worker() {
++    static GeWorker worker;
++    return worker;
++}
++
++void run_ge_list(Runtime &rt, std::uint32_t id, bool on_worker) {
++    GeWorker &worker = ge_worker();
+     const perf::Clock::time_point start = perf::Clock::now();
+-    GeList &list = found->second;
+-    const GeCallback *callback = nullptr;
+-    if (const auto cb = media().ge_callbacks.find(list.callback); cb != media().ge_callbacks.end())
+-        callback = &cb->second;
++    GeList list{};
++    GeCallback callback{};
++    bool has_callback = false;
++    {
++        const std::lock_guard<std::mutex> lock(worker.mutex);
++        auto found = media().ge_lists.find(id);
++        if (found == media().ge_lists.end()) return;
++        list = found->second;
++        if (const auto cb = media().ge_callbacks.find(list.callback); cb != media().ge_callbacks.end()) {
++            callback = cb->second;
++            has_callback = true;
++        }
++    }
+ 
+-    media().ge.set_signal_sink([callback](std::uint32_t signal, std::uint32_t pc) {
+-        if (callback == nullptr) return;
++    media().ge.set_signal_sink([callback, has_callback, on_worker, &worker](std::uint32_t signal, std::uint32_t pc) {
++        if (!has_callback) return;
+         const bool finish = (signal & 0x10000u) != 0u;
+-        const std::uint32_t function = finish ? callback->finish_function : callback->signal_function;
++        const std::uint32_t function = finish ? callback.finish_function : callback.signal_function;
+         if (function == 0u) return;
+         InterruptCall call{};
+         call.function = function;
+-        call.arguments = {signal & 0xFFFFu, finish ? callback->finish_argument : callback->signal_argument, pc, 0u};
+-        kernel().queue_interrupt(std::move(call));
++        call.arguments = {signal & 0xFFFFu, finish ? callback.finish_argument : callback.signal_argument, pc, 0u};
++        if (on_worker) {
++            {
++                const std::lock_guard<std::mutex> lock(worker.mutex);
++                worker.interrupts.push_back(std::move(call));
++            }
++            kernel().raise_external_interrupt();
++        } else {
++            kernel().queue_interrupt(std::move(call));
++        }
+     });
+ #if defined(PORTABLEKIT_HAS_RENDERER)
+     if (media().renderer && media().renderer->available()) {
+@@ -217,12 +258,98 @@ void run_ge_list(Runtime &rt, std::uint32_t id) {
+         log_once("ge-list-error", std::string("[ge] display list aborted: ") + error.what());
+         finished = true;
+     }
+-    list.done = finished;
++    {
++        const std::lock_guard<std::mutex> lock(worker.mutex);
++        if (auto found = media().ge_lists.find(id); found != media().ge_lists.end()) {
++            found->second.pc = list.pc;
++            found->second.done = finished;
++        }
++    }
+     media().ge.set_draw_sink(nullptr);
+     media().ge.set_transfer_sink(nullptr);
+     perf::add_render_time(perf::Clock::now() - start);
+ }
+ 
++void ge_worker_main() {
++    GeWorker &worker = ge_worker();
++    for (;;) {
++        std::uint32_t id = 0u;
++        {
++            std::unique_lock<std::mutex> lock(worker.mutex);
++            worker.wake.wait(lock, [&] { return !worker.queue.empty(); });
++            id = worker.queue.front();
++            worker.queue.pop_front();
++            worker.busy = true;
++        }
++        try {
++            run_ge_list(*worker.runtime, id, true);
++        } catch (const std::exception &error) {
++            log_once("ge-worker-error", std::string("[ge] graphics thread: ") + error.what());
++        }
++        {
++            const std::lock_guard<std::mutex> lock(worker.mutex);
++            worker.busy = false;
++            if (worker.queue.empty()) worker.idle.notify_all();
++        }
++    }
++}
++
++// Waits until every list handed to the graphics thread has been run.
++void ge_wait_idle() {
++    GeWorker &worker = ge_worker();
++    if (!worker.started) return;
++    std::unique_lock<std::mutex> lock(worker.mutex);
++    if (worker.queue.empty() && !worker.busy) return;
++    const perf::Clock::time_point start = perf::Clock::now();
++    worker.idle.wait(lock, [&] { return worker.queue.empty() && !worker.busy; });
++    perf::add_wait_time(perf::Clock::now() - start, perf::Stall::GeThread);
++}
++
++// The kernel's: true if it had to wait (the list may have raised an interrupt a thread is waiting for).
++bool ge_wait_for_kernel() {
++    GeWorker &worker = ge_worker();
++    if (!worker.started) return false;
++    std::unique_lock<std::mutex> lock(worker.mutex);
++    if (worker.queue.empty() && !worker.busy) return false;
++    worker.idle.wait(lock, [&] { return worker.queue.empty() && !worker.busy; });
++    return true;
++}
++
++void ge_deliver_interrupts() {
++    GeWorker &worker = ge_worker();
++    std::vector<InterruptCall> calls;
++    {
++        const std::lock_guard<std::mutex> lock(worker.mutex);
++        calls.swap(worker.interrupts);
++    }
++    for (InterruptCall &call : calls) kernel().queue_interrupt(std::move(call));
++}
++
++// Runs the list now, or hands it to the graphics thread when Graphics thread is on.
++void ge_run(Runtime &rt, std::uint32_t id) {
++    bool threaded = false;
++#if defined(PORTABLEKIT_HAS_RENDERER)
++    threaded = settings::current().gpu_thread && media().renderer && media().renderer->available();
++#endif
++    GeWorker &worker = ge_worker();
++    if (!threaded) {
++        ge_wait_idle();  // the setting was just turned off, or an earlier list is still running
++        run_ge_list(rt, id, false);
++        return;
++    }
++    if (!worker.started) {
++        worker.runtime = &rt;
++        worker.started = true;
++        kernel().set_external_interrupts(ge_deliver_interrupts, ge_wait_for_kernel);
++        std::thread(ge_worker_main).detach();
++    }
++    {
++        const std::lock_guard<std::mutex> lock(worker.mutex);
++        worker.queue.push_back(id);
++    }
++    worker.wake.notify_one();
++}
++
+ #if defined(PORTABLEKIT_HAS_RENDERER)
+ // The mouse's motion since the previous pump, as degrees for the camera
+ // layer. Added after the flip, so whoever drives the camera takes it in the
+@@ -274,6 +401,7 @@ std::uint64_t frame_start_us(std::uint64_t latest_vblank_us) {
+ }
+ 
+ void present_frame(Runtime &rt) {
++    ge_wait_idle();  // the frame is drawn when the flip comes
+     load_trace::note_flip();
+     // Overlays are swapped between frames; re-check before drawing the next one.
+     revalidate_overlays(rt);
+@@ -765,12 +893,18 @@ void register_ge(HleRegistrar &hle) {
+         const std::uint32_t data = arg(ctx, 0);
+         auto &memory = rt.memory();
+         const std::int32_t id = media().next_ge_callback++;
+-        media().ge_callbacks[id] = GeCallback{memory.load32(data), memory.load32(data + 4u), memory.load32(data + 8u),
++        {
++            const std::lock_guard<std::mutex> lock(ge_worker().mutex);
++            media().ge_callbacks[id] = GeCallback{memory.load32(data), memory.load32(data + 4u), memory.load32(data + 8u),
+                                               memory.load32(data + 12u)};
++        }
+         kernel().finish(ctx, static_cast<std::uint32_t>(id));
+     });
+     hle.add("sceGe_user", "sceGeUnsetCallback", [](Runtime &, AllegrexContext &ctx) {
+-        media().ge_callbacks.erase(static_cast<std::int32_t>(arg(ctx, 0)));
++        {
++            const std::lock_guard<std::mutex> lock(ge_worker().mutex);
++            media().ge_callbacks.erase(static_cast<std::int32_t>(arg(ctx, 0)));
++        }
+         kernel().finish(ctx, 0u);
+     });
+     const auto enqueue = [](Runtime &rt, AllegrexContext &ctx) {
+@@ -779,31 +913,48 @@ void register_ge(HleRegistrar &hle) {
+         list.pc = arg(ctx, 0) & 0x0FFFFFFFu;
+         list.stall = arg(ctx, 1) & 0x0FFFFFFFu;
+         list.callback = static_cast<std::int32_t>(arg(ctx, 2));
+-        media().ge_lists[id] = std::move(list);
++        {
++            const std::lock_guard<std::mutex> lock(ge_worker().mutex);
++            media().ge_lists[id] = std::move(list);
++        }
+         perf::count_display_list();
+-        run_ge_list(rt, id);
++        ge_run(rt, id);
+         kernel().finish(ctx, id);
+     };
+     hle.add("sceGe_user", "sceGeListEnQueue", enqueue);
+     hle.add("sceGe_user", "sceGeListEnQueueHead", enqueue);
+     hle.add("sceGe_user", "sceGeListUpdateStallAddr", [](Runtime &rt, AllegrexContext &ctx) {
+-        auto found = media().ge_lists.find(arg(ctx, 0));
+-        if (found == media().ge_lists.end()) {
++        bool known = false;
++        {
++            const std::lock_guard<std::mutex> lock(ge_worker().mutex);
++            auto found = media().ge_lists.find(arg(ctx, 0));
++            known = found != media().ge_lists.end();
++            if (known) found->second.stall = arg(ctx, 1) & 0x0FFFFFFFu;
++        }
++        if (!known) {
+             kernel().finish(ctx, error::kIllegalArgument);
+             return;
+         }
+-        found->second.stall = arg(ctx, 1) & 0x0FFFFFFFu;
+-        run_ge_list(rt, arg(ctx, 0));
++        ge_run(rt, arg(ctx, 0));
+         kernel().finish(ctx, 0u);
+     });
+     hle.add("sceGe_user", "sceGeListSync", [](Runtime &, AllegrexContext &ctx) {
+-        auto found = media().ge_lists.find(arg(ctx, 0));
+-        // 0 = completed, 2 = still stalled (drawing).
+-        const std::uint32_t state = found == media().ge_lists.end() || found->second.done ? 0u : 2u;
++        ge_wait_idle();
++        std::uint32_t state = 0u;
++        {
++            const std::lock_guard<std::mutex> lock(ge_worker().mutex);
++            auto found = media().ge_lists.find(arg(ctx, 0));
++            // 0 = completed, 2 = still stalled (drawing).
++            state = found == media().ge_lists.end() || found->second.done ? 0u : 2u;
++        }
+         kernel().finish(ctx, state);
+     });
+     hle.add("sceGe_user", "sceGeDrawSync", [](Runtime &, AllegrexContext &ctx) {
+-        std::erase_if(media().ge_lists, [](const auto &item) { return item.second.done; });
++        ge_wait_idle();
++        {
++            const std::lock_guard<std::mutex> lock(ge_worker().mutex);
++            std::erase_if(media().ge_lists, [](const auto &item) { return item.second.done; });
++        }
+         kernel().finish(ctx, 0u);
+     });
+     hle.add("sceGe_user", "sceGeBreak", [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, 0u); });
+@@ -1156,6 +1307,9 @@ void register_audio(HleRegistrar &hle) {
+ 
+ } // namespace
+ 
++// For the other HLE files: whatever the guest does to video memory comes after the lists already handed to the graphics thread.
++void wait_for_graphics_thread() { ge_wait_idle(); }
++
+ std::uint32_t pad_extra_buttons() { return sampled_extra(); }
+ 
+ void want_second_pad(bool wanted) {
+diff --git a/host/hle/hle_sysmem.cpp b/host/hle/hle_sysmem.cpp
+index a28543c..e792473 100644
+--- a/host/hle/hle_sysmem.cpp
++++ b/host/hle/hle_sysmem.cpp
+@@ -153,6 +153,7 @@ void register_sysmem(HleRegistrar &hle) {
+                           << " (" << size << " bytes)\n";
+             if (in_vram(source)) gpu::note_vram_copy(destination, source, size);
+         }
++        if (in_vram(source) || in_vram(destination)) wait_for_graphics_thread();
+         static const bool fast = portablekit::env("NO_FAST_HLE_COPIES") == nullptr;
+         std::uint8_t *to = fast && !rt.memory().write_watched() ? rt.memory().raw_pointer(destination, size) : nullptr;
+         const std::uint8_t *from = to != nullptr ? rt.memory().raw_pointer(source, size) : nullptr;
+diff --git a/host/kernel/kernel.cpp b/host/kernel/kernel.cpp
+index e20c188..d46d20f 100644
+--- a/host/kernel/kernel.cpp
++++ b/host/kernel/kernel.cpp
+@@ -331,6 +331,7 @@ void Kernel::finish(AllegrexContext &ctx, std::uint32_t result) {
+     ctx.set_gpr(2, result);
+     if (interrupt_active_ || current_thread() == nullptr) return;
+     charge_busy_time();
++    deliver_external();
+ 
+     if (interrupts_enabled_ && !pending_interrupts_.empty()) {
+         interrupted_context_ = ctx;
+@@ -416,6 +417,7 @@ void Kernel::schedule(AllegrexContext &ctx) {
+     for (;;) {
+         if (runtime_->stopped()) return;
+         process_timers();
++        deliver_external();
+         if (interrupts_enabled_ && !pending_interrupts_.empty()) {
+             interrupted_idle_ = true;
+             if (begin_pending_interrupt(ctx)) return;
+@@ -425,6 +427,8 @@ void Kernel::schedule(AllegrexContext &ctx) {
+             return;
+         }
+ 
++        // Nothing to run: the graphics thread may be about to raise the interrupt a thread waits for. Let it finish, then look again.
++        if (external_wait_ && external_wait_()) continue;
+         stall_watchdog::idle(*this);
+         const auto next = next_event_us();
+         if (!next || idle_vblanks_ > kIdleVBlankLimit) {
+@@ -754,6 +758,7 @@ void Kernel::on_starvation(AllegrexContext &ctx) {
+     if (interrupt_active_ || current_thread() == nullptr) return;
+     advance_clock(now_us_ + kStarvationQuantumUs);
+     process_timers();
++    deliver_external();
+     if (interrupts_enabled_ && !pending_interrupts_.empty()) {
+         interrupted_context_ = ctx;
+         interrupted_idle_ = false;
+diff --git a/host/kernel/kernel.hpp b/host/kernel/kernel.hpp
+index 276dfe1..77e0342 100644
+--- a/host/kernel/kernel.hpp
++++ b/host/kernel/kernel.hpp
+@@ -7,6 +7,7 @@
+ #include <chrono>
+ #include <cstdint>
+ #include <deque>
++#include <atomic>
+ #include <functional>
+ #include <iosfwd>
+ #include <map>
+@@ -273,6 +274,15 @@ public:
+     void set_idle_hook(IdleHook hook) { idle_hook_ = std::move(hook); }
+     void set_poll_hook(PollHook hook) { poll_hook_ = std::move(hook); }
+ 
++    // Work done on another thread (the graphics thread of hle_media.cpp) that ends in interrupts for the guest. That thread must not call
++    // the kernel: it raises the flag, and the kernel thread calls `deliver` (which queues the interrupts) the next time it looks, and
++    // `wait` (which returns true if it waited for the other thread to finish) before it decides nothing is runnable.
++    void set_external_interrupts(PollHook deliver, std::function<bool()> wait) {
++        external_deliver_ = std::move(deliver);
++        external_wait_ = std::move(wait);
++    }
++    void raise_external_interrupt() noexcept { external_pending_.store(true, std::memory_order_release); }
++
+     // Threads -------------------------------------------------------------
+     [[nodiscard]] SceUID allocate_uid() noexcept { return next_uid_++; }
+     [[nodiscard]] Thread *find_thread(SceUID uid) noexcept;
+@@ -428,6 +438,15 @@ private:
+     std::uint64_t pacing_virtual_base_{};
+     IdleHook idle_hook_;
+     PollHook poll_hook_;
++    PollHook external_deliver_;
++    std::function<bool()> external_wait_;
++    std::atomic<bool> external_pending_{false};
++    void deliver_external() {
++        if (external_deliver_ && external_pending_.load(std::memory_order_acquire)) {
++            external_pending_.store(false, std::memory_order_relaxed);
++            external_deliver_();
++        }
++    }
+     std::uint64_t next_vblank_us_{kVBlankPeriodUs};
+     std::uint64_t vblank_count_{};
+     bool dispatch_enabled_{true};
+diff --git a/host/perf/frame_stats.cpp b/host/perf/frame_stats.cpp
+index 27dd6dc..81c6419 100644
+--- a/host/perf/frame_stats.cpp
++++ b/host/perf/frame_stats.cpp
+@@ -293,6 +293,7 @@ const char *stall_name(Stall kind) {
+     case Stall::Store: return "store";
+     case Stall::Pipeline: return "pipeline";
+     case Stall::Decode: return "decode";
++    case Stall::GeThread: return "gethread";
+     case Stall::Count: break;
+     }
+     return "?";
+diff --git a/host/perf/frame_stats.hpp b/host/perf/frame_stats.hpp
+index cfef9d7..73fcfcc 100644
+--- a/host/perf/frame_stats.hpp
++++ b/host/perf/frame_stats.hpp
+@@ -61,6 +61,7 @@ enum class Stall : std::uint8_t {
+     Store,     // converting that frame into guest memory (store_frame)
+     Pipeline,  // creating a graphics pipeline the frame needs (CPU work inside "render")
+     Decode,    // waiting at the frame's submit for textures decoded in the background
++    GeThread,  // the game waiting for the graphics thread (sceGeDrawSync, the flip)
+     Count,
+ };
+ [[nodiscard]] const char *stall_name(Stall kind);
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 99d6d8a..04b186d 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -199,6 +199,7 @@ const std::vector<Field> &fields() {
+         BOOL_FIELD("video.fxaa", fxaa),
+         BOOL_FIELD("video.upscale", upscale),
+         BOOL_FIELD("video.dynamic_resolution", dynamic_resolution),
++        BOOL_FIELD("video.gpu_thread", gpu_thread),
+         BOOL_FIELD("video.sharp_textures", sharp_textures),
+         {"video.texture_pack", "TEXTURE_PACK",
+          [](Settings &s, const std::string &t) { return parse_bool(t, s.texture_pack); },
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 1ae2475..3e4fe28 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -51,6 +51,7 @@ struct Settings {
+     Aspect aspect{Aspect::Stretch};
+     bool sharp_screen{};               // nearest instead of linear scaling to the window
+     bool dynamic_resolution{};         // lower the Resolution by itself while the graphics card cannot keep up, raise it again when it can
++    bool gpu_thread{};                 // run the game's display lists on a thread of their own, so its code goes on with the next frame meanwhile
+     bool upscale{};                    // draw the (lower resolution) picture to the window with a sharper upscaler than the plain bilinear one
+     bool fxaa{};                       // FXAA anti-aliasing of the finished picture, at the window's resolution
+     bool sharp_textures{};             // nearest instead of linear texture sampling
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 27d0831..fcd6787 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -910,6 +910,13 @@ void Menu::video() {
+             settings::save();
+         }
+     }
++    if (choice_row("Graphics thread", s.gpu_thread ? "On" : "Off",
++                   options_for("video.gpu_thread", "Runs the game's drawing lists on a thread of their own, so the game goes on with the next frame while "
++                                                   "the last one is drawn. Faster on a phone or a computer with several cores; if a "
++                                                   "picture ever looks wrong, turn it off."))) {
++        s.gpu_thread = !s.gpu_thread;
++        settings::save();
++    }
+     {
+         static const char *const kPerf[] = {"Off", "Overlay", "Overlay and log", "Log only"};
+         const int current = static_cast<int>(s.perf);
+@@ -938,6 +945,7 @@ void Menu::video() {
+         restore("video.fxaa", s.fxaa, d.fxaa);
+         restore("video.upscale", s.upscale, d.upscale);
+         restore("video.dynamic_resolution", s.dynamic_resolution, d.dynamic_resolution);
++        restore("video.gpu_thread", s.gpu_thread, d.gpu_thread);
+         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
+         restore("video.texture_pack", s.texture_pack, d.texture_pack);
+         restore("video.texture_size", s.texture_size, d.texture_size);
+-- 
+2.54.0.windows.1
+
