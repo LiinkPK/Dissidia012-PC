@@ -1,0 +1,49 @@
+From 8c9dae550e59771ffb669fd8ecd1d3134137777a Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 10:31:42 +0100
+Subject: [PATCH] Menu: the hand skips lines that do nothing, the description
+ sits under the section band and clear of the right arrow
+
+---
+ host/ui/widgets.cpp | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
+index d5d748f..cd78e44 100644
+--- a/host/ui/widgets.cpp
++++ b/host/ui/widgets.cpp
+@@ -443,6 +443,7 @@ void begin_footer() {
+     // The cursor must not stay lost: after Esc or a click on the empty space ImGui clears the focused row, and the hand would vanish with
+     // the arrow keys doing nothing. When no row has it, it goes back to the last row (or to the first one, if that row is gone).
+     if (game_menu && ImGui::GetFrameCount() - row_focus_frame > 0 && row_last_focused != 0 && !ImGui::GetIO().WantTextInput &&
++        ImGui::GetCurrentContext()->NavId == 0 &&  // only when nothing has the cursor: a text box or another widget keeps it, and the arrows move on from it
+         !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+         if (++rows_unfocused_frames > 20) {
+             focus_next = true;
+@@ -468,12 +469,12 @@ void begin_footer() {
+         const std::string &text = Layer::get().description();
+         const float margin = std::round(std::min(io.DisplaySize.x, io.DisplaySize.y) * 0.03f);
+         const float left = ImGui::GetWindowPos().x + ImGui::GetWindowSize().x + margin * 2.0f;
+-        const float box_width = std::min(io.DisplaySize.x - left - margin, font() * 24.0f);
++        const float box_width = std::min(io.DisplaySize.x - left - margin - font() * 3.5f, font() * 24.0f);  // clear of the right arrow button
+         const bool window_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);  // a confirmation uses this space
+         if (!window_open && !text.empty() && box_width > font() * 8.0f) {
+             ImDrawList *front = ImGui::GetForegroundDrawList();
+             const float text_size = ImGui::GetStyle().FontSizeBase * 0.95f;
+-            const ImVec2 at{left, ImGui::GetWindowPos().y + font() * 4.6f};
++            const ImVec2 at{left, ImGui::GetWindowPos().y + font() * 5.4f};  // under the section band's line
+             front->AddText(ImGui::GetFont(), text_size, at, IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, box_width);
+         }
+     }
+@@ -814,7 +815,7 @@ void info_row(const char *label, const std::string &value) {
+     const float value_height = ImGui::CalcTextSize(value.c_str(), nullptr, false, width).y;
+     const float height = std::round(font() * 1.5f + value_height);
+     const ImVec2 min = ImGui::GetCursorScreenPos();
+-    ImGui::InvisibleButton(label, {ImGui::GetContentRegionAvail().x, height}, ImGuiButtonFlags_EnableNav);
++    ImGui::InvisibleButton(label, {ImGui::GetContentRegionAvail().x, height});  // not navigable: the hand skips a line that does nothing
+     const bool focused = ImGui::IsItemFocused();
+     ImDrawList *draw = ImGui::GetWindowDrawList();
+     const ImVec2 max{min.x + width + px(32.0f), min.y + height};
+-- 
+2.54.0.windows.1
+
