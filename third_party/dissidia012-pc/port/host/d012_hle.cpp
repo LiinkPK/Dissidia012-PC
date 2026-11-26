@@ -3,6 +3,7 @@
 
 #include "d012_camera.hpp"
 #include "d012_dlc.hpp"
+#include "d012_guest_profile.hpp"
 #include "d012_hle.hpp"
 #include "d012_test_switches.hpp"
 
@@ -99,6 +100,8 @@ void register_extra_hle(portablekit::HleRegistrar &hle) {
     camera::install(hle);
     // Test switches, off by default (d012_test_switches.cpp).
     test_switches::install(hle);
+    // The sampling profile of the game's own code, off unless D012_PROFILE is set or the data folder has a profile.txt.
+    guest_profile::install();
 }
 
 void patch_loaded_image(psprecomp::Runtime &runtime, const psprecomp::Elf32Image &elf) {
