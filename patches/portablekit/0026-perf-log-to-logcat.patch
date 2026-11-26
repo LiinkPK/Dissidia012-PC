@@ -1,0 +1,69 @@
+From 31bc5340776a5bfcccd4f103a93521b709ad1512 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 21:36:13 +0100
+Subject: [PATCH] Performance log lines also go to logcat on Android
+
+---
+ host/perf/frame_stats.cpp | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/host/perf/frame_stats.cpp b/host/perf/frame_stats.cpp
+index 572b592..90477cb 100644
+--- a/host/perf/frame_stats.cpp
++++ b/host/perf/frame_stats.cpp
+@@ -19,6 +19,9 @@
+ 
+ #include <algorithm>
+ #include <array>
++#if defined(__ANDROID__)
++#include <android/log.h>
++#endif
+ #include <cstdint>
+ #include <string>
+ #include <thread>
+@@ -196,6 +199,14 @@ using Guard = std::lock_guard<std::mutex>;
+ // them on its [present-thread] line). Its presents still count.
+ thread_local bool tl_present_thread = false;
+ 
++// Text to the log. A phone's stdout goes nowhere: there the line also goes to logcat (adb logcat -s PKPerf).
++void emit_line(const std::string &text) {
++    std::cout << text << std::endl;
++#if defined(__ANDROID__)
++    __android_log_print(ANDROID_LOG_INFO, "PKPerf", "%s", text.c_str());
++#endif
++}
++
+ void print(const Summary &s) {
+     char line[512];
+     int length = std::snprintf(line, sizeof(line),
+@@ -234,7 +245,7 @@ void print(const Summary &s) {
+         std::snprintf(line + length, sizeof(line) - length, " | alt %s", alternate().off ? "off" : "on");
+     // Flushed per line: the log is read while the game runs, often through a
+     // pipe where stdout would otherwise sit in a block buffer.
+-    std::cout << line << std::endl;
++    emit_line(line);
+ }
+ 
+ // " name avg max M xN" for every kind that happened: the average per frame
+@@ -1084,7 +1095,7 @@ void end_frame(std::uint64_t virtual_us, bool presented) {
+             line += "n/a";
+         }
+         line += " |" + format_stalls(s.stalls, 1.0, false);
+-        std::cout << line << std::endl;
++        emit_line(line);
+     }
+     if (Csv &c = csv(); c.file != nullptr) {
+         const double cpu_now = thread_cpu_ms();
+@@ -1172,8 +1183,7 @@ void end_frame(std::uint64_t virtual_us, bool presented) {
+     const bool stalls_line = trace.enabled;
+ #endif
+     if (stalls_line)
+-        std::cout << "[stalls] ms per frame over " << s.frames << " frames:" << format_stalls(s.stall_sum, frames, true)
+-                  << std::endl;
++        emit_line("[stalls] ms per frame over " + std::to_string(s.frames) + " frames:" + format_stalls(s.stall_sum, frames, true));
+ 
+     s.window_start = now;
+     if (alternate().paths != 0u) alternate().off = !alternate().off;
+-- 
+2.54.0.windows.1
+
