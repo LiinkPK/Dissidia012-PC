@@ -18,6 +18,13 @@ on:
           - macos-26
           - macos-15-intel
         default: macos-15
+      android_opt:
+        description: "Android: optimisation of the game's own code. 1 compiles fast and reuses the cache; 2 runs faster but recompiles everything (hours)"
+        type: choice
+        options:
+          - "1"
+          - "2"
+        default: "1"
 
 permissions:
   contents: write
@@ -200,6 +207,8 @@ jobs:
           echo "STRICT_TEXTURES=1" >> "$GITHUB_ENV"
           du -sh "$RUNNER_TEMP/pack/textures"
       - name: Build and package
+        env:
+          GEN_OPT: ${{ inputs.android_opt || '1' }}
         run: bash scripts/build_android.sh
       - uses: actions/upload-artifact@v4
         with:
