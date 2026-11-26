@@ -39,9 +39,6 @@
 // MIT licence; see port/README.md.
 
 #include "app_paths.hpp"
-#if defined(__ANDROID__)
-#include "install/user_data.hpp"
-#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -239,30 +236,25 @@ void pin_all_threads(const std::vector<int> &cores) {
 // /sdcard/Android/data/<app>/files), set before the game starts, as a computer's environment would. A phone has no way to set them.
 // Lines starting with # are skipped. Nothing happens when the file is not there.
 void load_env_file() {
-    std::vector<std::filesystem::path> folders;
-    try {
-        folders.push_back(portablekit::install::shared_data_directory());
-    } catch (const std::exception &) {
+    // This runs while the library loads, before Java is ready: no JNI here, so the folder is built from the app's own name.
+    std::string app;
+    {
+        std::ifstream cmdline("/proc/self/cmdline");
+        std::getline(cmdline, app, '\0');
     }
-    try {
-        folders.push_back(portablekit::install::user_data_directory());
-    } catch (const std::exception &) {
+    if (app.empty() || app.find('/') != std::string::npos) return;
+    std::ifstream file("/sdcard/Android/data/" + app + "/files/env.txt");
+    if (!file) return;
+    std::string line;
+    int count = 0;
+    while (std::getline(file, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        const std::size_t equals = line.find('=');
+        if (line.empty() || line[0] == '#' || equals == std::string::npos || equals == 0) continue;
+        setenv(line.substr(0, equals).c_str(), line.substr(equals + 1).c_str(), 1);
+        ++count;
     }
-    for (const std::filesystem::path &folder : folders) {
-        std::ifstream file(folder / "env.txt");
-        if (!file) continue;
-        std::string line;
-        int count = 0;
-        while (std::getline(file, line)) {
-            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-            const std::size_t equals = line.find('=');
-            if (line.empty() || line[0] == '#' || equals == std::string::npos || equals == 0) continue;
-            setenv(line.substr(0, equals).c_str(), line.substr(equals + 1).c_str(), 1);
-            ++count;
-        }
-        __android_log_print(ANDROID_LOG_INFO, "D012", "env.txt: %d variables set", count);
-        return;
-    }
+    __android_log_print(ANDROID_LOG_INFO, "D012", "env.txt: %d variables set", count);
 }
 
 void prefer_fast_cores() {
