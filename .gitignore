@@ -88,7 +88,5 @@ crash_report.txt
 /third_party/dissidia012-pc/port/tools/
 
 # Build scripts that stay local
-/scripts/setup_relay_server.sh
 relay-src.tar.gz
-/scripts/make_data_pack.ps1
-/scripts/make_release.ps1
+/scripts/*
