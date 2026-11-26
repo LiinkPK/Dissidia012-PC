@@ -1,0 +1,228 @@
+From 73566fcbcf9741517b389aaa6cd062ea5449c924 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 16:03:48 +0100
+Subject: [PATCH] Glyph atlas: signed distance field glyphs and line quads (not
+ used by the renderer yet)
+
+---
+ host/fonts/game_font.cpp | 165 +++++++++++++++++++++++++++++++++++++++
+ host/fonts/game_font.hpp |  20 +++++
+ 2 files changed, 185 insertions(+)
+
+diff --git a/host/fonts/game_font.cpp b/host/fonts/game_font.cpp
+index 4b795f6..550ac04 100644
+--- a/host/fonts/game_font.cpp
++++ b/host/fonts/game_font.cpp
+@@ -807,6 +807,168 @@ std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int
+     return out;
+ }
+ 
++// --- The glyph atlas -----------------------------------------------------------------------------------------------------
++namespace {
++
++constexpr int kAtlasSize = 2048;       // texels each way: 4 MB of 8-bit field
++constexpr int kAtlasSuper = 3;         // field texels per game texel (the atlas glyphs are drawn 3x the game's cell size)
++constexpr int kAtlasPadding = 6;       // field texels around a glyph that the field reaches into
++constexpr float kAtlasDistScale = 128.0f / static_cast<float>(kAtlasPadding);  // 0 at the padding's edge, 128 on the glyph's edge
++
++struct AtlasGlyph {
++    bool ok{};            // false: the glyph has no ink (a space) or does not fit; `empty` tells which
++    bool empty{};
++    float u0{}, v0{}, u1{}, v1{};
++    // The field bitmap's box relative to the glyph's origin (its baseline start), in game texels at the glyph's own scale.
++    float left{}, top{}, right{}, bottom{};
++};
++
++struct Atlas {
++    std::vector<std::uint8_t> pixels;
++    std::unordered_map<std::uint64_t, AtlasGlyph> glyphs;  // by code and boldness
++    int shelf_x{}, shelf_y{}, shelf_height{};
++    std::uint64_t version{1};
++};
++
++Atlas &atlas() {
++    static Atlas value;
++    return value;
++}
++
++void atlas_clear(Atlas &a) {
++    a.pixels.assign(static_cast<std::size_t>(kAtlasSize) * kAtlasSize, 0u);
++    a.glyphs.clear();
++    a.shelf_x = a.shelf_y = a.shelf_height = 0;
++    ++a.version;
++}
++
++// Makes the glyph's field and puts it in the atlas. The atlas is cleared first when there is no room (the caller asked for the
++// quads it needs again afterwards, see atlas_line_quads).
++const AtlasGlyph &atlas_glyph(State &s, Atlas &a, std::uint32_t code, bool &cleared) {
++    const Layout &layout = layout_for(s, code);
++    const std::uint64_t key = (static_cast<std::uint64_t>(code) << 8u) | static_cast<std::uint64_t>(layout.bold & 0xFFu);
++    const auto found = a.glyphs.find(key);
++    if (found != a.glyphs.end()) return found->second;
++    AtlasGlyph glyph;
++    if (layout.face == nullptr || layout.metrics.width <= 0) {
++        glyph.empty = true;
++        return a.glyphs.emplace(key, glyph).first->second;
++    }
++    const float scale = layout.scale_y * static_cast<float>(kAtlasSuper);
++    int w = 0, h = 0, xoff = 0, yoff = 0;
++    unsigned char *field = stbtt_GetGlyphSDF(&layout.face->info, scale, layout.glyph, kAtlasPadding, 128u, kAtlasDistScale, &w, &h, &xoff, &yoff);
++    if (field == nullptr || w <= 0 || h <= 0) {
++        if (field != nullptr) stbtt_FreeSDF(field, nullptr);
++        glyph.empty = true;  // no outline: nothing to draw
++        return a.glyphs.emplace(key, glyph).first->second;
++    }
++    // Emboldening: the game widens its bitmaps by `bold` columns, so the field is raised by half that on each side.
++    if (layout.bold > 0) {
++        const int raise = static_cast<int>(0.5f * static_cast<float>(layout.bold) * static_cast<float>(kAtlasSuper) * kAtlasDistScale);
++        for (int i = 0; i < w * h; ++i) field[i] = static_cast<unsigned char>(std::min(255, static_cast<int>(field[i]) + raise));
++    }
++    const int cell_w = w + 2, cell_h = h + 2;  // a texel of rim around each glyph so that smoothing never reads a neighbour
++    if (cell_w > kAtlasSize || cell_h > kAtlasSize) {
++        stbtt_FreeSDF(field, nullptr);
++        glyph.empty = true;
++        return a.glyphs.emplace(key, glyph).first->second;
++    }
++    if (a.shelf_x + cell_w > kAtlasSize) {  // a new shelf
++        a.shelf_y += a.shelf_height;
++        a.shelf_x = 0;
++        a.shelf_height = 0;
++    }
++    if (a.shelf_y + cell_h > kAtlasSize) {  // full: start again
++        atlas_clear(a);
++        cleared = true;
++    }
++    const int x = a.shelf_x + 1, y = a.shelf_y + 1;
++    for (int row = 0; row < h; ++row)
++        std::memcpy(&a.pixels[static_cast<std::size_t>(y + row) * kAtlasSize + x], field + static_cast<std::size_t>(row) * w, static_cast<std::size_t>(w));
++    stbtt_FreeSDF(field, nullptr);
++    a.shelf_x += cell_w;
++    a.shelf_height = std::max(a.shelf_height, cell_h);
++    ++a.version;
++    const float inv = 1.0f / static_cast<float>(kAtlasSize);
++    glyph.ok = true;
++    glyph.u0 = static_cast<float>(x) * inv;
++    glyph.v0 = static_cast<float>(y) * inv;
++    glyph.u1 = static_cast<float>(x + w) * inv;
++    glyph.v1 = static_cast<float>(y + h) * inv;
++    const float to_game = 1.0f / static_cast<float>(kAtlasSuper);
++    glyph.left = static_cast<float>(xoff) * to_game;
++    glyph.top = static_cast<float>(yoff) * to_game;
++    glyph.right = glyph.left + static_cast<float>(w) * to_game;
++    glyph.bottom = glyph.top + static_cast<float>(h) * to_game;
++    return a.glyphs.emplace(key, glyph).first->second;
++}
++
++}  // namespace
++
++bool atlas_line_quads(const std::vector<LineGlyph> &glyphs, int size_percent, std::vector<AtlasQuad> &out) {
++    const std::lock_guard<std::recursive_mutex> lock(cache_mutex());
++    State &s = loaded_state();
++    Atlas &a = atlas();
++    if (a.pixels.empty()) atlas_clear(a);
++    const std::uint32_t percent = size_percent > 0 ? static_cast<std::uint32_t>(size_percent)
++                                                    : std::clamp<std::uint32_t>(settings::current().text_size, 50u, 100u);
++    const float shrink = static_cast<float>(percent) / 100.0f;
++    // Two tries: when the atlas had to be cleared in the middle, the quads made so far point at glyphs that are gone.
++    for (int attempt = 0; attempt < 2; ++attempt) {
++        out.clear();
++        bool cleared = false;
++        bool missing = false;
++        for (const LineGlyph &g : glyphs) {
++            const Layout &layout = layout_for(s, g.code);
++            if (layout.face == nullptr || layout.metrics.width <= 0) continue;
++            const AtlasGlyph &glyph = atlas_glyph(s, a, g.code, cleared);
++            if (cleared) break;
++            if (glyph.empty) continue;
++            if (!glyph.ok) {
++                missing = true;
++                break;
++            }
++            // The glyph's origin: where its baseline starts. The game put the bitmap's top-left at (x64, y64)/64, and the bitmap's own
++            // box started at natural_x0/natural_y0 from the origin.
++            const float origin_x = static_cast<float>(g.x64) / 64.0f - static_cast<float>(layout.natural_x0);
++            const float baseline = static_cast<float>(g.y64) / 64.0f - static_cast<float>(layout.natural_y0);
++            AtlasQuad quad;
++            quad.x0 = origin_x + glyph.left;
++            quad.x1 = origin_x + glyph.right;
++            quad.y0 = baseline + glyph.top;
++            quad.y1 = baseline + glyph.bottom;
++            // Text > Size: shrunk about the glyph's centre across and about its baseline up and down, as render_line does.
++            const float centre = 0.5f * (quad.x0 + quad.x1);
++            quad.x0 = centre + (quad.x0 - centre) * shrink;
++            quad.x1 = centre + (quad.x1 - centre) * shrink;
++            quad.y0 = baseline + (quad.y0 - baseline) * shrink;
++            quad.y1 = baseline + (quad.y1 - baseline) * shrink;
++            quad.u0 = glyph.u0;
++            quad.v0 = glyph.v0;
++            quad.u1 = glyph.u1;
++            quad.v1 = glyph.v1;
++            out.push_back(quad);
++        }
++        if (missing) return false;
++        if (!cleared) return true;
++    }
++    return false;
++}
++
++bool atlas_snapshot(std::uint64_t known_version, std::vector<std::uint8_t> &pixels, std::uint32_t &width, std::uint32_t &height,
++                    std::uint64_t &version) {
++    const std::lock_guard<std::recursive_mutex> lock(cache_mutex());
++    Atlas &a = atlas();
++    if (a.pixels.empty()) atlas_clear(a);
++    version = a.version;
++    width = height = static_cast<std::uint32_t>(kAtlasSize);
++    if (a.version == known_version) return false;
++    pixels = a.pixels;
++    return true;
++}
++
++float atlas_texels_per_game_texel() { return static_cast<float>(kAtlasSuper); }
++
+ static void (*reload_hook)() = nullptr;
+ 
+ void reload() {
+@@ -816,6 +978,9 @@ void reload() {
+         s.layouts.clear();
+         s.bitmaps.clear();
+         s.line_images.clear();
++        atlas().glyphs.clear();
++        atlas().pixels.clear();  // made again (and the version moved on) by the next glyph
++        ++atlas().version;
+         load(s);
+         ++s.generation;
+     }
+diff --git a/host/fonts/game_font.hpp b/host/fonts/game_font.hpp
+index 33c9bcc..33c5784 100644
+--- a/host/fonts/game_font.hpp
++++ b/host/fonts/game_font.hpp
+@@ -111,6 +111,26 @@ bool line_glyphs_at(std::uint32_t address, std::vector<LineGlyph> &out, std::uin
+ [[nodiscard]] std::vector<std::uint8_t> render_line(const std::vector<LineGlyph> &glyphs, int width, int height, int scale,
+                                                         int size_percent = 0);  // size_percent 0: the Text > Size setting
+ 
++// --- The glyph atlas (signed distance field) ---------------------------------------------------------------------------
++// The same lines as quads of an atlas instead of an image per line: one 8-bit texture holds the distance field of every glyph
++// drawn so far, and a line is a quad per glyph, so text is as sharp as the screen is and costs a few MB however many lines are
++// on show. A texel holds 128 on the glyph's edge, more inside, less outside (the shader makes coverage from it).
++struct AtlasQuad {
++    float x0{}, y0{}, x1{}, y1{};  // where the quad goes in the line's texture, in the game's texels (the size already applied)
++    float u0{}, v0{}, u1{}, v1{};  // its rectangle of the atlas, 0..1
++};
++// The quads of a line (as line_glyphs_at gives its glyphs), `size_percent` as in render_line. False when a glyph could not be
++// put in the atlas (it is full of glyphs this very line needs, or there is no font): draw the line the old way.
++[[nodiscard]] bool atlas_line_quads(const std::vector<LineGlyph> &glyphs, int size_percent, std::vector<AtlasQuad> &out);
++// The atlas pixels (width * height bytes) when they changed since `known_version`; false: nothing new. `version` is the number to
++// pass next time. The atlas is cleared (and the version moves on) when it fills up or the font is loaded again, and the quads
++// made before then are stale: ask for them again.
++bool atlas_snapshot(std::uint64_t known_version, std::vector<std::uint8_t> &pixels, std::uint32_t &width, std::uint32_t &height,
++                    std::uint64_t &version);
++// The most distance a texel reaches, in the atlas' own texels: the shader's smoothing is made from the field's slope, this is it
++// for the glyph size the atlas is made at (texels of field per game texel).
++[[nodiscard]] float atlas_texels_per_game_texel();
++
+ // Rereads the font settings and clears every cached glyph, so the next glyph
+ // the game asks for comes from the new font, then runs the hook.
+ void reload();
+-- 
+2.54.0.windows.1
+

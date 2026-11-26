@@ -166,10 +166,10 @@ void migrate_legacy_data(const std::filesystem::path &data) {
 }
 #endif
 
-#if defined(D012_INSTALLER_BUILD) && defined(_WIN32)
+#if defined(_WIN32)
 // A windowed program started from a shortcut has no standard output: keep
-// what it prints, for the player's bug reports. Output a parent redirected
-// (the installer, the test tools) is left where it goes.
+// what it prints, for the player's bug reports, in <data>/logs/D012Native.log (the run before in D012Native-previous.log), in every
+// Windows build. Output a parent redirected (cmd's "> file", the installer, the test tools) is left where it goes.
 void log_to_file_without_console(const std::filesystem::path &logs) {
     const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out != nullptr && out != INVALID_HANDLE_VALUE) return;
@@ -177,7 +177,7 @@ void log_to_file_without_console(const std::filesystem::path &logs) {
     std::filesystem::create_directories(logs, ec);
     const std::filesystem::path log = logs / "D012Native.log";
     std::filesystem::rename(log, logs / "D012Native-previous.log", ec);
-    if (std::freopen(log.string().c_str(), "w", stdout) != nullptr) std::setvbuf(stdout, nullptr, _IOLBF, 4096);
+    if (std::freopen(log.string().c_str(), "w", stdout) != nullptr) std::setvbuf(stdout, nullptr, _IONBF, 0);  // every line reaches the file at once: a crash keeps the log up to its end
     std::freopen(log.string().c_str(), "a", stderr);
 }
 #endif
@@ -192,6 +192,12 @@ struct PortableLayout {
     }
 
     static void apply() {
+#if defined(_WIN32)
+        // Output that cmd redirects to a file ("d012_native.exe > log.txt") is held in a buffer and written in blocks, so a game that is
+        // closed with Alt+F4, killed or crashed leaves an empty or short file. Written line by line, the log has everything up to the end.
+        if (const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE); out != nullptr && out != INVALID_HANDLE_VALUE && GetFileType(out) == FILE_TYPE_DISK)
+            std::setvbuf(stdout, nullptr, _IONBF, 0);
+#endif
         const std::filesystem::path folder = portablekit::executable_directory();
         std::error_code ec;
         const bool game_folder = !folder.empty() && std::filesystem::is_regular_file(folder / "game" / "EBOOT.ELF", ec);
@@ -225,7 +231,7 @@ struct PortableLayout {
         // The player did not choose the data folder (D012_DATA_DIR): put the data of an older version where the game looks now.
         if (data_folder_is_default) migrate_legacy_data(std::filesystem::path(std::u8string(data.begin(), data.end())));
 #endif
-#if defined(D012_INSTALLER_BUILD) && defined(_WIN32)
+#if defined(_WIN32)
         log_to_file_without_console(std::filesystem::path(std::u8string(data.begin(), data.end())) / "logs");
 #endif
         if (!is_set(kMemoryStickDir))

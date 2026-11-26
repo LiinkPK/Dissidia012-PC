@@ -1,0 +1,55 @@
+From 94e14ea58fd3cc6a4dc2e527fc6f7b1f82db0159 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 15:59:26 +0100
+Subject: [PATCH] Text lines: always sampled smoothly, whatever the sharp
+ texture setting
+
+---
+ host/gpu/vulkan_renderer.cpp | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 3bb996c..6c9710e 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -2946,7 +2946,9 @@ struct VulkanRenderer::Impl {
+     void snapshot_guest_words(const GuestMemory &memory, std::uint32_t address, Target &target);
+     Texture create_texture(std::uint32_t width, std::uint32_t height, const std::uint32_t *pixels);
+     // The image, view and descriptor of a texture, with no pixels yet.
+-    Texture create_texture_image(std::uint32_t width, std::uint32_t height);
++    // `linear`: the descriptor always samples smoothly, whatever the sharp texture setting (the redrawn text lines: nearest sampling of
++    // a line drawn 2x2 pixels to a texel shows its texels as blocks).
++    Texture create_texture_image(std::uint32_t width, std::uint32_t height, bool linear = false);
+     // Copies pixels into a texture's image: ahead of the frame's commands
+     // while one is recorded, else at once (waiting for the queue).
+     void upload_texture(VkImage image, std::uint32_t width, std::uint32_t height, const std::uint32_t *pixels);
+@@ -4997,7 +4999,7 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture(std::uint32_t
+     return texture;
+ }
+ 
+-VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::uint32_t width, std::uint32_t height) {
++VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::uint32_t width, std::uint32_t height, bool linear) {
+     Texture texture{};
+     std::string error;
+     if (!create_image(width, height, VK_FORMAT_R8G8B8A8_UNORM,
+@@ -5015,7 +5017,7 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
+         vkFreeMemory(device, texture.memory, nullptr);
+         return Texture{};
+     }
+-    VkDescriptorImageInfo image_info{texture_sampler(), texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
++    VkDescriptorImageInfo image_info{linear ? sampler : texture_sampler(), texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+     VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+     write.dstSet = texture.descriptor;
+     write.descriptorCount = 1u;
+@@ -5731,7 +5733,7 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+         }
+     }
+ 
+-    Texture fresh = create_texture_image(full_width, full_height);
++    Texture fresh = create_texture_image(full_width, full_height, true);
+     if (fresh.descriptor != VK_NULL_HANDLE)
+         upload_texture_region(fresh.image, full_width, full_height, subtitle_line && dark_ramp ? 0u : colors[0], ink_left,
+                               ink_top, ink_width, ink_height,
+-- 
+2.54.0.windows.1
+

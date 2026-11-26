@@ -1,0 +1,104 @@
+From 9f2d79e476635a94cc1f754aad9e750bcb9dc10f Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 16:06:52 +0100
+Subject: [PATCH] Text lines: D012_TEXT_STATS prints what redrawing them costs
+
+---
+ host/gpu/vulkan_renderer.cpp | 39 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 6c9710e..3cd11fc 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5530,6 +5530,29 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+     return cached;
+ }
+ 
++// <prefix>_TEXT_STATS=1: every 300 frames, one line with what redrawing the text lines cost since the last: how many were made, the
++// time that took (rendering the glyphs, the upload, the image) and the time spent waiting for the GPU to give old lines back.
++struct TextLineStats {
++    std::uint64_t builds{}, evicted{}, waits{};
++    double build_ms{}, build_max_ms{}, wait_ms{};
++    std::size_t lines{};
++};
++static TextLineStats g_text_stats;
++static bool text_stats_on() {
++    static const bool on = portablekit::env("TEXT_STATS") != nullptr;
++    return on;
++}
++static void text_stats_report(std::uint64_t frame, std::size_t lines) {
++    if (!text_stats_on() || frame % 300u != 0u) return;
++    TextLineStats &t = g_text_stats;
++    std::printf("[text-stats] frame %llu: %llu lines made (%.1f ms, longest %.2f ms), %llu given back (%llu GPU waits, %.1f ms), %zu cached
++",
++                static_cast<unsigned long long>(frame), static_cast<unsigned long long>(t.builds), t.build_ms, t.build_max_ms,
++                static_cast<unsigned long long>(t.evicted), static_cast<unsigned long long>(t.waits), t.wait_ms, lines);
++    std::fflush(stdout);
++    t = TextLineStats{};
++}
++
+ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &memory, const DrawCall &call,
+                                                            const Texture &original) {
+     // <prefix>_TEXT_HD_SCALE=N: texels per original texel of a text line (default 3; 0 draws the game's own lines).
+@@ -5545,15 +5568,20 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+         return VK_NULL_HANDLE;
+     const std::uint32_t address = state.address & 0x0FFFFFFFu;
+ 
++    text_stats_report(frames, text_lines.size());
+     // Lines no draw has used for a while give their images back.
+     if (frames % 120u == 0u) {
+         for (auto it = text_lines.begin(); it != text_lines.end();) {
+             if (frames - it->second.last_frame > 240u) {
++                ++g_text_stats.evicted;
+                 if (async_uploads()) {
+                     slots[slot].retired_textures.push_back(it->second.texture);
+                 } else {
++                    const auto waited = std::chrono::steady_clock::now();
+                     queue_wait_idle();
+                     destroy_texture(it->second.texture);
++                    ++g_text_stats.waits;
++                    g_text_stats.wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waited).count();
+                 }
+                 it = text_lines.erase(it);
+             } else {
+@@ -5574,11 +5602,15 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+         std::sort(oldest.begin(), oldest.end());
+         for (std::size_t i = 0; i < oldest.size() && i < kEvictBatch; ++i) {
+             const auto found = text_lines.find(oldest[i].second);
++            ++g_text_stats.evicted;
+             if (async_uploads()) {
+                 slots[slot].retired_textures.push_back(found->second.texture);
+             } else {
++                const auto waited = std::chrono::steady_clock::now();
+                 queue_wait_idle();
+                 destroy_texture(found->second.texture);
++                ++g_text_stats.waits;
++                g_text_stats.wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waited).count();
+             }
+             text_lines.erase(found);
+         }
+@@ -5638,6 +5670,7 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+     TextLine &line = text_lines[cache_key];
+     line.last_frame = frames;
+     if (line.texture.descriptor != VK_NULL_HANDLE && line.stamp == stamp) return line.texture.descriptor;
++    const auto build_started = std::chrono::steady_clock::now();
+ 
+     // The game writes a glyph's coverage as a 4-bit palette index (coverage / 16), so the palette is the colour ramp: each
+     // texel takes the colour between the two entries its coverage falls between.
+@@ -5749,6 +5782,12 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+     }
+     line.texture = fresh;
+     line.stamp = stamp;
++    {
++        const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - build_started).count();
++        ++g_text_stats.builds;
++        g_text_stats.build_ms += took;
++        g_text_stats.build_max_ms = std::max(g_text_stats.build_max_ms, took);
++    }
+     return line.texture.descriptor;
+ }
+ 
+-- 
+2.54.0.windows.1
+

@@ -1,0 +1,225 @@
+From 89ce38773e42a01e5703bcd684f95c326fc054eb Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 17:15:27 +0100
+Subject: [PATCH] Video: Anti-aliasing option (FXAA) in the level pass
+
+---
+ host/gpu/shaders/level.frag  | 36 ++++++++++++++++++++++++++++++++++--
+ host/gpu/vulkan_renderer.cpp | 21 +++++++++++++++++----
+ host/gpu/vulkan_renderer.hpp |  2 ++
+ host/settings/settings.cpp   |  1 +
+ host/settings/settings.hpp   |  1 +
+ host/ui/menu.cpp             |  9 +++++++++
+ 6 files changed, 64 insertions(+), 6 deletions(-)
+
+diff --git a/host/gpu/shaders/level.frag b/host/gpu/shaders/level.frag
+index 3756666..2a64241 100644
+--- a/host/gpu/shaders/level.frag
++++ b/host/gpu/shaders/level.frag
+@@ -1,7 +1,9 @@
+ #version 450
+ 
+ // Level horizon: the game's picture turned about its centre and zoomed just
+-// enough to cover its rectangle, so no corner is ever left empty.
++// enough to cover its rectangle, so no corner is ever left empty. Also the pass
++// that smooths the picture's edges (FXAA) when that is on; with no turn it
++// draws the picture as it is, or smoothed.
+ 
+ layout(set = 0, binding = 0) uniform sampler2D frame;
+ 
+@@ -11,11 +13,40 @@ layout(push_constant) uniform Level {
+     // cos and sin of the turn (anticlockwise on screen), the zoom, and the
+     // picture's width over its height.
+     vec4 turn;
++    // x: 1 when the picture is smoothed (FXAA).
++    vec4 options;
+ } level;
+ 
+ layout(location = 0) in vec2 picture;
+ layout(location = 0) out vec4 color;
+ 
++// FXAA (Timothy Lottes' public FXAA 2 scheme: a blur along the direction of the local edge, kept only when it does not leave the
++// range of the neighbours' brightness). Neighbours are taken inside the picture's own rectangle, never from the bars beside it.
++vec3 fxaa(vec2 uv) {
++    vec2 px = 1.0 / vec2(textureSize(frame, 0));
++    vec2 low = level.rect.xy + 0.5 * px;
++    vec2 high = level.rect.xy + level.rect.zw - 0.5 * px;
++    const vec3 luma = vec3(0.299, 0.587, 0.114);
++    vec3 nw = texture(frame, clamp(uv + vec2(-1.0, -1.0) * px, low, high)).rgb;
++    vec3 ne = texture(frame, clamp(uv + vec2(1.0, -1.0) * px, low, high)).rgb;
++    vec3 sw = texture(frame, clamp(uv + vec2(-1.0, 1.0) * px, low, high)).rgb;
++    vec3 se = texture(frame, clamp(uv + vec2(1.0, 1.0) * px, low, high)).rgb;
++    vec3 m = texture(frame, clamp(uv, low, high)).rgb;
++    float l_nw = dot(nw, luma), l_ne = dot(ne, luma), l_sw = dot(sw, luma), l_se = dot(se, luma), l_m = dot(m, luma);
++    float l_min = min(l_m, min(min(l_nw, l_ne), min(l_sw, l_se)));
++    float l_max = max(l_m, max(max(l_nw, l_ne), max(l_sw, l_se)));
++    vec2 dir = vec2(-((l_nw + l_ne) - (l_sw + l_se)), (l_nw + l_sw) - (l_ne + l_se));
++    float reduce = max((l_nw + l_ne + l_sw + l_se) * (0.25 * (1.0 / 8.0)), 1.0 / 128.0);
++    float rcp = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
++    dir = clamp(dir * rcp, vec2(-8.0), vec2(8.0)) * px;
++    vec3 a = 0.5 * (texture(frame, clamp(uv + dir * (1.0 / 3.0 - 0.5), low, high)).rgb +
++                    texture(frame, clamp(uv + dir * (2.0 / 3.0 - 0.5), low, high)).rgb);
++    vec3 b = a * 0.5 + 0.25 * (texture(frame, clamp(uv + dir * -0.5, low, high)).rgb +
++                               texture(frame, clamp(uv + dir * 0.5, low, high)).rgb);
++    float l_b = dot(b, luma);
++    return (l_b < l_min || l_b > l_max) ? a : b;
++}
++
+ void main() {
+     // Centred, in units of the picture's height, y down as on screen.
+     vec2 point = (picture - 0.5) * vec2(level.turn.w, 1.0);
+@@ -25,5 +56,6 @@ void main() {
+     float s = level.turn.y;
+     vec2 source = vec2(c * point.x - s * point.y, s * point.x + c * point.y) / level.turn.z;
+     vec2 uv = source / vec2(level.turn.w, 1.0) + 0.5;
+-    color = texture(frame, level.rect.xy + clamp(uv, 0.0, 1.0) * level.rect.zw);
++    vec2 frame_uv = level.rect.xy + clamp(uv, 0.0, 1.0) * level.rect.zw;
++    color = level.options.x > 0.5 ? vec4(fxaa(frame_uv), 1.0) : texture(frame, frame_uv);
+ }
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 3cd11fc..cb6661f 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1323,6 +1323,7 @@ struct VulkanRenderer::Impl {
+     // The framebuffers the game showed last: its interface is drawn into them.
+     std::array<std::uint32_t, 2> display_addresses{};
+     bool sharp_screen{};
++    bool fxaa{};  // the finished picture goes through the level pass with FXAA on
+     bool sharp_textures{};
+     std::string device_name;
+ 
+@@ -3074,6 +3075,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
+     impl.requested_present = player.present_mode;
+     impl.aspect = usable_aspect(player.aspect);
+     impl.sharp_screen = player.sharp_screen;
++    impl.fxaa = player.fxaa;
+     impl.sharp_textures = player.sharp_textures;
+     impl.trace_interpolation = portablekit::env("TRACE_INTERPOLATION") != nullptr;
+     impl.capture_blended_only = portablekit::env("CAPTURE_BLENDED") != nullptr;
+@@ -4328,7 +4330,7 @@ bool VulkanRenderer::Impl::create_level_pipeline(std::string &error) {
+     if (!check(vkCreateDescriptorPool(device, &pool_info, nullptr, &level_pool), "vkCreateDescriptorPool", error))
+         return false;
+ 
+-    VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0u, 8u * sizeof(float)};
++    VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0u, 12u * sizeof(float)};
+     VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+     layout_info.setLayoutCount = 1u;
+     layout_info.pSetLayouts = &level_set_layout;
+@@ -4492,14 +4494,18 @@ void VulkanRenderer::Impl::record_level(VkCommandBuffer commands, std::uint32_t
+     const float c = std::cos(radians);
+     const float s = std::fabs(std::sin(radians));
+     const float zoom = std::max(c + height / width * s, c + width / height * s);
+-    const float push[8] = {static_cast<float>(picture_low.x) / static_cast<float>(swapchain_extent.width),
++    const float push[12] = {static_cast<float>(picture_low.x) / static_cast<float>(swapchain_extent.width),
+                            static_cast<float>(picture_low.y) / static_cast<float>(swapchain_extent.height),
+                            width / static_cast<float>(swapchain_extent.width),
+                            height / static_cast<float>(swapchain_extent.height),
+                            c,
+                            std::sin(radians),
+                            zoom,
+-                           width / height};
++                           width / height,
++                           fxaa ? 1.0f : 0.0f,
++                           0.0f,
++                           0.0f,
++                           0.0f};
+     const VkClearValue black{{{0.0f, 0.0f, 0.0f, 1.0f}}};
+     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+     pass.renderPass = level_render_pass;
+@@ -4673,7 +4679,8 @@ bool VulkanRenderer::Impl::record_window(VkCommandBuffer commands, const std::ui
+             // Angle + level horizon turns the picture; everything drawn after
+             // it (the overlay, the interface) stays upright.
+             const float level = input::motion::level_degrees();
+-            if (std::fabs(level) > 0.01f && ensure_level_images() && image_index < level_images.size()) {
++            // The level pass also does FXAA, so it runs for that alone too (turned by nothing then).
++            if ((std::fabs(level) > 0.01f || fxaa) && ensure_level_images() && image_index < level_images.size()) {
+                 transition(commands, level_images[image_index].image, VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                 record_game_blit(commands, source, level_images[image_index].image);
+@@ -8237,6 +8244,12 @@ void VulkanRenderer::set_sharp_screen(bool sharp) {
+     impl_->sharp_screen = sharp;
+ }
+ 
++void VulkanRenderer::set_fxaa(bool enabled) {
++    if (!impl_) return;
++    const Impl::Guard guard(*impl_);
++    impl_->fxaa = enabled;
++}
++
+ void VulkanRenderer::set_texture_pack(bool enabled) {
+     // Applied at the next begin_frame(), where no frame is being recorded.
+     if (impl_) impl_->pack_wanted = enabled;
+diff --git a/host/gpu/vulkan_renderer.hpp b/host/gpu/vulkan_renderer.hpp
+index ac53755..70d1ab3 100644
+--- a/host/gpu/vulkan_renderer.hpp
++++ b/host/gpu/vulkan_renderer.hpp
+@@ -268,6 +268,8 @@ public:
+     [[nodiscard]] static bool supports_fill() noexcept;
+     [[nodiscard]] static settings::Aspect usable_aspect(settings::Aspect aspect) noexcept;
+     void set_sharp_screen(bool sharp);
++    // FXAA anti-aliasing of the finished picture (the pass that also turns it for the level horizon).
++    void set_fxaa(bool enabled);
+     void set_sharp_textures(bool sharp);
+     // Draws an installed HD texture pack's images instead of the game's own
+     // textures (texture_pack.hpp). Takes effect from the next frame; off
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 19f34fa..06291c4 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -196,6 +196,7 @@ const std::vector<Field> &fields() {
+         {"video.aspect", nullptr, [](Settings &s, const std::string &t) { return kAspects.parse(t, s.aspect); },
+          [](const Settings &s) { return kAspects.format(s.aspect); }, nullptr},
+         BOOL_FIELD("video.sharp_screen", sharp_screen),
++        BOOL_FIELD("video.fxaa", fxaa),
+         BOOL_FIELD("video.sharp_textures", sharp_textures),
+         {"video.texture_pack", "TEXTURE_PACK",
+          [](Settings &s, const std::string &t) { return parse_bool(t, s.texture_pack); },
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index fe4f903..26949e0 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -50,6 +50,7 @@ struct Settings {
+     PresentMode present_mode{PresentMode::Fifo};
+     Aspect aspect{Aspect::Stretch};
+     bool sharp_screen{};               // nearest instead of linear scaling to the window
++    bool fxaa{};                       // FXAA anti-aliasing of the finished picture, at the window's resolution
+     bool sharp_textures{};             // nearest instead of linear texture sampling
+     bool texture_pack{true};           // draw an installed HD texture pack's images instead of the game's
+     std::uint32_t texture_size{0u};    // the HD pack's image size as a multiple of the game's own texture, set as they load: 1 Low, 2 Medium, 0 as stored (High)
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index 0f6ddf6..8d715d5 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -742,6 +742,13 @@ void Menu::video() {
+         renderer().set_sharp_screen(s.sharp_screen);
+         settings::save();
+     }
++    if (choice_row("Anti-aliasing", s.fxaa ? "FXAA" : "Off",
++                   options_for("video.fxaa", "Smooths jagged edges on the finished picture. FXAA is light on the graphics card "
++                                             "(it costs a little more on a phone); Off draws the picture as it is."))) {
++        s.fxaa = !s.fxaa;
++        renderer().set_fxaa(s.fxaa);
++        settings::save();
++    }
+     if (choice_row("Texture filter", s.sharp_textures ? "Sharp" : "Smooth",
+                    options_for("video.sharp_textures", "How the game's textures are sampled: smooth (bilinear) or "
+                                                        "sharp (nearest texel)."))) {
+@@ -891,6 +898,7 @@ void Menu::video() {
+         restore("video.window_scale", s.window_scale, d.window_scale);
+         restore("video.aspect", s.aspect, d.aspect);
+         restore("video.sharp_screen", s.sharp_screen, d.sharp_screen);
++        restore("video.fxaa", s.fxaa, d.fxaa);
+         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
+         restore("video.texture_pack", s.texture_pack, d.texture_pack);
+         restore("video.texture_size", s.texture_size, d.texture_size);
+@@ -905,6 +913,7 @@ void Menu::video() {
+         renderer().set_window_scale(s.window_scale);
+         renderer().set_aspect(s.aspect);
+         renderer().set_sharp_screen(s.sharp_screen);
++        renderer().set_fxaa(s.fxaa);
+         renderer().set_sharp_textures(s.sharp_textures);
+         renderer().set_texture_pack(s.texture_pack);
+         renderer().reload_texture_pack();  // the images load again at the restored Texture quality
+-- 
+2.54.0.windows.1
+
