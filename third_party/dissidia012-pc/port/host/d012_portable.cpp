@@ -39,6 +39,9 @@
 // MIT licence; see port/README.md.
 
 #include "app_paths.hpp"
+#if defined(__ANDROID__)
+#include "install/user_data.hpp"
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -232,6 +235,36 @@ void pin_all_threads(const std::vector<int> &cores) {
     }
 }
 
+// Settings for a test run from a file: a line KEY=VALUE per variable in env.txt (the app's shared folder, which adb can write to:
+// /sdcard/Android/data/<app>/files), set before the game starts, as a computer's environment would. A phone has no way to set them.
+// Lines starting with # are skipped. Nothing happens when the file is not there.
+void load_env_file() {
+    std::vector<std::filesystem::path> folders;
+    try {
+        folders.push_back(portablekit::install::shared_data_directory());
+    } catch (const std::exception &) {
+    }
+    try {
+        folders.push_back(portablekit::install::user_data_directory());
+    } catch (const std::exception &) {
+    }
+    for (const std::filesystem::path &folder : folders) {
+        std::ifstream file(folder / "env.txt");
+        if (!file) continue;
+        std::string line;
+        int count = 0;
+        while (std::getline(file, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            const std::size_t equals = line.find('=');
+            if (line.empty() || line[0] == '#' || equals == std::string::npos || equals == 0) continue;
+            setenv(line.substr(0, equals).c_str(), line.substr(equals + 1).c_str(), 1);
+            ++count;
+        }
+        __android_log_print(ANDROID_LOG_INFO, "D012", "env.txt: %d variables set", count);
+        return;
+    }
+}
+
 void prefer_fast_cores() {
     if (is_set("D012_NO_BIG_CORES")) return;
     const std::vector<int> cores = fast_cores();
@@ -266,6 +299,7 @@ struct PortableLayout {
             std::setvbuf(stdout, nullptr, _IONBF, 0);
 #endif
 #if defined(__ANDROID__)
+        load_env_file();
         prefer_fast_cores();
 #endif
         const std::filesystem::path folder = portablekit::executable_directory();
