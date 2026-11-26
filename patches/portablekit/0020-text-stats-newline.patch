@@ -1,0 +1,27 @@
+From 939621606d8a0f8a8f8dfd1a7bdcb8a43ea6dca9 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Thu, 26 Nov 2026 18:30:27 +0100
+Subject: [PATCH] Text stats: the line ends with a newline escape, not a line
+ break
+
+---
+ host/gpu/vulkan_renderer.cpp | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index e544e63..6728c73 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5627,8 +5627,7 @@ static bool text_stats_on() {
+ static void text_stats_report(std::uint64_t frame, std::size_t lines) {
+     if (!text_stats_on() || frame % 300u != 0u) return;
+     TextLineStats &t = g_text_stats;
+-    std::printf("[text-stats] frame %llu: %llu lines made (%.1f ms, longest %.2f ms), %llu given back (%llu GPU waits, %.1f ms), %zu cached
+-",
++    std::printf("[text-stats] frame %llu: %llu lines made (%.1f ms, longest %.2f ms), %llu given back (%llu GPU waits, %.1f ms), %zu cached\n",
+                 static_cast<unsigned long long>(frame), static_cast<unsigned long long>(t.builds), t.build_ms, t.build_max_ms,
+                 static_cast<unsigned long long>(t.evicted), static_cast<unsigned long long>(t.waits), t.wait_ms, lines);
+     std::fflush(stdout);
+-- 
+2.54.0.windows.1
+
