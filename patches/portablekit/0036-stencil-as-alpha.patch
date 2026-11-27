@@ -1,0 +1,108 @@
+From a3eeb54ddf6630a6d781d81021e74594bb0236bf Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 12:02:14 +0100
+Subject: [PATCH] A write-only stencil draw into a 5551 target writes the alpha
+ channel instead of the stencil attachment
+
+---
+ host/gpu/shaders/ge.frag     |  6 +++++-
+ host/gpu/vulkan_renderer.cpp | 31 +++++++++++++++++++++++++++----
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/host/gpu/shaders/ge.frag b/host/gpu/shaders/ge.frag
+index f9f0e87..815ab26 100644
+--- a/host/gpu/shaders/ge.frag
++++ b/host/gpu/shaders/ge.frag
+@@ -33,7 +33,11 @@ layout(set = 1, binding = 0) uniform Environment {
+ // the source alpha (GE blend factors 6 and 7), so the alpha is doubled here,
+ // after the alpha test, which reads the fragment's own.
+ vec4 blended(vec4 color) {
+-    if ((int(push.viewport.w + 0.5) & 4) != 0) color.a = min(color.a * 2.0, 1.0);
++    int flags = int(push.viewport.w + 0.5);
++    if ((flags & 4) != 0) color.a = min(color.a * 2.0, 1.0);
++    // A draw that writes the 1-bit stencil of a 5551 target through the alpha channel (bit 16: set, bit 32: clear).
++    if ((flags & 16) != 0) color.a = 1.0;
++    else if ((flags & 32) != 0) color.a = 0.0;
+     return color;
+ }
+ 
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 17c5276..a52f259 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -238,6 +238,10 @@ constexpr float kPushDoubleAlpha = 4.0f;
+ // the texture coordinates from the normal and two lights' vectors, named in
+ // the object block's texgen.
+ constexpr float kPushEnvMap = 8.0f;
++// The fragment shader hands the blender alpha 1 or 0 whatever the draw computed (after the alpha test): a draw that writes the
++// stencil bit of a 5551 target through its alpha channel.
++constexpr float kPushAlphaOne = 16.0f;
++constexpr float kPushAlphaZero = 32.0f;
+ 
+ struct GpuVertex {
+     float x{}, y{}, z{}, w{1.0f};
+@@ -10435,6 +10439,12 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     bool reads_stencil = false;
+     bool writes_stencil = false;
+     std::uint32_t draw_stencil_bits = 0u;  // Target::stencil_bits_seen, from this draw
++    // 0 or 1: the draw writes the 1-bit stencil of a 5551 target (function always, the stencil replaced or zeroed where the
++    // depth test passes, the old value kept where it fails) and nothing else. It then writes the alpha channel, where that bit
++    // lives too, with the same depth test, and leaves the stencil attachment alone: no copy between the two is needed for it.
++    // The fragment shader sets the alpha (push viewport.w bits 16 and 32) after the alpha test. -1: an ordinary draw.
++    // <prefix>_NO_STENCIL_AS_ALPHA draws it through the stencil attachment, as before.
++    int stencil_as_alpha = -1;
+     if (stencil_target) {
+         const std::uint32_t format = call.target.color_format;
+         const std::uint32_t write_mask = stencil_write_mask(format, call.pixel_mask_color, call.pixel_mask_alpha);
+@@ -10453,6 +10463,17 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+             const StencilState &stencil = call.stencil;
+             reads_stencil = stencil.function > 1u && stencil.mask != 0u;
+             writes_stencil = write_mask != 0u && (stencil.fail != 0u || stencil.depth_fail != 0u || stencil.pass != 0u);
++            static const bool no_as_alpha = portablekit::env("NO_STENCIL_AS_ALPHA") != nullptr;
++            constexpr std::uint32_t kRgb =
++                VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
++            if (!no_as_alpha && writes_stencil && !reads_stencil && format == 1u && stencil.function == 1u &&
++                write_mask == 0xFFu && (stencil.pass == 1u || stencil.pass == 2u) &&
++                (stencil.depth_fail == 0u || !key.depth_test) && (key.color_mask & kRgb) == 0u) {
++                stencil_as_alpha = stencil.pass == 2u && stored_stencil(format, stencil.reference) != 0u ? 1 : 0;
++                writes_stencil = false;
++                key.color_mask |= VK_COLOR_COMPONENT_A_BIT;
++                key.blend = false;
++            }
+             if (reads_stencil || writes_stencil || stencil.function == 0u) {
+                 key.stencil_test = true;
+                 key.stencil_function = stencil.function;
+@@ -10479,7 +10500,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     push.viewport = {static_cast<float>(kPspWidth), static_cast<float>(kPspHeight), call.through ? 1.0f : 0.0f,
+                      (fogged ? kPushFog : 0.0f) + (lit ? kPushLighting : 0.0f) + (env_map ? kPushEnvMap : 0.0f) +
+                          (key.blend && doubled_alpha(key.source_factor, key.destination_factor) ? kPushDoubleAlpha
+-                                                                                                : 0.0f)};
++                                                                                                : 0.0f) +
++                         (stencil_as_alpha < 0 ? 0.0f : stencil_as_alpha == 1 ? kPushAlphaOne : kPushAlphaZero)};
+     push.view_z = {view_world[2], view_world[6], view_world[10], view_world[14]};
+     // The GE's texture wrap register: clamp in u, in v, or repeat. The
+     // sampler repeats; the fragment shader clamps the axes flagged here
+@@ -10658,7 +10680,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                               << std::dec << " needs the stencil: function " << call.stencil.function << " ref "
+                               << call.stencil.reference << " mask " << call.stencil.mask << " ops "
+                               << call.stencil.fail << "/" << call.stencil.depth_fail << "/" << call.stencil.pass
+-                              << " reads " << reads_stencil << " writes " << writes_stencil << " verts "
++                              << " reads " << reads_stencil << " writes " << writes_stencil << " rgbmask "
++                              << (key.color_mask & 7u) << " asalpha " << stencil_as_alpha << " verts "
+                               << call.vertices.size() << " | alpha last written by: " << target->alpha_note << "\n";
+                 target->format = call.target.color_format;
+                 impl.copy_alpha_to_stencil(*target);
+@@ -10715,8 +10738,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+             };
+             const bool reads_alpha = key.blend && (destination_alpha(call.blend.source_factor) ||
+                                                    destination_alpha(call.blend.destination_factor));
+-            const bool writes_alpha = !call.clear_mode && !call.stencil.test_enabled &&
+-                                      (key.color_mask & VK_COLOR_COMPONENT_A_BIT) != 0u;
++            const bool writes_alpha = stencil_as_alpha >= 0 || (!call.clear_mode && !call.stencil.test_enabled &&
++                                      (key.color_mask & VK_COLOR_COMPONENT_A_BIT) != 0u);
+             if ((reads_alpha || writes_alpha) && drawn.stencil_sync == Sync::StencilNewer) {
+                 if (drawn.stencil_untrusted) {
+                     // The stencil was left as it was (the lazy skip above): the alpha is the true picture.
+-- 
+2.54.0.windows.1
+
