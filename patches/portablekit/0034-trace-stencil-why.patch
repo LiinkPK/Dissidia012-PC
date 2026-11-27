@@ -1,0 +1,56 @@
+From 10acb8a65df5c8496614a2341a6f3417d2feaba2 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 10:59:41 +0100
+Subject: [PATCH] TRACE_STENCIL: why a stencil sync happens
+
+---
+ host/gpu/vulkan_renderer.cpp | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index c33002b..a644cae 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1683,6 +1683,7 @@ struct VulkanRenderer::Impl {
+         // carry these bit planes: a plane no draw looks at is not worth a full
+         // screen pass (8888 has eight, each a quad over the whole target).
+         std::uint32_t stencil_bits_seen{};
++        std::string alpha_note;  // the draw that last wrote alpha, for TRACE_STENCIL
+         // The guest depth buffer, and which picture of it, the depth image
+         // holds (DepthPicture); 0: none in particular.
+         std::uint32_t depth_address{};
+@@ -10630,6 +10631,14 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+             target != nullptr) {
+             target->stencil_bits_seen |= draw_stencil_bits;
+             if (target->stencil_sync == Impl::Target::StencilSync::AlphaNewer) {
++                static const bool trace_sync = portablekit::env("TRACE_STENCIL") != nullptr;
++                if (trace_sync)
++                    std::cout << "[stencil-why] frame " << impl.frames << " 0x" << std::hex << call.target.color_address
++                              << std::dec << " needs the stencil: function " << call.stencil.function << " ref "
++                              << call.stencil.reference << " mask " << call.stencil.mask << " ops "
++                              << call.stencil.fail << "/" << call.stencil.depth_fail << "/" << call.stencil.pass
++                              << " reads " << reads_stencil << " writes " << writes_stencil << " verts "
++                              << call.vertices.size() << " | alpha last written by: " << target->alpha_note << "\n";
+                 target->format = call.target.color_format;
+                 impl.copy_alpha_to_stencil(*target);
+             }
+@@ -10697,6 +10706,16 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 drawn.stencil_sync = Sync::StencilNewer;
+             } else if (writes_alpha) {
+                 drawn.stencil_sync = Sync::AlphaNewer;
++                static const bool note_alpha = portablekit::env("TRACE_STENCIL") != nullptr;
++                if (note_alpha)
++                    drawn.alpha_note = "verts " + std::to_string(call.vertices.size()) + " prim " +
++                                       std::to_string(static_cast<unsigned>(call.primitive)) + " scissor " +
++                                       std::to_string(call.viewport.scissor_x1) + "," +
++                                       std::to_string(call.viewport.scissor_y1) + "-" +
++                                       std::to_string(call.viewport.scissor_x2) + "," +
++                                       std::to_string(call.viewport.scissor_y2) + " blend " +
++                                       std::to_string(key.blend ? 1 : 0) + " tex " +
++                                       std::to_string(call.texture.enabled ? 1 : 0);
+             }
+         }
+     }
+-- 
+2.54.0.windows.1
+
