@@ -1,0 +1,146 @@
+From 5f6a91ad71320628e021ce8d36ffb8e19089e74c Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 23:07:25 +0100
+Subject: [PATCH] Fast graphics setting: no screen copies and PPSSPP stencil,
+ on by default on Android
+
+---
+ host/gpu/vulkan_renderer.cpp | 26 +++++++++++++++++++++-----
+ host/settings/settings.cpp   |  2 ++
+ host/settings/settings.hpp   |  1 +
+ host/ui/menu.cpp             |  8 ++++++++
+ 4 files changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 5f10cab..9b4c2f1 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -531,6 +531,22 @@ std::vector<StencilPlane> used_stencil_planes(const TargetT &target) {
+     return planes;
+ }
+ 
++// The Fast graphics setting (settings::Settings::fast_graphics), read once: no copies of a render target for the game to texture from,
++// and the stencil as PPSSPP keeps it. <prefix>_NO_FB_TEXTURES and <prefix>_STENCIL_PPSSPP turn each on whatever the setting says;
++// <prefix>_FB_TEXTURES and <prefix>_NO_STENCIL_PPSSPP turn each off.
++static bool fb_textures_off() {
++    static const bool value =
++        portablekit::env("NO_FB_TEXTURES") != nullptr ||
++        (settings::current().fast_graphics && portablekit::env("FB_TEXTURES") == nullptr);
++    return value;
++}
++static bool ppsspp_stencil_on() {
++    static const bool value =
++        portablekit::env("STENCIL_PPSSPP") != nullptr ||
++        (settings::current().fast_graphics && portablekit::env("NO_STENCIL_PPSSPP") == nullptr);
++    return value;
++}
++
+ // <prefix>_TRACE_COPIES=1: one line per whole-image copy, with the frame, to see which ones a frame is made of.
+ static void trace_copy(const char *what) {
+     static const bool on = portablekit::env("TRACE_COPIES") != nullptr;
+@@ -10263,7 +10279,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     // A texture in a framebuffer the renderer drew is read from that render
+     // target: the pixels never reach guest memory, which holds whatever was
+     // there before. <prefix>_NO_FB_TEXTURES decodes guest memory as before.
+-    static const bool no_fb_textures = portablekit::env("NO_FB_TEXTURES") != nullptr;
++    const bool no_fb_textures = fb_textures_off();
+     const Impl::FramebufferTexture framebuffer_source =
+         call.texture.enabled && !call.clear_mode && !no_fb_textures
+             ? impl.find_framebuffer_texture(memory, call.texture)
+@@ -10474,7 +10490,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     // <prefix>_STENCIL_PPSSPP: stencil as PPSSPP does it (GPU/Common/GPUStateUtils.cpp). The stencil attachment is the stencil;
+     // the alpha channel is written only by draws that write the stencil, with the value they write (a 5551 buffer's one bit), and
+     // is left alone by every other draw. Nothing is ever copied between the two, so a frame has no stencil sync passes.
+-    static const bool ppsspp_stencil = portablekit::env("STENCIL_PPSSPP") != nullptr;
++    const bool ppsspp_stencil = ppsspp_stencil_on();
+     if (stencil_target) {
+         const std::uint32_t format = call.target.color_format;
+         const std::uint32_t write_mask = stencil_write_mask(format, call.pixel_mask_color, call.pixel_mask_alpha);
+@@ -11011,7 +11027,7 @@ void VulkanRenderer::write_back_frame(GuestMemory &memory) {
+ 
+ void VulkanRenderer::read_back_framebuffer(std::uint32_t source, GuestMemory &memory) {
+     Impl &impl = *impl_;
+-    static const bool disabled = portablekit::env("NO_FB_TEXTURES") != nullptr;
++    const bool disabled = fb_textures_off();
+     if (!impl.ready || disabled) return;
+     const Impl::Guard guard(impl);
+     const std::uint32_t wanted = GuestMemory::canonical(source);
+@@ -11191,7 +11207,7 @@ void VulkanRenderer::copy_block_transfer(const BlockTransfer &transfer, const Gu
+     static const bool trace = portablekit::env("TRACE_TRANSFERS") != nullptr;
+     static const bool sampled_key = portablekit::env("TRANSFER_SAMPLED_KEY") != nullptr;
+     static const bool disabled =
+-        portablekit::env("NO_TRANSFER_TARGETS") != nullptr || portablekit::env("NO_FB_TEXTURES") != nullptr;
++        portablekit::env("NO_TRANSFER_TARGETS") != nullptr || fb_textures_off();
+     const std::uint32_t bytes_per_pixel = transfer.bytes_per_pixel;
+     const std::uint32_t destination = GuestMemory::canonical(transfer.destination);
+     const std::uint32_t source = GuestMemory::canonical(transfer.source);
+@@ -12672,7 +12688,7 @@ bool VulkanRenderer::present(std::uint32_t display_address,
+         std::cout << "[direct-check] " << impl.direct_checked << " draws compared, " << impl.direct_mismatched
+                   << " differed" << std::endl;
+ 
+-    static const bool no_writeback = portablekit::env("NO_FB_TEXTURES") != nullptr;
++    const bool no_writeback = fb_textures_off();
+     trace_copy("---- frame");
+     if (!no_writeback) impl.record_writeback(display_address);
+ 
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 04b186d..7bb8d26 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -200,6 +200,7 @@ const std::vector<Field> &fields() {
+         BOOL_FIELD("video.upscale", upscale),
+         BOOL_FIELD("video.dynamic_resolution", dynamic_resolution),
+         BOOL_FIELD("video.gpu_thread", gpu_thread),
++        BOOL_FIELD("video.fast_graphics", fast_graphics),
+         BOOL_FIELD("video.sharp_textures", sharp_textures),
+         {"video.texture_pack", "TEXTURE_PACK",
+          [](Settings &s, const std::string &t) { return parse_bool(t, s.texture_pack); },
+@@ -623,6 +624,7 @@ Settings defaults_for(Platform platform) {
+     if (platform == Platform::Android) {
+         values.fullscreen = true;
+         values.mouse = false;
++        values.fast_graphics = true;
+     }
+     return values;
+ }
+diff --git a/host/settings/settings.hpp b/host/settings/settings.hpp
+index 3e4fe28..b8e02e2 100644
+--- a/host/settings/settings.hpp
++++ b/host/settings/settings.hpp
+@@ -51,6 +51,7 @@ struct Settings {
+     Aspect aspect{Aspect::Stretch};
+     bool sharp_screen{};               // nearest instead of linear scaling to the window
+     bool dynamic_resolution{};         // lower the Resolution by itself while the graphics card cannot keep up, raise it again when it can
++    bool fast_graphics{};              // a lighter picture for a slow graphics card: no screen copies for effects (the shadow under a character), a lighter stencil
+     bool gpu_thread{};                 // run the game's display lists on a thread of their own, so its code goes on with the next frame meanwhile
+     bool upscale{};                    // draw the (lower resolution) picture to the window with a sharper upscaler than the plain bilinear one
+     bool fxaa{};                       // FXAA anti-aliasing of the finished picture, at the window's resolution
+diff --git a/host/ui/menu.cpp b/host/ui/menu.cpp
+index fcd6787..ed92b85 100644
+--- a/host/ui/menu.cpp
++++ b/host/ui/menu.cpp
+@@ -917,6 +917,13 @@ void Menu::video() {
+         s.gpu_thread = !s.gpu_thread;
+         settings::save();
+     }
++    if (choice_row("Fast graphics", s.fast_graphics ? "On" : "Off",
++                   options_for("video.fast_graphics", "A lighter picture for a slow graphics card: effects that copy the screen (the shadow under a "
++                                                      "character) are left out, and the stencil costs less. Needed for a high Resolution on a phone. "
++                                                      "Takes effect the next time the game starts."))) {
++        s.fast_graphics = !s.fast_graphics;
++        settings::save();
++    }
+     {
+         static const char *const kPerf[] = {"Off", "Overlay", "Overlay and log", "Log only"};
+         const int current = static_cast<int>(s.perf);
+@@ -946,6 +953,7 @@ void Menu::video() {
+         restore("video.upscale", s.upscale, d.upscale);
+         restore("video.dynamic_resolution", s.dynamic_resolution, d.dynamic_resolution);
+         restore("video.gpu_thread", s.gpu_thread, d.gpu_thread);
++        restore("video.fast_graphics", s.fast_graphics, d.fast_graphics);
+         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
+         restore("video.texture_pack", s.texture_pack, d.texture_pack);
+         restore("video.texture_size", s.texture_size, d.texture_size);
+-- 
+2.54.0.windows.1
+
