@@ -1,0 +1,43 @@
+From 2abe63bf2a5b4bc79815737f195e1ac52e96baaa Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 08:54:47 +0100
+Subject: [PATCH] NO_STENCIL_ADDRESSES: stencil off for chosen framebuffers
+
+---
+ host/gpu/vulkan_renderer.cpp | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 33d4203..14c4bfb 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -10385,7 +10385,25 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     // channel alone, and copy_stencil_to_alpha() brings it up to date when
+     // something reads it. 5650 has no alpha bits to keep a stencil in.
+     // <prefix>_NO_STENCIL ignores the stencil test, as before.
+-    const bool stencil_target = impl.stencil && call.target.color_format != 0u;
++    // <prefix>_NO_STENCIL_ADDRESSES=0x40cc000,0x4192000: no stencil for draws into those framebuffers (a way to find which
++    // buffer's stencil costs the frame; the rest keep theirs).
++    static const std::vector<std::uint32_t> no_stencil_addresses = [] {
++        std::vector<std::uint32_t> list;
++        if (const char *text = portablekit::env("NO_STENCIL_ADDRESSES")) {
++            std::string all = text;
++            std::size_t at = 0;
++            while (at < all.size()) {
++                std::size_t end = all.find(',', at);
++                if (end == std::string::npos) end = all.size();
++                list.push_back(static_cast<std::uint32_t>(std::strtoul(all.substr(at, end - at).c_str(), nullptr, 0)));
++                at = end + 1u;
++            }
++        }
++        return list;
++    }();
++    const bool stencil_target =
++        impl.stencil && call.target.color_format != 0u &&
++        std::find(no_stencil_addresses.begin(), no_stencil_addresses.end(), call.target.color_address) == no_stencil_addresses.end();
+     bool reads_stencil = false;
+     bool writes_stencil = false;
+     std::uint32_t draw_stencil_bits = 0u;  // Target::stencil_bits_seen, from this draw
+-- 
+2.54.0.windows.1
+
