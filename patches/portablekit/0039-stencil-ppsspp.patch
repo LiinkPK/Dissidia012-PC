@@ -1,0 +1,117 @@
+From 65066cb9ab730a206320089678d6e2e4e2c993ac Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 22:15:51 +0100
+Subject: [PATCH] STENCIL_PPSSPP: stencil as PPSSPP does it (no alpha/stencil
+ sync); TRACE_PASSES shows the drawn area of each pass
+
+---
+ host/gpu/vulkan_renderer.cpp | 39 +++++++++++++++++++++++++++++++++++-
+ 1 file changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 78d9a08..fbb252c 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -2081,6 +2081,10 @@ struct VulkanRenderer::Impl {
+             vkCmdSetBlendConstants(command_buffer, state.blend.data());
+         if (!state_known || std::memcmp(&state.scissor, &recorded.scissor, sizeof(VkRect2D)) != 0)
+             vkCmdSetScissor(command_buffer, 0u, 1u, &state.scissor);
++        pass_area[0] = std::min(pass_area[0], state.scissor.offset.x);
++        pass_area[1] = std::min(pass_area[1], state.scissor.offset.y);
++        pass_area[2] = std::max(pass_area[2], state.scissor.offset.x + static_cast<std::int32_t>(state.scissor.extent.width));
++        pass_area[3] = std::max(pass_area[3], state.scissor.offset.y + static_cast<std::int32_t>(state.scissor.extent.height));
+         if (state.pipeline != bound_pipeline) {
+             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
+             bound_pipeline = state.pipeline;
+@@ -2902,6 +2906,9 @@ struct VulkanRenderer::Impl {
+     void begin_pass(std::uint32_t address, std::uint32_t overwritten = 0u);
+     void end_pass();
+     const char *last_pass_note{nullptr};  // what ended the pass before (TRACE_PASSES)
++    // The rectangle the scissors of the draws of the pass in progress cover (TRACE_PASSES): how much of the target a render area
++    // limited to the drawn part would load and store.
++    std::int32_t pass_area[4]{0x7fffffff, 0x7fffffff, 0, 0};
+     VkPipeline pipeline_for(const PipelineKey &key);
+     Texture &texture_for(const GuestMemory &memory, const DrawCall &call);
+     void trace_framebuffer_texture(const DrawCall &call);
+@@ -5105,6 +5112,8 @@ void VulkanRenderer::Impl::begin_pass(std::uint32_t address, std::uint32_t overw
+                   << target->format << (overwritten != 0u ? " (cleared)" : "") << " after "
+                   << (last_pass_note != nullptr ? last_pass_note : "?") << "\n";
+     last_pass_note = nullptr;
++    pass_area[0] = pass_area[1] = 0x7fffffff;
++    pass_area[2] = pass_area[3] = 0;
+     forget_bindings();
+     current_target = address;
+     last_drawn_target = address;
+@@ -5116,6 +5125,11 @@ void VulkanRenderer::Impl::end_pass() {
+     if (!pass_active) return;
+     vkCmdEndRenderPass(command_buffer);
+     pass_active = false;
++    static const bool trace_area = portablekit::env("TRACE_PASSES") != nullptr;
++    if (trace_area && pass_area[2] > pass_area[0] && pass_area[3] > pass_area[1])
++        std::cout << "[pass-area] 0x" << std::hex << current_target << std::dec << " drawn " << pass_area[0] << ","
++                  << pass_area[1] << "-" << pass_area[2] << "," << pass_area[3] << " of " << target_extent.width << "x"
++                  << target_extent.height << "\n";
+ }
+ 
+ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture(std::uint32_t width, std::uint32_t height,
+@@ -10451,6 +10465,10 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     // Off unless <prefix>_STENCIL_AS_ALPHA is set: when only some of a target's stencil draws qualify, the two channels are synced
+     // between them as much as before, and a test build ran slower.
+     int stencil_as_alpha = -1;
++    // <prefix>_STENCIL_PPSSPP: stencil as PPSSPP does it (GPU/Common/GPUStateUtils.cpp). The stencil attachment is the stencil;
++    // the alpha channel is written only by draws that write the stencil, with the value they write (a 5551 buffer's one bit), and
++    // is left alone by every other draw. Nothing is ever copied between the two, so a frame has no stencil sync passes.
++    static const bool ppsspp_stencil = portablekit::env("STENCIL_PPSSPP") != nullptr;
+     if (stencil_target) {
+         const std::uint32_t format = call.target.color_format;
+         const std::uint32_t write_mask = stencil_write_mask(format, call.pixel_mask_color, call.pixel_mask_alpha);
+@@ -10464,11 +10482,22 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 key.stencil_fail = key.stencil_depth_fail = key.stencil_pass = 2u;  // replace
+                 draw_stencil_bits = key.stencil_reference & write_mask;
+             }
++        } else if (!call.stencil.test_enabled && ppsspp_stencil) {
++            key.color_mask &= ~static_cast<std::uint32_t>(VK_COLOR_COMPONENT_A_BIT);
+         } else if (call.stencil.test_enabled) {
+             key.color_mask &= ~static_cast<std::uint32_t>(VK_COLOR_COMPONENT_A_BIT);
+             const StencilState &stencil = call.stencil;
+             reads_stencil = stencil.function > 1u && stencil.mask != 0u;
+             writes_stencil = write_mask != 0u && (stencil.fail != 0u || stencil.depth_fail != 0u || stencil.pass != 0u);
++            if (ppsspp_stencil && writes_stencil && format == 1u &&
++                (!key.blend || !(source_alpha_factor(key.source_factor) || source_alpha_factor(key.destination_factor)))) {
++                // The value the pass operation leaves in the one stencil bit: replace gives the reference's bit, zero and
++                // decrement clear it, increment sets it. Anything else (keep, invert) leaves the alpha as it is.
++                if (stencil.pass == 2u) stencil_as_alpha = stored_stencil(format, stencil.reference) != 0u ? 1 : 0;
++                else if (stencil.pass == 1u || stencil.pass == 5u) stencil_as_alpha = 0;
++                else if (stencil.pass == 4u) stencil_as_alpha = 1;
++                if (stencil_as_alpha >= 0) key.color_mask |= VK_COLOR_COMPONENT_A_BIT;
++            }
+             static const bool as_alpha_on = portablekit::env("STENCIL_AS_ALPHA") != nullptr;
+             if (as_alpha_on && writes_stencil && !reads_stencil && format == 1u && stencil.function == 1u &&
+                 write_mask == 0xFFu && (stencil.pass == 1u || stencil.pass == 2u) &&
+@@ -10655,6 +10684,12 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     // needs the stencil brought up to date first (Target::stencil_sync).
+     if (stencil_target && (reads_stencil || writes_stencil)) {
+         std::string error;
++        if (ppsspp_stencil) {
++            if (Impl::Target *target = impl.target_for(call.target.color_address, error); target != nullptr) {
++                target->stencil_bits_seen |= draw_stencil_bits;
++                target->stencil_sync = Impl::Target::StencilSync::Same;
++            }
++        } else
+         if (Impl::Target *target = impl.target_for(call.target.color_address, error);
+             target != nullptr) {
+             target->stencil_bits_seen |= draw_stencil_bits;
+@@ -10754,7 +10789,9 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                     impl.copy_stencil_to_alpha(drawn);
+                 }
+             }
+-            if (call.clear_mode) {
++            if (ppsspp_stencil) {
++                drawn.stencil_sync = Sync::Same;
++            } else if (call.clear_mode) {
+                 if (clear_covers && (call.clear_flags & 2u) != 0u &&
+                     (key.color_mask & VK_COLOR_COMPONENT_A_BIT) != 0u && key.stencil_write_mask == 0xFFu)
+                     drawn.stencil_sync = Sync::Same;
+-- 
+2.54.0.windows.1
+
