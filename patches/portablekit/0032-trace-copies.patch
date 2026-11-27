@@ -1,14 +1,14 @@
-From e10ad6bf02f6bf201027171755e21a328e5f3c3b Mon Sep 17 00:00:00 2001
+From 872012ea8d0f2f56d727be27acd442e6ae96f965 Mon Sep 17 00:00:00 2001
 From: x <x@x>
 Date: Fri, 27 Nov 2026 09:11:17 +0100
 Subject: [PATCH] TRACE_COPIES: one line per whole-image copy
 
 ---
- host/gpu/vulkan_renderer.cpp | 11 +++++++++++
- 1 file changed, 11 insertions(+)
+ host/gpu/vulkan_renderer.cpp | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
 
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index 14c4bfb..2433e82 100644
+index 14c4bfb..102b054 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
 @@ -524,6 +524,12 @@ std::vector<StencilPlane> used_stencil_planes(const TargetT &target) {
@@ -56,7 +56,39 @@ index 14c4bfb..2433e82 100644
      perf::note_snapshot(static_cast<std::uint64_t>(taken.width) * taken.height * 4u);
      transition(command_buffer, slot->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-@@ -11432,6 +11442,7 @@ bool VulkanRenderer::Impl::take_picture(VkImage source) {
+@@ -6639,6 +6649,7 @@ void VulkanRenderer::Impl::take_split_left(std::uint32_t target_address) {
+     vkCmdCopyImage(command_buffer, target.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, split_left.color,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &region);
+     perf::count_target_copy();
++    trace_copy("split left");
+     transition(command_buffer, split_left.color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+     transition(command_buffer, target.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+@@ -6707,6 +6718,7 @@ void VulkanRenderer::Impl::compose_split(std::uint32_t target_address) {
+     vkCmdCopyImage(command_buffer, split_right.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.color,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &half);
+     perf::count_target_copy();
++    trace_copy("split compose");
+     transition(command_buffer, split_left.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+     transition(command_buffer, split_right.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+@@ -7274,6 +7286,7 @@ void VulkanRenderer::Impl::share_depth(Target &target, std::uint32_t address, st
+     transition(command_buffer, holder->second.depth, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, depth_aspect());
+     perf::count_target_copy();
++    trace_copy("depth share");
+     picture.copied = true;
+     target.depth_address = address;
+     target.depth_version = picture.version;
+@@ -11153,6 +11166,7 @@ void VulkanRenderer::copy_block_transfer(const BlockTransfer &transfer, const Gu
+     vkCmdBlitImage(impl.command_buffer, from->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, to->color,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, VK_FILTER_NEAREST);
+     perf::count_target_copy();
++    trace_copy("block transfer");
+     impl.transition(impl.command_buffer, from->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+     impl.transition(impl.command_buffer, to->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+@@ -11432,6 +11446,7 @@ bool VulkanRenderer::Impl::take_picture(VkImage source) {
      vkCmdCopyImage(command_buffer, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, picture.color,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
      perf::count_target_copy();
@@ -64,6 +96,14 @@ index 14c4bfb..2433e82 100644
      transition(command_buffer, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
      transition(command_buffer, picture.color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+@@ -12527,6 +12542,7 @@ bool VulkanRenderer::present(std::uint32_t display_address,
+                   << " differed" << std::endl;
+ 
+     static const bool no_writeback = portablekit::env("NO_FB_TEXTURES") != nullptr;
++    trace_copy("---- frame");
+     if (!no_writeback) impl.record_writeback(display_address);
+ 
+     // Show the target the guest flipped to; fall back to whatever was drawn last.
 -- 
 2.54.0.windows.1
 
