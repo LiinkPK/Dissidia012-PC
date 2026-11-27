@@ -1,31 +1,30 @@
-From 90816688e27019a2e8a7cd9a45376349aebf375e Mon Sep 17 00:00:00 2001
+From e10ad6bf02f6bf201027171755e21a328e5f3c3b Mon Sep 17 00:00:00 2001
 From: x <x@x>
 Date: Fri, 27 Nov 2026 09:11:17 +0100
 Subject: [PATCH] TRACE_COPIES: one line per whole-image copy
 
 ---
- host/gpu/vulkan_renderer.cpp | 12 ++++++++++++
- 1 file changed, 12 insertions(+)
+ host/gpu/vulkan_renderer.cpp | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
 
 diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
-index 14c4bfb..572cbd6 100644
+index 14c4bfb..2433e82 100644
 --- a/host/gpu/vulkan_renderer.cpp
 +++ b/host/gpu/vulkan_renderer.cpp
-@@ -524,6 +524,13 @@ std::vector<StencilPlane> used_stencil_planes(const TargetT &target) {
+@@ -524,6 +524,12 @@ std::vector<StencilPlane> used_stencil_planes(const TargetT &target) {
      return planes;
  }
  
 +// <prefix>_TRACE_COPIES=1: one line per whole-image copy, with the frame, to see which ones a frame is made of.
 +static void trace_copy(const char *what) {
 +    static const bool on = portablekit::env("TRACE_COPIES") != nullptr;
-+    if (on) std::cout << "[copy] " << what << "
-+";
++    if (on) std::cout << "[copy] " << what << "\n";
 +}
 +
  VkStencilOp to_stencil_op(std::uint32_t operation) {
      switch (operation) {
      case 1u: return VK_STENCIL_OP_ZERO;
-@@ -4691,6 +4698,7 @@ void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage so
+@@ -4691,6 +4697,7 @@ void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage so
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit,
                     copy_only || sharp_screen ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
      perf::count_target_copy();
@@ -33,7 +32,7 @@ index 14c4bfb..572cbd6 100644
  }
  
  // Finishes the frame being recorded: the game frame (or a plain background
-@@ -6252,6 +6260,7 @@ void VulkanRenderer::Impl::record_writeback(std::uint32_t address) {
+@@ -6252,6 +6259,7 @@ void VulkanRenderer::Impl::record_writeback(std::uint32_t address) {
      vkCmdBlitImage(command_buffer, target.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, writeback_image,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, VK_FILTER_LINEAR);
      perf::count_target_copy();
@@ -41,7 +40,7 @@ index 14c4bfb..572cbd6 100644
      transition(command_buffer, writeback_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
      VkBufferImageCopy copy{};
-@@ -6467,6 +6476,7 @@ VkDescriptorSet VulkanRenderer::Impl::framebuffer_descriptor(Target &target, boo
+@@ -6467,6 +6475,7 @@ VkDescriptorSet VulkanRenderer::Impl::framebuffer_descriptor(Target &target, boo
          vkCmdCopyImage(command_buffer, target.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target.copy,
                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &region);
          perf::count_target_copy();
@@ -49,7 +48,7 @@ index 14c4bfb..572cbd6 100644
          transition(command_buffer, target.copy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
          transition(command_buffer, target.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-@@ -6596,6 +6606,7 @@ VkDescriptorSet VulkanRenderer::Impl::framebuffer_snapshot(Target &target, bool
+@@ -6596,6 +6605,7 @@ VkDescriptorSet VulkanRenderer::Impl::framebuffer_snapshot(Target &target, bool
      vkCmdCopyImage(command_buffer, target.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, slot->image,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &region);
      perf::count_target_copy();
@@ -57,7 +56,7 @@ index 14c4bfb..572cbd6 100644
      perf::note_snapshot(static_cast<std::uint64_t>(taken.width) * taken.height * 4u);
      transition(command_buffer, slot->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-@@ -11432,6 +11443,7 @@ bool VulkanRenderer::Impl::take_picture(VkImage source) {
+@@ -11432,6 +11442,7 @@ bool VulkanRenderer::Impl::take_picture(VkImage source) {
      vkCmdCopyImage(command_buffer, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, picture.color,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
      perf::count_target_copy();
