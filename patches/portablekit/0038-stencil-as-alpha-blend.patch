@@ -1,0 +1,57 @@
+From 0a07213138a3e609a8ee75074d60416b3ff2ac93 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 14:07:14 +0100
+Subject: [PATCH] Stencil as alpha: blending allowed when no factor reads the
+ source alpha
+
+---
+ host/gpu/vulkan_renderer.cpp | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index c025c3d..9811f0f 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -407,6 +407,9 @@ struct PipelineKey {
+     auto operator<=>(const PipelineKey &) const = default;
+ };
+ 
++// GE blend factors that read the fragment's alpha: source alpha, its inverse, twice it, one minus twice it.
++bool source_alpha_factor(std::uint32_t factor) { return factor == 2u || factor == 3u || factor == 6u || factor == 7u; }
++
+ // The colour channels a draw may write, from the GE's pixel mask (0xE8 colour,
+ // 0xE9 alpha; a set bit is a bit the draw leaves alone). Vulkan masks whole
+ // channels, so a channel is left alone only when every one of its bits is
+@@ -10440,7 +10443,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     bool writes_stencil = false;
+     std::uint32_t draw_stencil_bits = 0u;  // Target::stencil_bits_seen, from this draw
+     // 0 or 1: the draw writes the 1-bit stencil of a 5551 target (function always, the stencil replaced or zeroed where the
+-    // depth test passes, the old value kept where it fails), with no blending (the blender would read the alpha set below). It then
++    // depth test passes, the old value kept where it fails), with no blend factor that reads the source alpha (the blender would
++    // read the alpha set below). It then
+     // writes the alpha channel, where that bit
+     // lives too, with the same depth test, and leaves the stencil attachment alone: no copy between the two is needed for it.
+     // The fragment shader sets the alpha (push viewport.w bits 16 and 32) after the alpha test. -1: an ordinary draw.
+@@ -10467,7 +10471,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+             static const bool no_as_alpha = portablekit::env("NO_STENCIL_AS_ALPHA") != nullptr;
+             if (!no_as_alpha && writes_stencil && !reads_stencil && format == 1u && stencil.function == 1u &&
+                 write_mask == 0xFFu && (stencil.pass == 1u || stencil.pass == 2u) &&
+-                (stencil.depth_fail == 0u || !key.depth_test) && !key.blend) {
++                (stencil.depth_fail == 0u || !key.depth_test) &&
++                (!key.blend || !(source_alpha_factor(key.source_factor) || source_alpha_factor(key.destination_factor)))) {
+                 stencil_as_alpha = stencil.pass == 2u && stored_stencil(format, stencil.reference) != 0u ? 1 : 0;
+                 writes_stencil = false;
+                 key.color_mask |= VK_COLOR_COMPONENT_A_BIT;
+@@ -10679,7 +10684,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                               << call.stencil.reference << " mask " << call.stencil.mask << " ops "
+                               << call.stencil.fail << "/" << call.stencil.depth_fail << "/" << call.stencil.pass
+                               << " reads " << reads_stencil << " writes " << writes_stencil << " rgbmask "
+-                              << (key.color_mask & 7u) << " blend " << key.blend << " asalpha " << stencil_as_alpha << " verts "
++                              << (key.color_mask & 7u) << " blend " << key.blend << " factors " << key.source_factor << "/"
++                              << key.destination_factor << " eq " << key.equation << " asalpha " << stencil_as_alpha << " verts "
+                               << call.vertices.size() << " | alpha last written by: " << target->alpha_note << "\n";
+                 target->format = call.target.color_format;
+                 impl.copy_alpha_to_stencil(*target);
+-- 
+2.54.0.windows.1
+
