@@ -1,0 +1,31 @@
+From de32cce73bdcb90d48d1bfa47ed7afed2b36859e Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 22:42:54 +0100
+Subject: [PATCH] Prefer a 24-bit depth with stencil over 32-bit float
+
+---
+ host/gpu/vulkan_renderer.cpp | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index fbb252c..5f10cab 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1188,7 +1188,13 @@ struct VulkanRenderer::Impl {
+     bool stencil{};
+     void choose_depth_format() {
+         if (portablekit::env("NO_STENCIL") == nullptr) {
+-            for (const VkFormat format : {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT}) {
++            // 24-bit depth first: the PSP's depth is 16 bits, and a 32-bit float depth with 8 bits of stencil takes twice the memory
++            // of 24 and 8 on a tile GPU, which every pass loads and stores. <prefix>_DEPTH32 prefers the 32-bit float, as before.
++            static const bool prefer_float = portablekit::env("DEPTH32") != nullptr;
++            const std::array<VkFormat, 2> order = prefer_float
++                                                      ? std::array<VkFormat, 2>{VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT}
++                                                      : std::array<VkFormat, 2>{VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT};
++            for (const VkFormat format : order) {
+                 VkFormatProperties properties{};
+                 vkGetPhysicalDeviceFormatProperties(physical_device, format, &properties);
+                 if ((properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0u) {
+-- 
+2.54.0.windows.1
+
