@@ -1,0 +1,116 @@
+From eabae4763150442673220e18a1526391c763416b Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 08:23:19 +0100
+Subject: [PATCH] Stencil copies carry only the bit planes the game uses
+
+---
+ host/gpu/vulkan_renderer.cpp | 37 +++++++++++++++++++++++++++++++-----
+ 1 file changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index a399c8c..33d4203 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -509,6 +509,21 @@ std::vector<StencilPlane> stencil_planes(std::uint32_t format) {
+     return planes;
+ }
+ 
++// The planes of the target's format that a draw has used (Target's
++// stencil_bits_seen). <prefix>_ALL_STENCIL_PLANES brings back every plane.
++template <typename TargetT>
++std::vector<StencilPlane> used_stencil_planes(const TargetT &target) {
++    std::vector<StencilPlane> planes = stencil_planes(target.format);
++    static const bool all = portablekit::env("ALL_STENCIL_PLANES") != nullptr;
++    if (all) return planes;
++    planes.erase(std::remove_if(planes.begin(), planes.end(),
++                                [&](const StencilPlane &plane) {
++                                    return ((plane.stencil_bits | plane.bit) & target.stencil_bits_seen) == 0u;
++                                }),
++                 planes.end());
++    return planes;
++}
++
+ VkStencilOp to_stencil_op(std::uint32_t operation) {
+     switch (operation) {
+     case 1u: return VK_STENCIL_OP_ZERO;
+@@ -1657,6 +1672,11 @@ struct VulkanRenderer::Impl {
+         // a draw tests or writes the stencil). A new target starts with alpha.
+         enum class StencilSync : std::uint8_t { Same, StencilNewer, AlphaNewer };
+         StencilSync stencil_sync{StencilSync::AlphaNewer};
++        // The stored-stencil bits any draw into this target has tested, written
++        // or cleared to a set value. The copies between stencil and alpha only
++        // carry these bit planes: a plane no draw looks at is not worth a full
++        // screen pass (8888 has eight, each a quad over the whole target).
++        std::uint32_t stencil_bits_seen{};
+         // The guest depth buffer, and which picture of it, the depth image
+         // holds (DepthPicture); 0: none in particular.
+         std::uint32_t depth_address{};
+@@ -7151,7 +7171,7 @@ bool VulkanRenderer::Impl::draw_screen_quad(const PipelineKey &key, VkDescriptor
+ // the stencil test (an equal test on the one bit) and additive alpha.
+ void VulkanRenderer::Impl::copy_stencil_to_alpha(Target &target) {
+     target.stencil_sync = Target::StencilSync::Same;
+-    const std::vector<StencilPlane> planes = stencil_planes(target.format);
++    const std::vector<StencilPlane> planes = used_stencil_planes(target);
+     if (planes.empty()) return;
+     static const bool trace = portablekit::env("TRACE_STENCIL") != nullptr;
+     if (trace)
+@@ -7183,7 +7203,7 @@ void VulkanRenderer::Impl::copy_stencil_to_alpha(Target &target) {
+ // test: not equal to 0 under a one-bit mask) and a replacing stencil write
+ // limited to that plane.
+ void VulkanRenderer::Impl::copy_alpha_to_stencil(Target &target) {
+-    const std::vector<StencilPlane> planes = stencil_planes(target.format);
++    const std::vector<StencilPlane> planes = used_stencil_planes(target);
+     if (planes.empty() || !target.initialized) {
+         target.stencil_sync = Target::StencilSync::Same;
+         return;
+@@ -10368,6 +10388,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     const bool stencil_target = impl.stencil && call.target.color_format != 0u;
+     bool reads_stencil = false;
+     bool writes_stencil = false;
++    std::uint32_t draw_stencil_bits = 0u;  // Target::stencil_bits_seen, from this draw
+     if (stencil_target) {
+         const std::uint32_t format = call.target.color_format;
+         const std::uint32_t write_mask = stencil_write_mask(format, call.pixel_mask_color, call.pixel_mask_alpha);
+@@ -10379,6 +10400,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 key.stencil_reference = stored_stencil(format, color >> 24u);
+                 key.stencil_write_mask = write_mask;
+                 key.stencil_fail = key.stencil_depth_fail = key.stencil_pass = 2u;  // replace
++                draw_stencil_bits = key.stencil_reference & write_mask;
+             }
+         } else if (call.stencil.test_enabled) {
+             key.color_mask &= ~static_cast<std::uint32_t>(VK_COLOR_COMPONENT_A_BIT);
+@@ -10394,6 +10416,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                 key.stencil_fail = stencil.fail;
+                 key.stencil_depth_fail = stencil.depth_fail;
+                 key.stencil_pass = stencil.pass;
++                draw_stencil_bits = (reads_stencil ? (stencil.mask & 0xFFu) : 0u) | (writes_stencil ? write_mask : 0u);
+             }
+         }
+     }
+@@ -10561,9 +10584,12 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+     if (stencil_target && (reads_stencil || writes_stencil)) {
+         std::string error;
+         if (Impl::Target *target = impl.target_for(call.target.color_address, error);
+-            target != nullptr && target->stencil_sync == Impl::Target::StencilSync::AlphaNewer) {
+-            target->format = call.target.color_format;
+-            impl.copy_alpha_to_stencil(*target);
++            target != nullptr) {
++            target->stencil_bits_seen |= draw_stencil_bits;
++            if (target->stencil_sync == Impl::Target::StencilSync::AlphaNewer) {
++                target->format = call.target.color_format;
++                impl.copy_alpha_to_stencil(*target);
++            }
+         }
+     }
+     if (!impl.pass_active || impl.current_target != call.target.color_address) {
+@@ -10606,6 +10632,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+             }
+         }
+         if (stencil_target) {
++            drawn.stencil_bits_seen |= draw_stencil_bits;
+             // A draw that writes alpha, or blends with the destination's,
+             // after the stencil changed needs the alpha brought up to date.
+             using Sync = Impl::Target::StencilSync;
+-- 
+2.54.0.windows.1
+
