@@ -1,0 +1,72 @@
+From adef01ef513e0d4192eaa6cc71720bc8fc143e51 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Fri, 27 Nov 2026 11:17:15 +0100
+Subject: [PATCH] Lazy alpha-to-stencil sync for targets whose stencil nothing
+ tests
+
+---
+ host/gpu/vulkan_renderer.cpp | 34 +++++++++++++++++++++++++++++++---
+ 1 file changed, 31 insertions(+), 3 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index a644cae..17c5276 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -1684,6 +1684,8 @@ struct VulkanRenderer::Impl {
+         // screen pass (8888 has eight, each a quad over the whole target).
+         std::uint32_t stencil_bits_seen{};
+         std::string alpha_note;  // the draw that last wrote alpha, for TRACE_STENCIL
++        bool stencil_untrusted{};  // a sync was skipped: the alpha is true, the stencil is as the draws left it
++        std::uint64_t stencil_read_frame{};  // the last frame a draw tested this target's stencil
+         // The guest depth buffer, and which picture of it, the depth image
+         // holds (DepthPicture); 0: none in particular.
+         std::uint32_t depth_address{};
+@@ -10630,7 +10632,26 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+         if (Impl::Target *target = impl.target_for(call.target.color_address, error);
+             target != nullptr) {
+             target->stencil_bits_seen |= draw_stencil_bits;
+-            if (target->stencil_sync == Impl::Target::StencilSync::AlphaNewer) {
++            if (reads_stencil) {
++                target->stencil_read_frame = impl.frames;
++                // After a lazy skip the alpha is the true picture: the stencil is made from it again before it is tested.
++                if (target->stencil_untrusted) {
++                    target->stencil_sync = Impl::Target::StencilSync::AlphaNewer;
++                    target->stencil_untrusted = false;
++                }
++            }
++            // A draw that only writes the stencil needs the old stencil only for the pixels it does not cover, and
++            // only a later draw that tests the stencil can see those. A target nothing has tested for a while
++            // keeps its stencil as it is (a full-screen copy and a split pass saved each time).
++            // <prefix>_STENCIL_LAZY_FRAMES=0 syncs every time, as before; the default is 120 frames.
++            static const std::uint64_t lazy_frames = [] {
++                const char *text = portablekit::env("STENCIL_LAZY_FRAMES");
++                return text != nullptr ? static_cast<std::uint64_t>(std::strtoull(text, nullptr, 10)) : 120ull;
++            }();
++            const bool lazy = !reads_stencil && lazy_frames != 0u && impl.frames > target->stencil_read_frame &&
++                              impl.frames - target->stencil_read_frame > lazy_frames;
++            if (target->stencil_sync == Impl::Target::StencilSync::AlphaNewer && lazy) target->stencil_untrusted = true;
++            if (target->stencil_sync == Impl::Target::StencilSync::AlphaNewer && !lazy) {
+                 static const bool trace_sync = portablekit::env("TRACE_STENCIL") != nullptr;
+                 if (trace_sync)
+                     std::cout << "[stencil-why] frame " << impl.frames << " 0x" << std::hex << call.target.color_address
+@@ -10696,8 +10717,15 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
+                                                    destination_alpha(call.blend.destination_factor));
+             const bool writes_alpha = !call.clear_mode && !call.stencil.test_enabled &&
+                                       (key.color_mask & VK_COLOR_COMPONENT_A_BIT) != 0u;
+-            if ((reads_alpha || writes_alpha) && drawn.stencil_sync == Sync::StencilNewer)
+-                impl.copy_stencil_to_alpha(drawn);
++            if ((reads_alpha || writes_alpha) && drawn.stencil_sync == Sync::StencilNewer) {
++                if (drawn.stencil_untrusted) {
++                    // The stencil was left as it was (the lazy skip above): the alpha is the true picture.
++                    drawn.stencil_sync = Sync::AlphaNewer;
++                    drawn.stencil_untrusted = false;
++                } else {
++                    impl.copy_stencil_to_alpha(drawn);
++                }
++            }
+             if (call.clear_mode) {
+                 if (clear_covers && (call.clear_flags & 2u) != 0u &&
+                     (key.color_mask & VK_COLOR_COMPONENT_A_BIT) != 0u && key.stencil_write_mask == 0xFFu)
+-- 
+2.54.0.windows.1
+
