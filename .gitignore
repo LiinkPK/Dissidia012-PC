@@ -90,3 +90,4 @@ crash_report.txt
 # Build scripts that stay local
 relay-src.tar.gz
 /scripts/*
+/tools/mods/emendatus/*
