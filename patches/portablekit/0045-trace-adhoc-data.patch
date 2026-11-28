@@ -1,0 +1,63 @@
+From b50ca863dae43b2b4eb242a3f5a30d5105571c36 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 28 Nov 2026 12:21:14 +0100
+Subject: [PATCH] TRACE_ADHOC_DATA: a hash of every datagram the game sends or
+ receives
+
+---
+ host/adhoc/client.cpp | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/host/adhoc/client.cpp b/host/adhoc/client.cpp
+index 1fb695d..af944d6 100644
+--- a/host/adhoc/client.cpp
++++ b/host/adhoc/client.cpp
+@@ -1402,6 +1402,29 @@ void Client::pdp_close(int handle) {
+     }
+ }
+ 
++namespace {
++
++// <prefix>_TRACE_ADHOC_DATA=1: one line per datagram the game sends or receives, with its length, a hash of its bytes and the first
++// bytes. Two players' logs, side by side, show where a room first went wrong: what A sent is what B received, and the packets both
++// send on the same frame carry the same bytes while their games agree. The counters number the packets of each direction.
++void trace_payload(const char *direction, const Mac &peer, std::uint16_t port, const void *data, std::size_t size) {
++    static const bool on = portablekit::env("TRACE_ADHOC_DATA") != nullptr;
++    if (!on) return;
++    static std::uint64_t counters[2]{};
++    const std::uint64_t number = ++counters[direction[0] == 's' ? 0 : 1];
++    const auto *bytes = static_cast<const unsigned char *>(data);
++    std::uint64_t hash = 0xCBF29CE484222325ull;
++    for (std::size_t i = 0; i < size; ++i) hash = (hash ^ bytes[i]) * 0x100000001B3ull;
++    char head[64]{};
++    for (std::size_t i = 0; i < size && i < 24u; ++i) std::snprintf(head + i * 2u, 3u, "%02x", bytes[i]);
++    std::printf("[netdata] %s #%llu peer %s port %u len %zu hash %016llx head %s\n", direction,
++                static_cast<unsigned long long>(number), format_mac(peer).c_str(), static_cast<unsigned>(port), size,
++                static_cast<unsigned long long>(hash), head);
++    std::fflush(stdout);
++}
++
++} // namespace
++
+ bool Client::pdp_send(int handle, const Mac &destination, std::uint16_t port, const void *data, std::size_t size) {
+     std::lock_guard lock(impl_->mutex);
+     Impl &s = *impl_;
+@@ -1425,6 +1448,7 @@ bool Client::pdp_send(int handle, const Mac &destination, std::uint16_t port, co
+         }
+         ++s.traffic.packets_out;
+         s.traffic.bytes_out += size;
++        trace_payload("send", target, port, data, size);
+         socket.link.output += relay::pdp_header(target, port, static_cast<std::uint32_t>(size));
+         socket.link.output.append(static_cast<const char *>(data), size);
+         trace("relay > pdp " + std::to_string(handle) + " to " + format_mac(target) + " port " + std::to_string(port) +
+@@ -1453,6 +1477,7 @@ std::optional<Datagram> Client::pdp_receive(int handle) {
+     Datagram datagram = std::move(socket.received.front());
+     socket.received.pop_front();
+     socket.received_bytes -= datagram.data.size();
++    trace_payload("recv", datagram.source, datagram.port, datagram.data.data(), datagram.data.size());
+     return datagram;
+ }
+ 
+-- 
+2.54.0.windows.1
+
