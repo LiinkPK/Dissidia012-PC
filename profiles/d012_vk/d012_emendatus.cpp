@@ -70,6 +70,7 @@ bool g_d012_mod_bt = false;  // declared in the generated recomp_units.hpp
 namespace {
 
 #include "d012_emendatus_data.inc"
+#include "d012_emendatus_version.inc"
 
 namespace ext = portablekit::hle_extension;
 
@@ -1092,6 +1093,7 @@ void mod_rows() {
     } else if (wanted != g_applied) {
         options.note = "restart to apply";
     }
+    options.label_suffix = kEmendatusVersion;
     if (ui::toggle_row("Emendatus Mod", wanted, options)) {
         target = !wanted;
         asking = true;

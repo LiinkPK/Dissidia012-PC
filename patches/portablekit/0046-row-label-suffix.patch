@@ -1,0 +1,43 @@
+From 42a68ff980eb370d8c909ff2629ba211c82c4289 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 28 Nov 2026 14:04:03 +0100
+Subject: [PATCH] A row's label can carry a smaller version after it
+
+---
+ host/ui/widgets.cpp | 7 +++++++
+ host/ui/widgets.hpp | 1 +
+ 2 files changed, 8 insertions(+)
+
+diff --git a/host/ui/widgets.cpp b/host/ui/widgets.cpp
+index d82082f..6482bfb 100644
+--- a/host/ui/widgets.cpp
++++ b/host/ui/widgets.cpp
+@@ -144,6 +144,13 @@ Row row(const char *label, const RowOptions &options, ImU32 color = colors::kTex
+     const float text_y = result.min.y + (height - font()) * 0.5f;
+     draw->AddText({result.min.x + px(16.0f), text_y}, options.disabled ? colors::kTextDisabled : color, label,
+                   shown_end(label));
++    if (!options.label_suffix.empty()) {
++        const float label_width = ImGui::CalcTextSize(label, shown_end(label)).x;
++        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.72f);
++        draw->AddText({result.min.x + px(16.0f) + label_width + px(8.0f), text_y + font() * 0.2f}, colors::kTextDim,
++                      options.label_suffix.c_str());
++        ImGui::PopFont();
++    }
+     if (result.focused || (result.hovered && Layer::get().description().empty())) {
+         std::string description = options.description;
+         if (!options.note.empty()) description += (description.empty() ? "" : "\n") + options.note;
+diff --git a/host/ui/widgets.hpp b/host/ui/widgets.hpp
+index 2791bc4..6508f2e 100644
+--- a/host/ui/widgets.hpp
++++ b/host/ui/widgets.hpp
+@@ -82,6 +82,7 @@ bool tab_bar(const char *const *labels, int count, int &selected);
+ struct RowOptions {
+     bool disabled{};
+     std::string note;         // shown dimmed next to the value, e.g. who decides it
++    std::string label_suffix; // drawn smaller and dimmed right after the label, e.g. a version
+     std::string description;  // shown in the footer while the row is focused
+ };
+ 
+-- 
+2.54.0.windows.1
+

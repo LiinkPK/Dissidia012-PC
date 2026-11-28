@@ -6128,7 +6128,7 @@ L_089A4544:
     if (((ctx.vfpu_ctrl[3] >> 0u) & 1u) != 0u) {
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<0u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_asin(vfpu_s[i]) * 0.63661977236758134308f;
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::asin(vfpu_s[i]) * 0.63661977236758134308f;
       ctx.write_vfpu_vector_with_destination_prefix_ct<0u, 1u>(vfpu_d); }
         goto L_089A4564;
     }
@@ -6136,7 +6136,7 @@ L_089A4544:
 L_089A4548:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<0u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_asin(vfpu_s[i]) * 0.63661977236758134308f;
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::asin(vfpu_s[i]) * 0.63661977236758134308f;
       ctx.write_vfpu_vector_with_destination_prefix_ct<0u, 1u>(vfpu_d); }
     goto L_089A454C;
 L_089A454C:
@@ -6154,7 +6154,7 @@ L_089A4554:
 L_089A4558:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<96u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_asin(vfpu_s[i]) * 0.63661977236758134308f;
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::asin(vfpu_s[i]) * 0.63661977236758134308f;
       ctx.write_vfpu_vector_with_destination_prefix_ct<96u, 1u>(vfpu_d); }
     goto L_089A455C;
 L_089A455C:
@@ -6372,7 +6372,7 @@ L_089A4600:
     { const bool branch_taken = 0u == 0u;
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<1u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_asin(vfpu_s[i]) * 0.63661977236758134308f;
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::asin(vfpu_s[i]) * 0.63661977236758134308f;
       ctx.write_vfpu_vector_with_destination_prefix_ct<1u, 1u>(vfpu_d); }
       if (branch_taken) {
           goto L_089A469C;
@@ -6382,7 +6382,7 @@ L_089A4600:
 L_089A4604:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<1u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_asin(vfpu_s[i]) * 0.63661977236758134308f;
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::asin(vfpu_s[i]) * 0.63661977236758134308f;
       ctx.write_vfpu_vector_with_destination_prefix_ct<1u, 1u>(vfpu_d); }
     goto L_089A4608;
 L_089A4608:
@@ -6613,7 +6613,7 @@ L_089A4690:
 L_089A4694:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<96u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_asin(vfpu_s[i]) * 0.63661977236758134308f;
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::asin(vfpu_s[i]) * 0.63661977236758134308f;
       ctx.write_vfpu_vector_with_destination_prefix_ct<96u, 1u>(vfpu_d); }
     goto L_089A4698;
 L_089A4698:
@@ -6715,7 +6715,7 @@ L_089A46EC:
 L_089A46F0:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<0u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_cos(vfpu_s[i] * 1.57079632679489661923f);
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::cos(vfpu_s[i] * 1.57079632679489661923f);
       ctx.write_vfpu_vector_with_destination_prefix_ct<0u, 1u>(vfpu_d); }
     goto L_089A46F4;
 L_089A46F4:
@@ -6746,7 +6746,7 @@ L_089A470C:
 L_089A4710:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<0u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_log2(vfpu_s[i]);
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::log2(vfpu_s[i]);
       ctx.write_vfpu_vector_with_destination_prefix_ct<0u, 1u>(vfpu_d); }
     goto L_089A4714;
 L_089A4714:
@@ -6851,7 +6851,7 @@ L_089A4784:
 L_089A4788:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<0u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_log2(vfpu_s[i]);
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::log2(vfpu_s[i]);
       ctx.write_vfpu_vector_with_destination_prefix_ct<0u, 1u>(vfpu_d); }
     goto L_089A478C;
 L_089A478C:
@@ -6864,7 +6864,7 @@ L_089A478C:
 L_089A4790:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<0u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_exp2(vfpu_s[i]);
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::exp2(vfpu_s[i]);
       ctx.write_vfpu_vector_with_destination_prefix_ct<0u, 1u>(vfpu_d); }
     goto L_089A4794;
 L_089A4794:
@@ -6907,7 +6907,7 @@ L_089A47B4:
 L_089A47B8:
     { float vfpu_s[4]{}, vfpu_d[4]{};
       ctx.read_vfpu_vector_with_source_prefix_ct<0u, 1u, 0u>(vfpu_s);
-      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = psprecomp::vfpu_sin(vfpu_s[i] * 1.57079632679489661923f);
+      for (std::uint32_t i = 0; i < 1u; ++i) vfpu_d[i] = std::sin(vfpu_s[i] * 1.57079632679489661923f);
       ctx.write_vfpu_vector_with_destination_prefix_ct<0u, 1u>(vfpu_d); }
     goto L_089A47BC;
 L_089A47BC:

@@ -18831,7 +18831,6 @@ L_08A85020:
     ctx.gpr[7] = (0u | 0u);
     goto L_08A85024;
 L_08A85024:
-    { static int flag_lines = 0; if (flag_lines < 100) { ++flag_lines; std::fprintf(stderr, "[roster-flag] screen %08X global@089D8140 %08X flag(no Random) %u mode(fp) %u\n", ctx.gpr[19], aot_mem.aot_load32(0x089D8140u), ctx.gpr[2], ctx.gpr[30]); } }
     if (ctx.gpr[30] == 0u && !(aot_mem.aot_load32(ctx.gpr[19] + 8u) == 0x22u && aot_mem.aot_load32(ctx.gpr[19] + 20u) == 0x20u)) ctx.gpr[2] = 0u;  // Quick Battle player select always has Random: the flag comes from the current stage's record, which the Arcade selects leave set
     aot_mem.aot_store8(ctx.gpr[29] + static_cast<std::uint32_t>(16), static_cast<std::uint8_t>(ctx.gpr[2]));
     goto L_08A85028;
@@ -18929,7 +18928,7 @@ L_08A8508C:
 L_08A85090:
     ctx.gpr[4] = (static_cast<std::uint32_t>(static_cast<std::int32_t>(static_cast<std::int16_t>(aot_mem.aot_load16(ctx.gpr[21] + static_cast<std::uint32_t>(8))))));
     if (ctx.gpr[30] == 2u && !g_d012_grid_party && (ctx.gpr[4] == 0x17u || ctx.gpr[4] == 0x21u)) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Original Quest has no Chaos and no new character, as in the stock game
-    if (ctx.gpr[30] == 5u && g_d012_select_word != 0x0Au && g_d012_select_word != 0x0Bu && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game
+    if (ctx.gpr[30] == 5u && g_d012_select_word != 0x0Au && g_d012_select_word != 0x0Bu && ctx.gpr[4] == 0x21u) { ctx.gpr[16] = 0u; goto L_08A850FC; }  // Data Config > Party Settings has no cell for the new character, as in the stock game (the Quick Battle party roster keeps her: its Player Select is screen word 0x0A, its CPU Select 0x0B)
     goto L_08A85094;
 L_08A85094:
     ctx.gpr[17] = (0u | 0u);
@@ -18987,7 +18986,6 @@ L_08A850C8:
     ctx.gpr[4] = (ctx.gpr[19] | 0u);
     goto L_08A850CC;
 L_08A850CC:
-    { static int avail_lines = 0; if (avail_lines < 400) { ++avail_lines; std::fprintf(stderr, "[roster-avail] screen %08X id %d available %u\n", ctx.gpr[19], static_cast<int>(aot_mem.aot_load32(ctx.gpr[29] + 0u)), ctx.gpr[2]); } }
     { const bool branch_taken = ctx.gpr[2] != 0u;
     aot_mem.aot_store32(ctx.gpr[29] + static_cast<std::uint32_t>(4), ctx.gpr[2]);
       if (branch_taken) {
