@@ -101,7 +101,7 @@ void register_ovl089DD4C0_battle_85688873FEA10706_unit_95(CorpusRuntime &runtime
 void register_ovl089DD4C0_battle_85688873FEA10706_unit_96(CorpusRuntime &runtime);
 void register_ovl089DD4C0_battle_85688873FEA10706_unit_97(CorpusRuntime &runtime);
 
-const char *ovl089DD4C0_battle_85688873FEA10706_corpus_source_sha256() { return "258cdecf15afd5a39ae85a8217cf93046b16b20c1b8d9c525454e4bdfb6d98fc"; }
+const char *ovl089DD4C0_battle_85688873FEA10706_corpus_source_sha256() { return "939229b8de39d40d07e247f2c7f0203b04a517ab9e0c3f8e7fee87ff5d621b24"; }
 
 void register_ovl089DD4C0_battle_85688873FEA10706_functions(CorpusRuntime &runtime) {
     register_ovl089DD4C0_battle_85688873FEA10706_unit_0(runtime);

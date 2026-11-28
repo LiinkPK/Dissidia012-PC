@@ -8010,10 +8010,10 @@ L_08AD64BC:
     ctx.gpr[22] = (aot_mem.aot_load32(ctx.gpr[21] + static_cast<std::uint32_t>(4360)));
     goto L_08AD64C0;
 L_08AD64C0:
-    ctx.gpr[4] = (aot_mem.aot_load8(ctx.gpr[21] + static_cast<std::uint32_t>(1346)));
-    goto L_08AD64C4;
+    // nop
+    ctx.pc = 0x0BFECE44u; (void)rt.invoke_chained_call(ctx, &aot_mem); return;
 L_08AD64C4:
-    ctx.gpr[5] = (0u | 1u);
+    // nop
     goto L_08AD64C8;
 L_08AD64C8:
     ctx.gpr[4] = (ctx.gpr[4] ^ 3u);

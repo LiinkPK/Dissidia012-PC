@@ -5066,7 +5066,7 @@ L_08B35848:
 L_08B3584C:
     ctx.gpr[31] = (0x08B35854u);
     ctx.gpr[4] = (ctx.gpr[16] | 0u);
-    ctx.pc = 0x08B3315Cu;
+    ctx.pc = 0x0BFECB18u;
     if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08B35854u) goto L_08B35854;
     return;
 L_08B35850:
@@ -5320,7 +5320,7 @@ L_08B35934:
 L_08B35938:
     ctx.gpr[31] = (0x08B35940u);
     ctx.gpr[5] = (ctx.gpr[17] | 0u);
-    ctx.pc = 0x08B33DDCu;
+    ctx.pc = 0x0BFECA10u;
     if (rt.invoke_chained_call(ctx, &aot_mem) && ctx.pc == 0x08B35940u) goto L_08B35940;
     return;
 L_08B3593C:
