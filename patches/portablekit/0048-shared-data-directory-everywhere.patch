@@ -1,0 +1,42 @@
+From 24037145e3b9c176f49b32123485443582bf55ff Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 28 Nov 2026 15:13:22 +0100
+Subject: [PATCH] shared_data_directory() exists on every platform (empty off
+ Android)
+
+---
+ host/install/user_data.cpp | 2 ++
+ host/install/user_data.hpp | 3 ++-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/host/install/user_data.cpp b/host/install/user_data.cpp
+index 6e079db..aafbca5 100644
+--- a/host/install/user_data.cpp
++++ b/host/install/user_data.cpp
+@@ -114,6 +114,8 @@ std::filesystem::path shared_data_directory() {
+     if (name == nullptr || *name == '\0') return {};
+     return std::filesystem::path("/storage/emulated/0") / name;
+ }
++#else
++std::filesystem::path shared_data_directory() { return {}; }
+ #endif
+ 
+ std::filesystem::path user_data_directory() {
+diff --git a/host/install/user_data.hpp b/host/install/user_data.hpp
+index cb40b77..b541827 100644
+--- a/host/install/user_data.hpp
++++ b/host/install/user_data.hpp
+@@ -29,8 +29,9 @@ inline constexpr const char *kSettingsFile = "settings.ini";
+ #if defined(PORTABLEKIT_ANDROID_APP)
+ // Android: the app's private data folder, and the folder in the phone's shared storage the profile names (empty when it names none).
+ [[nodiscard]] std::filesystem::path private_data_directory();
+-[[nodiscard]] std::filesystem::path shared_data_directory();
+ #endif
++// The shared-storage folder the profile names; empty off Android.
++[[nodiscard]] std::filesystem::path shared_data_directory();
+ 
+ // Every key=value line of settings.ini. The installer owns disc_image; the
+ // player's settings (host/settings) keep their keys next to it, and writing
+-- 
+2.54.0.windows.1
+

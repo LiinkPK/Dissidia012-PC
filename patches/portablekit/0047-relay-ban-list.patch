@@ -1,0 +1,122 @@
+From 212603701d13d53ba239a4018c01786f0bfcf728 Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 28 Nov 2026 15:13:22 +0100
+Subject: [PATCH] Relay: ban list of IPs and MACs (PORTABLEKIT_RELAY_BANS),
+ banned connections closed without a reply
+
+---
+ host/adhoc/server.cpp      |  42 +++++++++++++++++++++++++++++++++++++
+ host/adhoc/server.hpp      |   3 +++
+ tools/adhoc_relay_main.cpp | Bin 2687 -> 2933 bytes
+ 3 files changed, 45 insertions(+)
+
+diff --git a/host/adhoc/server.cpp b/host/adhoc/server.cpp
+index f6de22c..8231a14 100644
+--- a/host/adhoc/server.cpp
++++ b/host/adhoc/server.cpp
+@@ -8,6 +8,8 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstdio>
++#include <fstream>
++#include <set>
+ #include <map>
+ #include <mutex>
+ #include <thread>
+@@ -224,6 +226,17 @@ struct RelaySession {
+     std::uint64_t not_delivered{};          // datagrams for it dropped because its queue was full
+ };
+ 
++// Lower case, no ':' or '-': an IP or a MAC in any usual spelling compares equal.
++std::string ban_key(const std::string &text) {
++    std::string out;
++    for (const char c : text) {
++        if (c == ':' || c == '-' || c == ' ' || c == '	' || c == '' || c == '
++') continue;
++        out += static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
++    }
++    return out;
++}
++
+ std::string group_key(const std::string &product, const std::string &group) { return product + '\n' + group; }
+ 
+ } // namespace
+@@ -251,6 +264,25 @@ struct Server::Impl {
+     std::uint64_t dropped{};
+     Clock::time_point published{};
+     Clock::time_point last_report{};
++    std::set<std::string> banned;
++    Clock::time_point bans_read{};
++
++    // The ban file, read again at most every 10 s (called when a connection arrives or logs in).
++    void load_bans(Clock::time_point now) {
++        if (config.ban_file.empty() || (bans_read != Clock::time_point{} && now - bans_read < std::chrono::seconds(10))) return;
++        bans_read = now;
++        std::ifstream file(config.ban_file);
++        if (!file) return;
++        std::set<std::string> list;
++        for (std::string line; std::getline(file, line);) {
++            const auto hash = line.find('#');
++            if (hash != std::string::npos) line.resize(hash);
++            const std::string key = ban_key(line);
++            if (!key.empty()) list.insert(key);
++        }
++        if (list.size() != banned.size()) log_event("ban list: " + std::to_string(list.size()) + " entries", config.print_events);
++        banned = std::move(list);
++    }
+ 
+     // adhocctl ---------------------------------------------------------------
+ 
+@@ -328,6 +360,11 @@ struct Server::Impl {
+             product.size() == ctl::kProductCodeLength && std::all_of(product.begin(), product.end(), [](char c) {
+                 return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+             });
++        load_bans(Clock::now());
++        if (banned.count(ban_key(format_mac(mac))) != 0u || banned.count(ban_key(player.link.peer.host())) != 0u) {
++            log_event("closed a banned login: " + format_mac(mac) + " from " + player.link.peer.host(), config.print_events);
++            return false;
++        }
+         if (!mac_ok || !product_ok) {
+             log_event("refused a login from " + player.link.peer.host() + ": bad address or product code",
+                       config.print_events);
+@@ -602,6 +639,11 @@ struct Server::Impl {
+             address.length = sizeof(address.storage);
+             const Socket s = ::accept(listener, reinterpret_cast<sockaddr *>(&address.storage), &address.length);
+             if (s == kNoSocket) return;
++            load_bans(now);
++            if (!banned.empty() && banned.count(ban_key(address.host())) != 0u) {
++                close_socket(s);
++                continue;
++            }
+             const std::size_t count = relay ? sessions.size() : players.size();
+             if (count >= (relay ? kMaxRelayConnections : kMaxAdhocctlConnections) || !set_nonblocking(s)) {
+                 close_socket(s);
+diff --git a/host/adhoc/server.hpp b/host/adhoc/server.hpp
+index 6b2e2b0..66ae36b 100644
+--- a/host/adhoc/server.hpp
++++ b/host/adhoc/server.hpp
+@@ -47,6 +47,9 @@ struct ServerConfig {
+     // a local network. A relay on the internet sets them (the stand-alone one reads PORTABLEKIT_RELAY_KEYS), so only builds that carry
+     // one of them can connect.
+     std::vector<std::string> auth_keys;
++    // A text file of banned IP addresses and MACs, one per line (# starts a comment). Read again every 10 s, so it can be edited while the
++    // relay runs. A banned IP is closed on connect and a banned MAC at login, with no reply. Empty: nobody is banned.
++    std::string ban_file;
+ };
+ 
+ struct ServerPlayer {
+diff --git a/tools/adhoc_relay_main.cpp b/tools/adhoc_relay_main.cpp
+index a7aca7ba8210c6a1602be7723f2eeb8202a41d97..1b62c261bb704954830e91a5548f588169c03784 100644
+GIT binary patch
+delta 208
+zcmW-bOAf(M7=@|F0ubYaq(wv+HxiGL0g+gM{PeHhq`BqZOLQIGf(1yr9Air`rtR>Y
+zeCP3NecP|tN|JJemW%BkLc;`%3z-0s4}#%`fiFVN<&mUh59^%<Ne`RFN{<l9jAw;V
+zNOmDi-l3R0(3yk;-&w_&PN37P6;+$UNB<N_ZEy-mVVHF$pIUF8&vyrIzM;{XLEggf
+fViat<U<%JEIRj*2U!2DocPM_%iin%O>(9y`TQ)=U
+
+delta 17
+Zcmew=_FrT}CDZ0FOzA9}ud&Z(1^`Pb2ao^&
+
+-- 
+2.54.0.windows.1
+
