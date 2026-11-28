@@ -1,0 +1,26 @@
+From 187ee71b93979435f1ae30d4008503e515be330e Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 28 Nov 2026 15:20:42 +0100
+Subject: [PATCH] Fast graphics is on by default on every platform
+
+---
+ host/settings/settings.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/host/settings/settings.cpp b/host/settings/settings.cpp
+index 7bb8d26..5aa9279 100644
+--- a/host/settings/settings.cpp
++++ b/host/settings/settings.cpp
+@@ -624,8 +624,8 @@ Settings defaults_for(Platform platform) {
+     if (platform == Platform::Android) {
+         values.fullscreen = true;
+         values.mouse = false;
+-        values.fast_graphics = true;
+     }
++    values.fast_graphics = true;  // on every platform: the same lighter picture PPSSPP draws
+     return values;
+ }
+ 
+-- 
+2.54.0.windows.1
+
