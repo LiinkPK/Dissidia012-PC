@@ -1,0 +1,269 @@
+From 4975e89a2e5c7b55fcc9495d564f51e32a76d37f Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 28 Nov 2026 12:13:05 +0100
+Subject: [PATCH] VFPU sin/cos/exp2/log2/asin without the C library, and no
+ fused multiply-add: the same bits on a phone and a computer
+
+---
+ CMakeLists.txt                         |   5 +
+ include/psprecomp/allegrex_context.hpp |   8 +-
+ include/psprecomp/vfpu_math.hpp        | 142 +++++++++++++++++++++++++
+ src/interpreter.cpp                    |  14 +--
+ tools/codegen_main.cpp                 |  14 +--
+ 5 files changed, 166 insertions(+), 17 deletions(-)
+ create mode 100644 include/psprecomp/vfpu_math.hpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 93cdf28..219a0a6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -101,6 +101,11 @@ if(MSVC AND PSPRECOMP_NATIVE_AVX2)
+     add_compile_options($<$<CONFIG:Release>:/arch:AVX2>
+                         $<$<CONFIG:RelWithDebInfo>:/arch:AVX2>)
+ endif()
++# The same bits on every machine: a phone's compiler fuses a*b+c into one instruction where a computer's does not, and in an
++# online room the two then drift apart (see include/psprecomp/vfpu_math.hpp).
++if(NOT MSVC)
++    add_compile_options(-ffp-contract=off)
++endif()
+ 
+ if(PSPRECOMP_LTO)
+     include(CheckIPOSupported)
+diff --git a/include/psprecomp/allegrex_context.hpp b/include/psprecomp/allegrex_context.hpp
+index a32c3a2..7bbdfe0 100644
+--- a/include/psprecomp/allegrex_context.hpp
++++ b/include/psprecomp/allegrex_context.hpp
+@@ -8,6 +8,8 @@
+ #include <cmath>
+ #include <limits>
+ 
++#include "psprecomp/vfpu_math.hpp"
++
+ namespace psprecomp {
+ 
+ #if defined(_MSC_VER)
+@@ -1268,8 +1270,8 @@ struct alignas(16) AllegrexContext {
+         const float original_source =
+             std::bit_cast<float>(vfpu_scalar_bits(source_register & 0x7Fu));
+         constexpr float half_pi = 1.57079632679489661923f;
+-        float sine = std::sin(source[0] * half_pi);
+-        const float original_cosine = std::cos(original_source * half_pi);
++        float sine = vfpu_sin(source[0] * half_pi);
++        const float original_cosine = vfpu_cos(original_source * half_pi);
+         if ((immediate & 0x10u) != 0u)
+             sine = std::bit_cast<float>(std::bit_cast<std::uint32_t>(sine) ^ 0x80000000u);
+ 
+@@ -1287,7 +1289,7 @@ struct alignas(16) AllegrexContext {
+             const std::size_t source_index = vfpu_scalar_index(source_register & 0x7Fu);
+             for (std::uint32_t lane = 0u; lane < length && lane < 4u; ++lane) {
+                 if (vfpu_vector_lane_index(destination_register, length, lane) == source_index) {
+-                    cosine = std::cos(value[lane] * half_pi);
++                    cosine = vfpu_cos(value[lane] * half_pi);
+                     break;
+                 }
+             }
+diff --git a/include/psprecomp/vfpu_math.hpp b/include/psprecomp/vfpu_math.hpp
+new file mode 100644
+index 0000000..bc77038
+--- /dev/null
++++ b/include/psprecomp/vfpu_math.hpp
+@@ -0,0 +1,142 @@
++#pragma once
++
++// The VFPU's sine, cosine, exp2, log2 and arcsine, worked out in double precision from additions, multiplications,
++// divisions and square roots alone, which every machine rounds the same way. The C library's versions do not: a
++// phone's, a Windows computer's and a Linux computer's differ in the last bit of a float for some arguments, and in an
++// online room that bit grows into a different battle. Built without fused multiply-add (-ffp-contract=off, see
++// CMakeLists.txt), so a phone does not round differently from a computer. The coefficients of the sine and cosine
++// kernels are the classic ones of fdlibm (Sun Microsystems, free to use and copy).
++
++#include <cmath>
++#include <cstdint>
++#include <limits>
++
++#if defined(__clang__)
++#pragma clang fp contract(off)
++#endif
++
++namespace psprecomp {
++namespace vfpu_math {
++
++inline double kernel_sin(double x) noexcept {  // |x| <= pi/4
++    constexpr double S1 = -1.66666666666666324348e-01, S2 = 8.33333333332248946124e-03,
++                     S3 = -1.98412698298579493134e-04, S4 = 2.75573137070700676789e-06,
++                     S5 = -2.50507602534068634195e-08, S6 = 1.58969099521155010221e-10;
++    const double z = x * x;
++    const double p = S2 + z * (S3 + z * (S4 + z * (S5 + z * S6)));
++    return x + x * z * (S1 + z * p);
++}
++
++inline double kernel_cos(double x) noexcept {  // |x| <= pi/4
++    constexpr double C1 = 4.16666666666666019037e-02, C2 = -1.38888888888741095749e-03,
++                     C3 = 2.48015872894767294178e-05, C4 = -2.75573143513906633035e-07,
++                     C5 = 2.08757232129817482790e-09, C6 = -1.13596475577881948265e-11;
++    const double z = x * x;
++    const double p = C1 + z * (C2 + z * (C3 + z * (C4 + z * (C5 + z * C6))));
++    return 1.0 - 0.5 * z + z * z * p;
++}
++
++// The quadrant of x and the remainder in [-pi/4, pi/4].
++inline double reduce(double x, int &quadrant) noexcept {
++    constexpr double two_over_pi = 6.36619772367581382433e-01;
++    constexpr double pio2_1 = 1.57079632673412561417e+00;    // the first 33 bits of pi/2
++    constexpr double pio2_1t = 6.07710050650619224932e-11;   // pi/2 - pio2_1
++    if (std::fabs(x) > 1.0e9) x = std::fmod(x, 6.28318530717958647692);  // fmod is exact
++    const double n = std::floor(x * two_over_pi + 0.5);
++    quadrant = static_cast<int>(static_cast<long long>(n) & 3);
++    return (x - n * pio2_1) - n * pio2_1t;
++}
++
++inline double sin_double(double x) noexcept {
++    int quadrant = 0;
++    const double r = reduce(x, quadrant);
++    switch (quadrant) {
++    case 0: return kernel_sin(r);
++    case 1: return kernel_cos(r);
++    case 2: return -kernel_sin(r);
++    default: return -kernel_cos(r);
++    }
++}
++
++inline double cos_double(double x) noexcept {
++    int quadrant = 0;
++    const double r = reduce(x, quadrant);
++    switch (quadrant) {
++    case 0: return kernel_cos(r);
++    case 1: return -kernel_sin(r);
++    case 2: return -kernel_cos(r);
++    default: return kernel_sin(r);
++    }
++}
++
++// 2^x: the integer part scales exactly, the fraction is a Taylor series of exp(y ln 2).
++inline double exp2_double(double x) noexcept {
++    if (x != x) return x;
++    if (x >= 1024.0) return std::numeric_limits<double>::infinity();
++    if (x <= -1080.0) return 0.0;
++    const double n = std::floor(x + 0.5);
++    const double y = (x - n) * 6.93147180559945309417e-01;
++    double term = 1.0, sum = 1.0;
++    for (int k = 1; k <= 16; ++k) {
++        term = term * y / static_cast<double>(k);
++        sum = sum + term;
++    }
++    return std::ldexp(sum, static_cast<int>(n));
++}
++
++// log2(x): the exponent is exact, the mantissa's logarithm is 2 atanh((m - 1) / (m + 1)) as a series.
++inline double log2_double(double x) noexcept {
++    if (x != x) return x;
++    if (x < 0.0) return std::numeric_limits<double>::quiet_NaN();
++    if (x == 0.0) return -std::numeric_limits<double>::infinity();
++    if (std::isinf(x)) return x;
++    int exponent = 0;
++    double m = std::frexp(x, &exponent);  // [0.5, 1)
++    if (m < 0.70710678118654752440) {
++        m = m * 2.0;
++        exponent = exponent - 1;
++    }
++    const double s = (m - 1.0) / (m + 1.0);
++    const double s2 = s * s;
++    double power = s, sum = 0.0;
++    for (int k = 1; k <= 41; k += 2) {
++        sum = sum + power / static_cast<double>(k);
++        power = power * s2;
++    }
++    return static_cast<double>(exponent) + 2.0 * sum / 6.93147180559945309417e-01;
++}
++
++// atan for |t| <= 1: two half-angle steps, then the Taylor series.
++inline double atan_unit(double t) noexcept {
++    t = t / (1.0 + std::sqrt(1.0 + t * t));
++    t = t / (1.0 + std::sqrt(1.0 + t * t));
++    const double t2 = t * t;
++    double power = t, sum = 0.0;
++    for (int k = 1; k <= 41; k += 2) {
++        const double term = power / static_cast<double>(k);
++        sum = ((k / 2) % 2 == 0) ? sum + term : sum - term;
++        power = power * t2;
++    }
++    return 4.0 * sum;
++}
++
++inline double asin_double(double x) noexcept {
++    if (x != x || x > 1.0 || x < -1.0) return std::numeric_limits<double>::quiet_NaN();
++    return 2.0 * atan_unit(x / (1.0 + std::sqrt(1.0 - x * x)));
++}
++
++} // namespace vfpu_math
++
++inline float vfpu_sin(float x) noexcept {
++    if (x != x || std::isinf(x)) return std::numeric_limits<float>::quiet_NaN();
++    return static_cast<float>(vfpu_math::sin_double(static_cast<double>(x)));
++}
++inline float vfpu_cos(float x) noexcept {
++    if (x != x || std::isinf(x)) return std::numeric_limits<float>::quiet_NaN();
++    return static_cast<float>(vfpu_math::cos_double(static_cast<double>(x)));
++}
++inline float vfpu_exp2(float x) noexcept { return static_cast<float>(vfpu_math::exp2_double(static_cast<double>(x))); }
++inline float vfpu_log2(float x) noexcept { return static_cast<float>(vfpu_math::log2_double(static_cast<double>(x))); }
++inline float vfpu_asin(float x) noexcept { return static_cast<float>(vfpu_math::asin_double(static_cast<double>(x))); }
++
++} // namespace psprecomp
+diff --git a/src/interpreter.cpp b/src/interpreter.cpp
+index 80387d4..e99c47a 100644
+--- a/src/interpreter.cpp
++++ b/src/interpreter.cpp
+@@ -167,15 +167,15 @@ void charge_entry(std::uint32_t pc, std::uint64_t instructions) {
+     case 5u: return value < -1.0f ? -1.0f : (value > 1.0f ? 1.0f : value); // vsat1
+     case 16u: return 1.0f / value;                                     // vrcp
+     case 17u: return 1.0f / std::sqrt(value);                          // vrsq
+-    case 18u: return std::sin(value * half_pi);                        // vsin
+-    case 19u: return std::cos(value * half_pi);                        // vcos
+-    case 20u: return std::exp2(value);                                 // vexp2
+-    case 21u: return std::log2(value);                                 // vlog2
++    case 18u: return vfpu_sin(value * half_pi);                        // vsin
++    case 19u: return vfpu_cos(value * half_pi);                        // vcos
++    case 20u: return vfpu_exp2(value);                                 // vexp2
++    case 21u: return vfpu_log2(value);                                 // vlog2
+     case 22u: return std::fabs(std::sqrt(value));                      // vsqrt
+-    case 23u: return std::asin(value) * two_over_pi;                   // vasin
++    case 23u: return vfpu_asin(value) * two_over_pi;                   // vasin
+     case 24u: return -1.0f / value;                                    // vnrcp
+-    case 26u: return -std::sin(value * half_pi);                       // vnsin
+-    default: return 1.0f / std::exp2(value);                           // vrexp2
++    case 26u: return -vfpu_sin(value * half_pi);                       // vnsin
++    default: return 1.0f / vfpu_exp2(value);                           // vrexp2
+     }
+ }
+ 
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+index 9a0d74e..9e13b7c 100644
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -808,15 +808,15 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
+         case 5u: expression = "vfpu_s[i] < -1.0f ? -1.0f : (vfpu_s[i] > 1.0f ? 1.0f : vfpu_s[i])"; break;
+         case 16u: expression = "1.0f / vfpu_s[i]"; break;
+         case 17u: expression = "1.0f / std::sqrt(vfpu_s[i])"; break;
+-        case 18u: expression = "std::sin(vfpu_s[i] * 1.57079632679489661923f)"; break;
+-        case 19u: expression = "std::cos(vfpu_s[i] * 1.57079632679489661923f)"; break;
+-        case 20u: expression = "std::exp2(vfpu_s[i])"; break;
+-        case 21u: expression = "std::log2(vfpu_s[i])"; break;
++        case 18u: expression = "psprecomp::vfpu_sin(vfpu_s[i] * 1.57079632679489661923f)"; break;
++        case 19u: expression = "psprecomp::vfpu_cos(vfpu_s[i] * 1.57079632679489661923f)"; break;
++        case 20u: expression = "psprecomp::vfpu_exp2(vfpu_s[i])"; break;
++        case 21u: expression = "psprecomp::vfpu_log2(vfpu_s[i])"; break;
+         case 22u: expression = "std::fabs(std::sqrt(vfpu_s[i]))"; break;
+-        case 23u: expression = "std::asin(vfpu_s[i]) * 0.63661977236758134308f"; break;
++        case 23u: expression = "psprecomp::vfpu_asin(vfpu_s[i]) * 0.63661977236758134308f"; break;
+         case 24u: expression = "-1.0f / vfpu_s[i]"; break;
+-        case 26u: expression = "-std::sin(vfpu_s[i] * 1.57079632679489661923f)"; break;
+-        default: expression = "1.0f / std::exp2(vfpu_s[i])"; break;
++        case 26u: expression = "-psprecomp::vfpu_sin(vfpu_s[i] * 1.57079632679489661923f)"; break;
++        default: expression = "1.0f / psprecomp::vfpu_exp2(vfpu_s[i])"; break;
+         }
+         out << "    { float vfpu_s[4]{}, vfpu_d[4]{};\n"
+             << "      ctx.read_vfpu_vector_with_source_prefix(vfpu_s, " << source << "u, " << length << "u, 0u);\n"
+-- 
+2.54.0.windows.1
+

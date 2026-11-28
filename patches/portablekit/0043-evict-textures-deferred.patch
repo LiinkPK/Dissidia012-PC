@@ -1,0 +1,87 @@
+From 6d53f8cb1fa978c1b3a04f5e73019f84eece351c Mon Sep 17 00:00:00 2001
+From: x <x@x>
+Date: Sat, 28 Nov 2026 12:11:58 +0100
+Subject: [PATCH] Evicted textures leave once the frames that can name them
+ have finished, whichever way textures are uploaded
+
+---
+ host/gpu/vulkan_renderer.cpp | 42 ++++++------------------------------
+ 1 file changed, 7 insertions(+), 35 deletions(-)
+
+diff --git a/host/gpu/vulkan_renderer.cpp b/host/gpu/vulkan_renderer.cpp
+index 239d83f..16e2d7a 100644
+--- a/host/gpu/vulkan_renderer.cpp
++++ b/host/gpu/vulkan_renderer.cpp
+@@ -5734,15 +5734,10 @@ VulkanRenderer::Impl::Texture &VulkanRenderer::Impl::texture_for(const GuestMemo
+             if (it->second.last_used < oldest->second.last_used) oldest = it;
+         }
+         destroyed_texture_clock = std::max(destroyed_texture_clock, oldest->second.last_used);
+-        if (async_uploads()) {
+-            // The frame being recorded may have drawn it already.
+-            slots[slot].retired_textures.push_back(oldest->second);
+-        } else {
+-            const perf::Clock::time_point wait_start = perf::Clock::now();
+-            queue_wait_idle();
+-            perf::add_wait_time(perf::Clock::now() - wait_start, perf::Stall::Evict);
+-            destroy_texture(oldest->second);
+-        }
++        // The frame being recorded may have drawn it already, and so may a frame recorded for drawing again (frame
++        // interpolation): it goes once the frames that can name it have finished, whichever way textures are uploaded. A
++        // queue idle wait only covers what was submitted, and a card that uploads textures synchronously crashed at 60 fps.
++        slots[slot].retired_textures.push_back(oldest->second);
+         textures.erase(oldest);
+         ++textures_erased;
+     }
+@@ -5884,15 +5879,7 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+         for (auto it = text_lines.begin(); it != text_lines.end();) {
+             if (frames - it->second.last_frame > 240u) {
+                 ++g_text_stats.evicted;
+-                if (async_uploads()) {
+-                    slots[slot].retired_textures.push_back(it->second.texture);
+-                } else {
+-                    const auto waited = std::chrono::steady_clock::now();
+-                    queue_wait_idle();
+-                    destroy_texture(it->second.texture);
+-                    ++g_text_stats.waits;
+-                    g_text_stats.wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waited).count();
+-                }
++                slots[slot].retired_textures.push_back(it->second.texture);
+                 it = text_lines.erase(it);
+             } else {
+                 ++it;
+@@ -5913,15 +5900,7 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+         for (std::size_t i = 0; i < oldest.size() && i < kEvictBatch; ++i) {
+             const auto found = text_lines.find(oldest[i].second);
+             ++g_text_stats.evicted;
+-            if (async_uploads()) {
+-                slots[slot].retired_textures.push_back(found->second.texture);
+-            } else {
+-                const auto waited = std::chrono::steady_clock::now();
+-                queue_wait_idle();
+-                destroy_texture(found->second.texture);
+-                ++g_text_stats.waits;
+-                g_text_stats.wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waited).count();
+-            }
++            slots[slot].retired_textures.push_back(found->second.texture);
+             text_lines.erase(found);
+         }
+         // Everything is in use this frame: draw this line with the game's own image.
+@@ -6082,14 +6061,7 @@ VkDescriptorSet VulkanRenderer::Impl::text_line_descriptor(const GuestMemory &me
+                               ink_top, ink_width, ink_height,
+                               ink.empty() ? nullptr : ink.data());
+     if (fresh.descriptor == VK_NULL_HANDLE) return VK_NULL_HANDLE;
+-    if (line.texture.descriptor != VK_NULL_HANDLE) {
+-        if (async_uploads()) {
+-            slots[slot].retired_textures.push_back(line.texture);
+-        } else {
+-            queue_wait_idle();
+-            destroy_texture(line.texture);
+-        }
+-    }
++    if (line.texture.descriptor != VK_NULL_HANDLE) slots[slot].retired_textures.push_back(line.texture);
+     line.texture = fresh;
+     line.stamp = stamp;
+     {
+-- 
+2.54.0.windows.1
+
